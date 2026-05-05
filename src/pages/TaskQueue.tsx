@@ -1,0 +1,111 @@
+import { useEffect } from 'react';
+import { useTaskStore } from '../store/useTaskStore';
+import { api } from '../services/api';
+import './TaskQueue.css';
+
+const STATUS_MAP: Record<string, { label: string; cls: string }> = {
+  pending: { label: '排队中', cls: 'status-pending' },
+  running: { label: '生成中', cls: 'status-running' },
+  completed: { label: '已完成', cls: 'status-completed' },
+  failed: { label: '失败', cls: 'status-failed' },
+  cancelled: { label: '已取消', cls: 'status-cancelled' },
+};
+
+export default function TaskQueue() {
+  const { tasks, loadTasks, cancelTask } = useTaskStore();
+
+  useEffect(() => {
+    loadTasks();
+    const unlisten = api.onTaskUpdated(async () => {
+      await loadTasks();
+    });
+    return () => { unlisten.then(fn => fn()); };
+  }, []);
+
+  const sorted = [...tasks].sort((a, b) =>
+    new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+  );
+
+  return (
+    <div className="page">
+      <div className="page-header">
+        <h2>任务队列</h2>
+        <p>查看和管理所有批量生成任务</p>
+      </div>
+
+      {sorted.length === 0 ? (
+        <div className="empty-state">
+          <p>暂无任务</p>
+          <p className="empty-hint">前往「创建任务」开始生成图片</p>
+        </div>
+      ) : (
+        <div className="task-list">
+          {sorted.map(task => {
+            const st = STATUS_MAP[task.status] || STATUS_MAP.pending;
+            const done = task.success_count + task.failed_count;
+            const pct = task.count > 0 ? Math.round((done / task.count) * 100) : 0;
+
+            return (
+              <div key={task.id} className="task-card">
+                <div className="task-card-header">
+                  <div>
+                    <span className={`status-badge ${st.cls}`}>{st.label}</span>
+                    <span className="task-id">#{task.id.slice(0, 8)}</span>
+                  </div>
+                  <span className="task-time">
+                    {new Date(task.created_at).toLocaleString('zh-CN')}
+                  </span>
+                </div>
+                <div className="task-card-body">
+                  <p className="task-prompt">{task.prompt}</p>
+                  <div className="task-meta">
+                    <span>{task.size}</span>
+                    <span>{task.quality}</span>
+                    <span>{task.output_format.toUpperCase()}</span>
+                    <span>{task.count} 张</span>
+                  </div>
+
+                  {(task.status === 'running') && (
+                    <div className="progress-bar-wrap">
+                      <div className="progress-bar" style={{ width: `${pct}%` }} />
+                      <span className="progress-text">{done} / {task.count} ({pct}%)</span>
+                    </div>
+                  )}
+
+                  <div className="task-stats">
+                    <span className="stat-ok">成功: {task.success_count}</span>
+                    <span className="stat-fail">失败: {task.failed_count}</span>
+                  </div>
+
+                  {task.output_dir && (
+                    <p className="task-dir">输出: {task.output_dir}</p>
+                  )}
+
+                  {task.sub_tasks.some(s => s.error) && (
+                    <div className="task-errors">
+                      {task.sub_tasks
+                        .filter(s => s.error)
+                        .map((s, i) => (
+                          <p key={i} className="task-error">
+                            子任务 {s.index + 1}: {s.error}
+                          </p>
+                        ))}
+                    </div>
+                  )}
+                </div>
+
+                {(task.status === 'pending' || task.status === 'running') && (
+                  <div className="task-card-actions">
+                    <button className="cancel-btn" onClick={() => cancelTask(task.id)}>
+                      取消任务
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}

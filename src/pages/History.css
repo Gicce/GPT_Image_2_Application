@@ -1,0 +1,161 @@
+.history-layout {
+  display: flex;
+  gap: 24px;
+  min-height: 0;
+}
+
+.history-list {
+  width: 320px;
+  min-width: 320px;
+  overflow-y: auto;
+  max-height: calc(100vh - 180px);
+}
+
+.history-item {
+  padding: 14px 16px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  cursor: pointer;
+  margin-bottom: 8px;
+  transition: all 0.15s;
+}
+
+.history-item:hover {
+  border-color: #c7d2fe;
+}
+
+.history-item.active {
+  border-color: #6366f1;
+  background: #eef2ff;
+}
+
+.history-prompt {
+  margin: 0 0 6px;
+  font-size: 13px;
+  color: #333;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-meta {
+  display: flex;
+  gap: 8px;
+  font-size: 11px;
+  color: #888;
+  margin-bottom: 4px;
+  flex-wrap: wrap;
+}
+
+.history-meta span {
+  background: #f3f4f6;
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+
+.history-meta .fail {
+  background: #fee2e2;
+  color: #dc2626;
+}
+
+.history-time {
+  font-size: 11px;
+  color: #9ca3af;
+  margin: 0;
+}
+
+/* Detail panel */
+.history-detail {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+}
+
+.history-detail h3 {
+  margin: 0 0 14px;
+  font-size: 16px;
+  color: #333;
+}
+
+.history-detail h4 {
+  margin: 20px 0 12px;
+  font-size: 14px;
+  color: #333;
+}
+
+.detail-params {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.detail-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  padding: 5px 0;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+.detail-row span:first-child {
+  color: #888;
+  flex-shrink: 0;
+}
+
+.detail-row span:last-child {
+  color: #333;
+  text-align: right;
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.detail-row .path {
+  font-size: 11px;
+  max-width: 400px;
+  word-break: break-all;
+  white-space: normal;
+}
+
+.detail-row .ok { color: #059669; }
+.detail-row .fail { color: #dc2626; }
+
+.no-images {
+  color: #9ca3af;
+  font-size: 13px;
+}
+
+.history-images {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 12px;
+}
+
+.history-img-item {
+  cursor: pointer;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid #e5e7eb;
+  transition: box-shadow 0.15s;
+}
+
+.history-img-item:hover {
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+}
+
+.history-img-item img {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+}
+
+.history-img-item span {
+  display: block;
+  padding: 4px 8px;
+  font-size: 11px;
+  color: #888;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

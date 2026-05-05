@@ -1,0 +1,147 @@
+.task-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.task-card {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 16px 20px;
+  transition: box-shadow 0.15s;
+}
+
+.task-card:hover {
+  box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+}
+
+.task-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.status-badge {
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.status-pending { background: #fef3c7; color: #92400e; }
+.status-running { background: #dbeafe; color: #1e40af; }
+.status-completed { background: #d1fae5; color: #065f46; }
+.status-failed { background: #fee2e2; color: #991b1b; }
+.status-cancelled { background: #f3f4f6; color: #6b7280; }
+
+.task-id {
+  margin-left: 8px;
+  font-size: 12px;
+  color: #9ca3af;
+  font-family: monospace;
+}
+
+.task-time {
+  font-size: 12px;
+  color: #9ca3af;
+}
+
+.task-prompt {
+  margin: 0 0 8px;
+  font-size: 14px;
+  color: #333;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-meta {
+  display: flex;
+  gap: 8px;
+  font-size: 12px;
+  color: #888;
+  margin-bottom: 8px;
+}
+
+.task-meta span {
+  background: #f3f4f6;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.progress-bar-wrap {
+  background: #e5e7eb;
+  border-radius: 4px;
+  height: 22px;
+  position: relative;
+  margin: 8px 0;
+  overflow: hidden;
+}
+
+.progress-bar {
+  height: 100%;
+  background: linear-gradient(90deg, #6366f1, #818cf8);
+  border-radius: 4px;
+  transition: width 0.4s ease;
+}
+
+.progress-text {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 11px;
+  color: #333;
+  font-weight: 500;
+}
+
+.task-stats {
+  display: flex;
+  gap: 16px;
+  font-size: 13px;
+}
+
+.stat-ok { color: #059669; }
+.stat-fail { color: #dc2626; }
+
+.task-dir {
+  font-size: 12px;
+  color: #9ca3af;
+  margin: 6px 0 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-errors {
+  margin-top: 8px;
+}
+
+.task-error {
+  font-size: 12px;
+  color: #dc2626;
+  margin: 2px 0;
+}
+
+.task-card-actions {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid #f3f4f6;
+}
+
+.cancel-btn {
+  padding: 6px 14px;
+  border: 1px solid #fca5a5;
+  background: #fff;
+  color: #dc2626;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.cancel-btn:hover {
+  background: #fef2f2;
+}
