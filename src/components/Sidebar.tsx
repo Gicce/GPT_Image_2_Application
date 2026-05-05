@@ -19,8 +19,8 @@ export default function Sidebar({ currentPage, onNavigate }: SidebarProps) {
     <aside className="sidebar">
       <div className="sidebar-header">
         <img src="/logo.png" alt="Logo" className="sidebar-logo" />
-        <h1 className="sidebar-title">AI 图片生成</h1>
-        <p className="sidebar-subtitle">GPT Image 2 · 批量工具</p>
+        <h1 className="sidebar-title">CyImagePro</h1>
+        <p className="sidebar-subtitle">AI 图片批量生成工具</p>
       </div>
       <nav className="sidebar-nav">
         {menuItems.map(item => (

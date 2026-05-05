@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/crates/tauri-cli/schema.json",
-  "productName": "AI 图片批量生成工具",
+  "productName": "CyImagePro",
   "version": "1.0.0",
   "identifier": "com.gptimage.batch-generator",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "AI 图片批量生成工具",
+        "title": "CyImagePro",
         "width": 1200,
         "height": 800,
         "minWidth": 900,
@@ -43,7 +43,10 @@
       "webviewInstallMode": {
         "type": "downloadBootstrapper"
       }
-    }
+    },
+    "resources": [
+      "WebView2Loader.dll"
+    ]
   },
   "plugins": {
     "shell": {
