@@ -4,6 +4,28 @@
   gap: 16px;
 }
 
+.load-more {
+  text-align: center;
+  padding: 24px 0;
+}
+
+.load-more button {
+  padding: 10px 24px;
+  border: 1px solid #d1d5db;
+  background: #fff;
+  color: #555;
+  border-radius: 8px;
+  font-size: 14px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.load-more button:hover {
+  background: #f9fafb;
+  border-color: #6366f1;
+  color: #6366f1;
+}
+
 .gallery-item {
   background: #fff;
   border: 1px solid #e5e7eb;

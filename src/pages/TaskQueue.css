@@ -145,3 +145,34 @@
 .cancel-btn:hover {
   background: #fef2f2;
 }
+
+.retry-btn {
+  padding: 6px 14px;
+  border: 1px solid #6366f1;
+  background: #fff;
+  color: #6366f1;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  font-family: inherit;
+  margin-right: 8px;
+}
+
+.retry-btn:hover {
+  background: #eef2ff;
+}
+
+.edit-resend-btn {
+  padding: 6px 14px;
+  border: 1px solid #6366f1;
+  background: #6366f1;
+  color: #fff;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.edit-resend-btn:hover {
+  background: #4f46e5;
+}

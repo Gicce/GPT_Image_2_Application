@@ -53,6 +53,11 @@
   border-radius: 3px;
 }
 
+.history-meta .success {
+  background: #d1fae5;
+  color: #059669;
+}
+
 .history-meta .fail {
   background: #fee2e2;
   color: #dc2626;

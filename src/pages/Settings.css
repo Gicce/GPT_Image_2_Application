@@ -21,3 +21,12 @@
   color: #166534;
   margin: 0;
 }
+
+.settings-section-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #1a1a1a;
+  margin: 28px 0 16px;
+  padding-top: 20px;
+  border-top: 1px solid #e5e7eb;
+}

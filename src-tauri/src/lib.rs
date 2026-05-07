@@ -8,7 +8,11 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
+            #[cfg(desktop)]
+            app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
+
             let app_handle = app.handle().clone();
 
             // Spawn a background task runner
@@ -31,12 +35,21 @@ pub fn run() {
             commands::get_tasks,
             commands::create_task,
             commands::cancel_task,
+            commands::retry_task,
             commands::get_images,
             commands::delete_image,
+            commands::read_thumbnail,
             commands::read_image_data,
             commands::open_file,
             commands::open_folder,
             commands::select_directory,
+            commands::select_image_file,
+            commands::get_conversations,
+            commands::save_conversations,
+            commands::save_chat_image,
+            commands::save_image_as,
+            commands::chat_generate_image,
+            commands::chat_edit_image,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

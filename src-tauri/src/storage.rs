@@ -26,6 +26,10 @@ pub fn images_path(app: &AppHandle) -> PathBuf {
     data_dir(app).join("images.json")
 }
 
+pub fn conversations_path(app: &AppHandle) -> PathBuf {
+    data_dir(app).join("conversations.json")
+}
+
 pub fn read_json<T: serde::de::DeserializeOwned>(path: &PathBuf, default: T) -> T {
     fs::read_to_string(path)
         .ok()

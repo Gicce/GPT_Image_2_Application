@@ -16,6 +16,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     default_quality: 'standard',
     default_format: 'png',
     default_output_dir: '',
+    chat_token: '',
+    chat_model: 'gpt-4o',
+    chat_base_url: 'https://www.packyapi.com/v1',
+    chat_system_prompt: '',
   },
   loading: false,
 

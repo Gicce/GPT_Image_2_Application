@@ -57,11 +57,14 @@ export default function CreateTask() {
         output_format: format,
         count,
         output_dir: outputDir,
+        task_type: 'generate',
+        source_images: [],
       });
       addTask(task);
       setPrompt('');
       setNegativePrompt('');
       setCount(4);
+      alert('提交成功，请在任务队列中查看任务进度。');
     } catch (err: any) {
       setError(err?.toString() || '创建任务失败');
     } finally {

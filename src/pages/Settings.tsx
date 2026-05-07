@@ -88,6 +88,52 @@ export default function Settings() {
         <div className="save-note">
           <p>所有设置自动保存到本地。</p>
         </div>
+
+        <h3 className="settings-section-title">智能对话设置</h3>
+
+        <div className="form-group">
+          <label>对话 API Token</label>
+          <input
+            type="password"
+            value={settings.chat_token}
+            onChange={e => saveSettings({ chat_token: e.target.value })}
+            placeholder="对话接口专用 Token，与图片 Token 独立"
+          />
+          <p className="form-hint">
+            此 Token 仅用于智能对话功能，与上方图片生成 Token 互不影响。
+          </p>
+        </div>
+
+        <div className="form-row">
+          <div className="form-group">
+            <label>对话模型</label>
+            <input
+              type="text"
+              value={settings.chat_model}
+              onChange={e => saveSettings({ chat_model: e.target.value })}
+              placeholder="gpt-4o"
+            />
+          </div>
+          <div className="form-group">
+            <label>对话 Base URL</label>
+            <input
+              type="text"
+              value={settings.chat_base_url}
+              onChange={e => saveSettings({ chat_base_url: e.target.value })}
+              placeholder="https://www.packyapi.com/v1"
+            />
+          </div>
+        </div>
+
+        <div className="form-group">
+          <label>System Prompt（可选）</label>
+          <input
+            type="text"
+            value={settings.chat_system_prompt}
+            onChange={e => saveSettings({ chat_system_prompt: e.target.value })}
+            placeholder="You are a helpful assistant."
+          />
+        </div>
       </div>
     </div>
   );

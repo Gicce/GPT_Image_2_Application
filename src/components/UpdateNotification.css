@@ -1,0 +1,78 @@
+.update-notification {
+  padding: 10px 20px;
+  background: linear-gradient(135deg, rgba(79, 124, 255, 0.12), rgba(16, 163, 127, 0.08));
+  border-bottom: 1px solid rgba(79, 124, 255, 0.2);
+  font-size: 13px;
+  color: #ececec;
+  display: flex;
+  align-items: center;
+}
+
+.update-notif-available {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+}
+
+.update-notif-available span {
+  flex: 1;
+  font-weight: 600;
+}
+
+.update-notif-btn {
+  padding: 5px 16px;
+  border-radius: 6px;
+  border: none;
+  background: #10a37f;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.update-notif-btn:hover {
+  background: #0d8c6d;
+}
+
+.update-notif-dismiss {
+  padding: 5px 12px;
+  border-radius: 6px;
+  border: 1px solid #3e3e3e;
+  background: transparent;
+  color: #8e8ea0;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.update-notif-dismiss:hover {
+  background: #2f2f2f;
+  color: #ececec;
+}
+
+.update-notif-downloading {
+  flex: 1;
+}
+
+.update-notif-downloading span {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: #8e8ea0;
+}
+
+.update-notif-progress {
+  width: 100%;
+  height: 4px;
+  background: #2f2f3f;
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.update-notif-fill {
+  height: 100%;
+  background: #4f7cff;
+  border-radius: 2px;
+  transition: width 0.15s ease;
+}

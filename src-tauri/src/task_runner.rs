@@ -21,6 +21,7 @@ struct ApiRequestBody {
 #[derive(Debug, serde::Deserialize)]
 struct ApiResponseImage {
     b64_json: Option<String>,
+    url: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -116,7 +117,13 @@ pub async fn process_next_task(app: &AppHandle) {
         });
         let _ = app.emit("task-updated", &task.id);
 
-        match generate_single_image(&token, &task, i).await {
+        let result = if task.task_type == "edit" {
+            edit_single_image(&token, &task, i).await
+        } else {
+            generate_single_image(&token, &task, i).await
+        };
+
+        match result {
             Ok(image_record) => {
                 success_count += 1;
                 storage::with_tasks(app, |tasks| {
@@ -223,6 +230,104 @@ async fn generate_single_image(
     let timestamp = now.format("%Y%m%d_%H%M%S");
     let ext = &task.output_format;
     let file_name = format!("{}_{}.{}", timestamp, index + 1, ext);
+
+    let file_path = Path::new(&task.output_dir).join(&file_name);
+    fs::write(&file_path, &image_bytes).map_err(|e| format!("保存图片失败: {}", e))?;
+
+    let image_id = uuid::Uuid::new_v4().to_string();
+
+    Ok(ImageRecord {
+        id: image_id,
+        task_id: task.id.clone(),
+        local_path: file_path.to_string_lossy().replace('\\', "/"),
+        file_name,
+        created_at: now.to_rfc3339(),
+        status: "saved".to_string(),
+    })
+}
+
+pub fn mime_for_path(path: &Path) -> &'static str {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("webp") => "image/webp",
+        _ => "image/png",
+    }
+}
+
+async fn edit_single_image(
+    token: &str,
+    task: &Task,
+    index: usize,
+) -> Result<ImageRecord, String> {
+    let client = reqwest::Client::new();
+
+    let mut form = reqwest::multipart::Form::new()
+        .text("model", "gpt-image-2".to_string())
+        .text("prompt", task.prompt.clone())
+        .text("n", "1".to_string())
+        .text("size", task.size.clone())
+        .text("response_format", "b64_json".to_string());
+
+    for img_path in &task.source_images {
+        let path = Path::new(img_path);
+        let file_bytes = fs::read(path)
+            .map_err(|e| format!("无法读取源图片 {}: {}", img_path, e))?;
+        let file_name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("image.png")
+            .to_string();
+        let mime = mime_for_path(path);
+        let part = reqwest::multipart::Part::bytes(file_bytes)
+            .file_name(file_name)
+            .mime_str(mime)
+            .unwrap();
+        form = form.part("image", part);
+    }
+
+    let response = client
+        .post("https://www.packyapi.com/v1/images/edits")
+        .header("Authorization", format!("Bearer {}", token))
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| format!("网络请求失败: {}", e))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        return Err(format!("API 错误 {}: {}", status, text));
+    }
+
+    let api_response: ApiResponse = response
+        .json()
+        .await
+        .map_err(|e| format!("解析响应失败: {}", e))?;
+
+    let image_data = api_response
+        .data
+        .into_iter()
+        .next()
+        .ok_or_else(|| "API 未返回图片数据".to_string())?;
+
+    let image_bytes = if let Some(b64) = image_data.b64_json {
+        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &b64)
+            .map_err(|e| format!("Base64 解码失败: {}", e))?
+    } else if let Some(url) = image_data.url {
+        let client2 = reqwest::Client::new();
+        let resp = client2.get(&url).send().await
+            .map_err(|e| format!("下载图片失败: {}", e))?;
+        resp.bytes().await
+            .map_err(|e| format!("读取图片数据失败: {}", e))?
+            .to_vec()
+    } else {
+        return Err("响应中缺少图片数据（无 b64_json 也无 url）".to_string());
+    };
+
+    let now = chrono::Local::now();
+    let timestamp = now.format("%Y%m%d_%H%M%S");
+    let ext = &task.output_format;
+    let file_name = format!("{}_{}_edit.{}", timestamp, index + 1, ext);
 
     let file_path = Path::new(&task.output_dir).join(&file_name);
     fs::write(&file_path, &image_bytes).map_err(|e| format!("保存图片失败: {}", e))?;

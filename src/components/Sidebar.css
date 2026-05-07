@@ -85,8 +85,32 @@
   border-top: 1px solid rgba(255,255,255,0.06);
 }
 
-.sidebar-footer p {
+.version-button {
   font-size: 11px;
-  color: rgba(255,255,255,0.25);
-  margin: 0;
+  color: rgba(255,255,255,0.35);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: all 0.15s ease;
+  font-family: inherit;
+  width: 100%;
+  text-align: center;
+}
+
+.version-button:hover {
+  color: rgba(255,255,255,0.65);
+  background: rgba(255,255,255,0.05);
+}
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  backdrop-filter: blur(4px);
 }

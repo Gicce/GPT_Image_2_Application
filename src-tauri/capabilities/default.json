@@ -6,6 +6,7 @@
     "core:default",
     "core:path:default",
     "dialog:default",
-    "shell:default"
+    "shell:default",
+    "updater:default"
   ]
 }

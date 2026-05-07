@@ -1,7 +1,10 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useTaskStore } from '../store/useTaskStore';
 import { api } from '../services/api';
+import type { Task } from '../types';
+import EditTaskModal from '../components/EditTaskModal';
 import './TaskQueue.css';
+import './ImageEdit.css';
 
 const STATUS_MAP: Record<string, { label: string; cls: string }> = {
   pending: { label: '排队中', cls: 'status-pending' },
@@ -13,6 +16,7 @@ const STATUS_MAP: Record<string, { label: string; cls: string }> = {
 
 export default function TaskQueue() {
   const { tasks, loadTasks, cancelTask } = useTaskStore();
+  const [editingTask, setEditingTask] = useState<Task | null>(null);
 
   useEffect(() => {
     loadTasks();
@@ -21,6 +25,16 @@ export default function TaskQueue() {
     });
     return () => { unlisten.then(fn => fn()); };
   }, []);
+
+  const handleRetry = async (taskId: string) => {
+    try {
+      await api.retryTask(taskId);
+      alert('任务已重新提交，请查看队列进度。');
+      await loadTasks();
+    } catch (err: any) {
+      alert(err?.toString() || '重新提交失败');
+    }
+  };
 
   const sorted = [...tasks].sort((a, b) =>
     new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
@@ -44,12 +58,14 @@ export default function TaskQueue() {
             const st = STATUS_MAP[task.status] || STATUS_MAP.pending;
             const done = task.success_count + task.failed_count;
             const pct = task.count > 0 ? Math.round((done / task.count) * 100) : 0;
+            const isFinished = task.status === 'completed' || task.status === 'failed';
 
             return (
               <div key={task.id} className="task-card">
                 <div className="task-card-header">
                   <div>
                     <span className={`status-badge ${st.cls}`}>{st.label}</span>
+                    {task.task_type === 'edit' && <span className="type-badge edit-badge">图生图</span>}
                     <span className="task-id">#{task.id.slice(0, 8)}</span>
                   </div>
                   <span className="task-time">
@@ -94,17 +110,31 @@ export default function TaskQueue() {
                   )}
                 </div>
 
-                {(task.status === 'pending' || task.status === 'running') && (
-                  <div className="task-card-actions">
+                <div className="task-card-actions">
+                  {(task.status === 'pending' || task.status === 'running') && (
                     <button className="cancel-btn" onClick={() => cancelTask(task.id)}>
                       取消任务
                     </button>
-                  </div>
-                )}
+                  )}
+                  {task.status === 'failed' && (
+                    <button className="retry-btn" onClick={() => handleRetry(task.id)}>
+                      重新提交
+                    </button>
+                  )}
+                  {isFinished && (
+                    <button className="edit-resend-btn" onClick={() => setEditingTask(task)}>
+                      编辑重发
+                    </button>
+                  )}
+                </div>
               </div>
             );
           })}
         </div>
+      )}
+
+      {editingTask && (
+        <EditTaskModal task={editingTask} onClose={() => setEditingTask(null)} />
       )}
     </div>
   );

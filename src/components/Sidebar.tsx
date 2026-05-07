@@ -1,4 +1,7 @@
+import { useState, useEffect } from 'react';
+import { getVersion } from '@tauri-apps/api/app';
 import type { PageType } from '../types';
+import VersionModal from './VersionModal';
 import './Sidebar.css';
 
 interface SidebarProps {
@@ -8,13 +11,23 @@ interface SidebarProps {
 
 const menuItems: { id: PageType; label: string; icon: string }[] = [
   { id: 'create', label: '创建任务', icon: '✦' },
+  { id: 'edit', label: '图生图', icon: '✎' },
+  { id: 'chat', label: '智能对话', icon: '💬' },
   { id: 'queue', label: '任务队列', icon: '☰' },
   { id: 'gallery', label: '图片库', icon: '▦' },
   { id: 'history', label: '历史记录', icon: '🕐' },
   { id: 'settings', label: '设置', icon: '⚙' },
+  { id: 'about', label: '关于我们', icon: '◉' },
 ];
 
 export default function Sidebar({ currentPage, onNavigate }: SidebarProps) {
+  const [appVersion, setAppVersion] = useState('');
+  const [showVersionModal, setShowVersionModal] = useState(false);
+
+  useEffect(() => {
+    getVersion().then(v => setAppVersion('v' + v));
+  }, []);
+
   return (
     <aside className="sidebar">
       <div className="sidebar-header">
@@ -35,8 +48,16 @@ export default function Sidebar({ currentPage, onNavigate }: SidebarProps) {
         ))}
       </nav>
       <div className="sidebar-footer">
-        <p>v1.0.0 MVP</p>
+        <button className="version-button" onClick={() => setShowVersionModal(true)}>
+          {appVersion || '...'}
+        </button>
       </div>
+      {showVersionModal && (
+        <VersionModal
+          version={appVersion}
+          onClose={() => setShowVersionModal(false)}
+        />
+      )}
     </aside>
   );
 }

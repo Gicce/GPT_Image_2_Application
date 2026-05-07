@@ -1,40 +1,59 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { useImageStore } from '../store/useImageStore';
 import { api } from '../services/api';
 import type { ImageRecord } from '../types';
 import './Gallery.css';
 
+const PAGE_SIZE = 20;
+
 export default function Gallery() {
   const { images, loadImages, deleteImage } = useImageStore();
   const [preview, setPreview] = useState<ImageRecord | null>(null);
-  const [imageUrls, setImageUrls] = useState<Record<string, string>>({});
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const [thumbUrls, setThumbUrls] = useState<Record<string, string>>({});
+  const loadingRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => { loadImages(); }, []);
+
+  const sorted = [...images].sort((a, b) =>
+    new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+  );
+
+  const visibleImages = sorted.slice(0, visibleCount);
+  const hasMore = visibleCount < sorted.length;
+
+  const loadThumb = useCallback(async (img: ImageRecord) => {
+    if (thumbUrls[img.id] || loadingRef.current.has(img.id)) return;
+    loadingRef.current.add(img.id);
+    try {
+      const url = await api.readThumbnail(img.local_path);
+      setThumbUrls(prev => ({ ...prev, [img.id]: url }));
+    } catch {}
+    loadingRef.current.delete(img.id);
+  }, [thumbUrls]);
 
   useEffect(() => {
-    loadImages();
-  }, []);
+    visibleImages.forEach(img => loadThumb(img));
+  }, [visibleImages]);
+
+  const handleScroll = useCallback(() => {
+    if (!hasMore) return;
+    const el = document.documentElement;
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < 400) {
+      setVisibleCount(prev => prev + PAGE_SIZE);
+    }
+  }, [hasMore]);
 
   useEffect(() => {
-    const loadUrls = async () => {
-      const urls: Record<string, string> = {};
-      for (const img of images) {
-        try {
-          urls[img.id] = await api.readImageData(img.local_path);
-        } catch {}
-      }
-      setImageUrls(urls);
-    };
-    if (images.length > 0) loadUrls();
-  }, [images]);
+    window.addEventListener('scroll', handleScroll);
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, [handleScroll]);
 
   const handleDelete = async (img: ImageRecord) => {
     if (confirm(`确定删除图片 ${img.file_name}？文件将从磁盘移除。`)) {
       await deleteImage(img.id);
     }
   };
-
-  const sorted = [...images].sort((a, b) =>
-    new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-  );
 
   return (
     <div className="page">
@@ -49,28 +68,37 @@ export default function Gallery() {
           <p className="empty-hint">创建批量任务来生成图片</p>
         </div>
       ) : (
-        <div className="gallery-grid">
-          {sorted.map(img => (
-            <div key={img.id} className="gallery-item">
-              <div className="gallery-thumb" onClick={() => setPreview(img)}>
-                {imageUrls[img.id] ? (
-                  <img src={imageUrls[img.id]} alt={img.file_name} />
-                ) : (
-                  <div className="gallery-loading">加载中...</div>
-                )}
+        <>
+          <div className="gallery-grid">
+            {visibleImages.map(img => (
+              <div key={img.id} className="gallery-item">
+                <div className="gallery-thumb" onClick={() => setPreview(img)}>
+                  {thumbUrls[img.id] ? (
+                    <img src={thumbUrls[img.id]} alt={img.file_name} />
+                  ) : (
+                    <div className="gallery-loading">加载中...</div>
+                  )}
+                </div>
+                <div className="gallery-info">
+                  <p className="gallery-name" title={img.file_name}>{img.file_name}</p>
+                  <p className="gallery-time">{new Date(img.created_at).toLocaleString('zh-CN')}</p>
+                </div>
+                <div className="gallery-actions">
+                  <button onClick={() => api.openFile(img.local_path)}>打开</button>
+                  <button onClick={() => api.openFolder(img.local_path)}>目录</button>
+                  <button className="del-btn" onClick={() => handleDelete(img)}>删除</button>
+                </div>
               </div>
-              <div className="gallery-info">
-                <p className="gallery-name" title={img.file_name}>{img.file_name}</p>
-                <p className="gallery-time">{new Date(img.created_at).toLocaleString('zh-CN')}</p>
-              </div>
-              <div className="gallery-actions">
-                <button onClick={() => api.openFile(img.local_path)}>打开</button>
-                <button onClick={() => api.openFolder(img.local_path)}>目录</button>
-                <button className="del-btn" onClick={() => handleDelete(img)}>删除</button>
-              </div>
+            ))}
+          </div>
+          {hasMore && (
+            <div className="load-more">
+              <button onClick={() => setVisibleCount(prev => prev + PAGE_SIZE)}>
+                加载更多（还有 {sorted.length - visibleCount} 张）
+              </button>
             </div>
-          ))}
-        </div>
+          )}
+        </>
       )}
 
       {preview && (
@@ -98,7 +126,7 @@ function PreviewModal({ preview, onClose }: { preview: ImageRecord; onClose: () 
           {url ? (
             <img src={url} alt={preview.file_name} />
           ) : (
-            <div className="gallery-loading">加载中...</div>
+            <div className="gallery-loading">加载原图中...</div>
           )}
         </div>
         <div className="preview-footer">

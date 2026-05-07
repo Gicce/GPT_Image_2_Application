@@ -32,6 +32,11 @@ body {
   background: #fafafa;
 }
 
+.main-content.chat-mode {
+  background: #212121;
+  overflow: hidden;
+}
+
 .page {
   padding: 28px 32px;
   max-width: 1200px;
