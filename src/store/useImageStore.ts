@@ -24,7 +24,13 @@ export const useImageStore = create<ImageState>((set, get) => ({
   },
 
   deleteImage: async (imageId) => {
-    await api.deleteImage(imageId);
-    set({ images: get().images.filter(img => img.id !== imageId) });
+    const prev = get().images;
+    set({ images: prev.filter(img => img.id !== imageId) });
+    try {
+      await api.deleteImage(imageId);
+    } catch (err) {
+      set({ images: prev });
+      throw err;
+    }
   },
 }));

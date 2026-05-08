@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import { useImageStore } from '../store/useImageStore';
 import { api } from '../services/api';
 import type { ImageRecord } from '../types';
@@ -15,9 +15,10 @@ export default function Gallery() {
 
   useEffect(() => { loadImages(); }, []);
 
-  const sorted = [...images].sort((a, b) =>
-    new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-  );
+  const sorted = useMemo(() =>
+    [...images].sort((a, b) =>
+      new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    ), [images]);
 
   const visibleImages = sorted.slice(0, visibleCount);
   const hasMore = visibleCount < sorted.length;

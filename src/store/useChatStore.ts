@@ -51,7 +51,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
     try {
       const conversations = await api.getConversations();
       set({ conversations, activeId: conversations.length > 0 ? conversations[0].id : null });
-    } catch { /* empty */ }
+    } catch (err) {
+      console.error('加载对话历史失败:', err);
+      set({ error: '无法加载对话历史，数据可能已损坏' });
+    }
   },
 
   save: async () => {
@@ -171,12 +174,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
           }
         }
 
+        const timeoutId = setTimeout(() => abortCtrl.abort(), 120000);
         const resp = await fetch(baseURL + '/chat/completions', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
           body: JSON.stringify({ model: settings.chat_model, messages: apiMessages, max_tokens: 4096 }),
           signal: abortCtrl.signal,
         });
+        clearTimeout(timeoutId);
 
         if (!resp.ok) {
           const err = await resp.json().catch(() => ({}));
@@ -213,7 +218,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
     } catch (err: any) {
       const errMsg = typeof err === 'string' ? err : (err?.message || String(err));
       if (err?.name === 'AbortError') {
-        finishWithText(activeId!, assistantMsg.id, '*[已停止]*');
+        const { abortCtrl: currentCtrl } = get();
+        // If abortCtrl is already null, it was a timeout (we cleared it), not user stop
+        if (currentCtrl === null) {
+          finishWithText(activeId!, assistantMsg.id, '请求超时（超过2分钟），请重试');
+        } else {
+          finishWithText(activeId!, assistantMsg.id, '*[已停止]*');
+        }
       } else {
         set(s => ({
           conversations: s.conversations.map(c =>

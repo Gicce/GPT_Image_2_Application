@@ -3,31 +3,43 @@ mod models;
 mod storage;
 mod task_runner;
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let shutdown2 = shutdown.clone();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_process::init())
-        .setup(|app| {
+        .setup(move |app| {
             #[cfg(desktop)]
             app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
 
             let app_handle = app.handle().clone();
+            let shutdown_flag = shutdown.clone();
 
-            // Spawn a background task runner
             std::thread::spawn(move || {
                 let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
                 rt.block_on(async {
                     let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(500));
                     loop {
                         interval.tick().await;
+                        if shutdown_flag.load(Ordering::Relaxed) { break; }
                         task_runner::process_next_task(&app_handle).await;
                     }
                 });
             });
 
             Ok(())
+        })
+        .on_window_event(move |_window, event| {
+            if let tauri::WindowEvent::Destroyed = event {
+                shutdown2.store(true, Ordering::Relaxed);
+            }
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_settings,

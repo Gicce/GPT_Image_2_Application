@@ -45,6 +45,7 @@ pub fn write_json<T: serde::Serialize>(path: &PathBuf, data: &T) {
 
 // Simple file-based locking to prevent concurrent access issues
 static TASK_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+static IMAGE_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
 pub fn with_tasks<F, R>(app: &AppHandle, f: F) -> R
 where
@@ -62,6 +63,7 @@ pub fn with_images<F, R>(app: &AppHandle, f: F) -> R
 where
     F: FnOnce(&mut Vec<ImageRecord>) -> R,
 {
+    let _lock = IMAGE_LOCK.lock().unwrap();
     let path = images_path(app);
     let mut images: Vec<ImageRecord> = read_json(&path, Vec::new());
     let result = f(&mut images);

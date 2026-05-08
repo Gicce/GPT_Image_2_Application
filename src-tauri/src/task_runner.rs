@@ -94,7 +94,7 @@ pub async fn process_next_task(app: &AppHandle) {
         .timeout(std::time::Duration::from_secs(600))
         .use_native_tls()
         .build()
-        .unwrap();
+        .unwrap_or_else(|_| reqwest::Client::new());
 
     let mut success_count = 0usize;
     let mut failed_count = 0usize;

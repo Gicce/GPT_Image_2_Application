@@ -22,10 +22,11 @@ export default function TaskQueue() {
 
   useEffect(() => {
     loadTasks();
-    const unlisten = api.onTaskUpdated(async () => {
+    let unlistener: (() => void) | null = null;
+    api.onTaskUpdated(async () => {
       await loadTasks();
-    });
-    return () => { unlisten.then(fn => fn()); };
+    }).then(fn => { unlistener = fn; });
+    return () => { if (unlistener) unlistener(); };
   }, []);
 
   const handleRetry = async (taskId: string) => {

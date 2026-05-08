@@ -9,7 +9,7 @@ static HTTP_CLIENT: once_cell::sync::Lazy<reqwest::Client> = once_cell::sync::La
         .timeout(std::time::Duration::from_secs(120))
         .use_native_tls()
         .build()
-        .unwrap()
+        .unwrap_or_else(|_| reqwest::Client::new())
 });
 
 // ========== Settings ==========
@@ -76,10 +76,9 @@ pub fn create_task(app: tauri::AppHandle, params: CreateTaskParams) -> Result<Ta
             .collect(),
     };
 
-    let path = storage::tasks_path(&app);
-    let mut tasks: Vec<Task> = storage::read_json(&path, Vec::new());
-    tasks.push(task.clone());
-    storage::write_json(&path, &tasks);
+    storage::with_tasks(&app, |tasks| {
+        tasks.push(task.clone());
+    });
 
     Ok(task)
 }
@@ -96,42 +95,39 @@ pub fn cancel_task(app: tauri::AppHandle, task_id: String) -> Result<(), String>
 
 #[tauri::command]
 pub fn retry_task(app: tauri::AppHandle, task_id: String) -> Result<Task, String> {
-    let path = storage::tasks_path(&app);
-    let tasks: Vec<Task> = storage::read_json(&path, Vec::new());
-    let original = tasks.iter().find(|t| t.id == task_id)
-        .ok_or_else(|| "任务不存在".to_string())?;
+    let new_task = storage::with_tasks(&app, |tasks| {
+        let original = tasks.iter().find(|t| t.id == task_id).ok_or_else(|| "任务不存在".to_string())?;
 
-    let now = chrono::Local::now().to_rfc3339();
-    let task_type = if original.task_type.is_empty() { "generate".to_string() } else { original.task_type.clone() };
+        let now = chrono::Local::now().to_rfc3339();
+        let task_type = if original.task_type.is_empty() { "generate".to_string() } else { original.task_type.clone() };
 
-    let new_task = Task {
-        id: uuid::Uuid::new_v4().to_string(),
-        prompt: original.prompt.clone(),
-        negative_prompt: original.negative_prompt.clone(),
-        size: original.size.clone(),
-        quality: original.quality.clone(),
-        output_format: original.output_format.clone(),
-        count: original.count,
-        status: "pending".to_string(),
-        created_at: now,
-        output_dir: original.output_dir.clone(),
-        success_count: 0,
-        failed_count: 0,
-        task_type,
-        source_images: original.source_images.clone(),
-        sub_tasks: (0..original.count)
-            .map(|i| SubTask {
-                index: i,
-                status: "pending".to_string(),
-                image_id: None,
-                error: None,
-            })
-            .collect(),
-    };
-
-    let mut all_tasks: Vec<Task> = storage::read_json(&path, Vec::new());
-    all_tasks.push(new_task.clone());
-    storage::write_json(&path, &all_tasks);
+        let new_task = Task {
+            id: uuid::Uuid::new_v4().to_string(),
+            prompt: original.prompt.clone(),
+            negative_prompt: original.negative_prompt.clone(),
+            size: original.size.clone(),
+            quality: original.quality.clone(),
+            output_format: original.output_format.clone(),
+            count: original.count,
+            status: "pending".to_string(),
+            created_at: now,
+            output_dir: original.output_dir.clone(),
+            success_count: 0,
+            failed_count: 0,
+            task_type,
+            source_images: original.source_images.clone(),
+            sub_tasks: (0..original.count)
+                .map(|i| SubTask {
+                    index: i,
+                    status: "pending".to_string(),
+                    image_id: None,
+                    error: None,
+                })
+                .collect(),
+        };
+        tasks.push(new_task.clone());
+        Ok::<Task, String>(new_task)
+    })?;
 
     Ok(new_task)
 }
@@ -144,13 +140,22 @@ pub fn read_thumbnail(app: tauri::AppHandle, path: String) -> Result<String, Str
     fs::create_dir_all(&cache_dir).ok();
 
     let path_hash = format!("{:x}", md5::compute(&path));
-    let ext = Path::new(&path).extension().and_then(|e| e.to_str()).unwrap_or("png");
+    let _ext = Path::new(&path).extension().and_then(|e| e.to_str()).unwrap_or("png");
     let cache_path = cache_dir.join(format!("{}_thumb.jpg", path_hash));
 
     if cache_path.exists() {
-        let data = fs::read(&cache_path).map_err(|e| format!("读取缓存失败: {}", e))?;
-        let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, data);
-        return Ok(format!("data:image/jpeg;base64,{}", b64));
+        // Invalidate cache if source file is newer than cached thumb
+        let source_modified = fs::metadata(&path).and_then(|m| m.modified()).ok();
+        let cache_modified = fs::metadata(&cache_path).and_then(|m| m.modified()).ok();
+        let cache_valid = match (source_modified, cache_modified) {
+            (Some(src), Some(cached)) => cached >= src,
+            _ => true,
+        };
+        if cache_valid {
+            let data = fs::read(&cache_path).map_err(|e| format!("读取缓存失败: {}", e))?;
+            let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, data);
+            return Ok(format!("data:image/jpeg;base64,{}", b64));
+        }
     }
 
     let data = fs::read(&path).map_err(|e| format!("无法读取图片: {}", e))?;
@@ -173,20 +178,14 @@ pub fn get_images(app: tauri::AppHandle) -> Vec<ImageRecord> {
 
 #[tauri::command]
 pub fn delete_image(app: tauri::AppHandle, image_id: String) -> Result<(), String> {
-    let path = storage::images_path(&app);
-    let mut images: Vec<ImageRecord> = storage::read_json(&path, Vec::new());
-
-    if let Some(img) = images.iter().find(|i| i.id == image_id) {
-        // Delete the file from disk
-        let file_path = &img.local_path;
-        if Path::new(file_path).exists() {
-            let _ = fs::remove_file(file_path);
+    storage::with_images(&app, |images| {
+        if let Some(img) = images.iter().find(|i| i.id == image_id) {
+            if Path::new(&img.local_path).exists() {
+                let _ = fs::remove_file(&img.local_path);
+            }
         }
-    }
-
-    images.retain(|i| i.id != image_id);
-    storage::write_json(&path, &images);
-
+        images.retain(|i| i.id != image_id);
+    });
     Ok(())
 }
 
