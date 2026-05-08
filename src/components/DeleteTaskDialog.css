@@ -1,0 +1,150 @@
+.dtd-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: dtd-fade-in 0.1s ease;
+}
+
+@keyframes dtd-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.dtd-dialog {
+  background: #ffffff;
+  border-radius: 8px;
+  width: 380px;
+  max-width: 92vw;
+  box-shadow:
+    0 2px 4px rgba(0,0,0,0.12),
+    0 8px 32px rgba(0,0,0,0.14),
+    0 0 0 1px rgba(0,0,0,0.06);
+  padding: 24px 24px 20px;
+  animation: dtd-slide-in 0.15s ease;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+@keyframes dtd-slide-in {
+  from { transform: translateY(-8px) scale(0.98); opacity: 0; }
+  to   { transform: translateY(0) scale(1); opacity: 1; }
+}
+
+.dtd-icon-row {
+  display: flex;
+  justify-content: flex-start;
+  margin-bottom: 12px;
+}
+
+.dtd-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: #FDE7E9;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dtd-content {
+  margin-bottom: 20px;
+}
+
+.dtd-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #1a1a1a;
+  margin: 0 0 8px;
+  line-height: 1.3;
+}
+
+.dtd-desc {
+  font-size: 13px;
+  color: #444;
+  margin: 0 0 8px;
+  line-height: 1.5;
+}
+
+.dtd-prompt {
+  font-size: 12px;
+  color: #888;
+  margin: 0 0 14px;
+  font-style: italic;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dtd-checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: #f5f5f5;
+  border: 1px solid #e5e5e5;
+  transition: background 0.1s;
+}
+
+.dtd-checkbox-row:hover {
+  background: #efefef;
+}
+
+.dtd-checkbox {
+  width: 16px;
+  height: 16px;
+  accent-color: #C42B1C;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.dtd-checkbox-label {
+  font-size: 13px;
+  color: #333;
+  user-select: none;
+}
+
+.dtd-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.dtd-btn {
+  padding: 7px 20px;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.1s, border-color 0.1s;
+  min-width: 80px;
+}
+
+.dtd-btn-cancel {
+  background: #f5f5f5;
+  border: 1px solid #d1d1d1;
+  color: #1a1a1a;
+}
+
+.dtd-btn-cancel:hover {
+  background: #ebebeb;
+  border-color: #bbb;
+}
+
+.dtd-btn-delete {
+  background: #C42B1C;
+  border: 1px solid #C42B1C;
+  color: #fff;
+}
+
+.dtd-btn-delete:hover {
+  background: #a82318;
+  border-color: #a82318;
+}

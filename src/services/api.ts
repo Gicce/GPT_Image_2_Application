@@ -11,6 +11,7 @@ export const api = {
   retryTask: (taskId: string): Promise<Task> => invoke('retry_task', { taskId }),
   getImages: (): Promise<ImageRecord[]> => invoke('get_images'),
   deleteImage: (imageId: string): Promise<void> => invoke('delete_image', { imageId }),
+  deleteTask: (taskId: string, deleteImages: boolean): Promise<void> => invoke('delete_task', { taskId, deleteImages }),
   readImageData: (path: string): Promise<string> => invoke('read_image_data', { path }),
   readThumbnail: (path: string): Promise<string> => invoke('read_thumbnail', { path }),
   openFile: (path: string): Promise<void> => invoke('open_file', { path }),

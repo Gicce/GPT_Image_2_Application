@@ -3,6 +3,7 @@ import { useTaskStore } from '../store/useTaskStore';
 import { api } from '../services/api';
 import type { Task } from '../types';
 import EditTaskModal from '../components/EditTaskModal';
+import DeleteTaskDialog from '../components/DeleteTaskDialog';
 import './TaskQueue.css';
 import './ImageEdit.css';
 
@@ -15,8 +16,9 @@ const STATUS_MAP: Record<string, { label: string; cls: string }> = {
 };
 
 export default function TaskQueue() {
-  const { tasks, loadTasks, cancelTask } = useTaskStore();
+  const { tasks, loadTasks, cancelTask, deleteTask } = useTaskStore();
   const [editingTask, setEditingTask] = useState<Task | null>(null);
+  const [deletingTask, setDeletingTask] = useState<Task | null>(null);
 
   useEffect(() => {
     loadTasks();
@@ -36,6 +38,12 @@ export default function TaskQueue() {
     }
   };
 
+  const handleDeleteConfirm = async (deleteImages: boolean) => {
+    if (!deletingTask) return;
+    await deleteTask(deletingTask.id, deleteImages);
+    setDeletingTask(null);
+  };
+
   const sorted = [...tasks].sort((a, b) =>
     new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
   );
@@ -50,7 +58,7 @@ export default function TaskQueue() {
       {sorted.length === 0 ? (
         <div className="empty-state">
           <p>暂无任务</p>
-          <p className="empty-hint">前往「创建任务」开始生成图片</p>
+          <p className="empty-hint">前往「文生图」开始生成图片</p>
         </div>
       ) : (
         <div className="task-list">
@@ -58,7 +66,9 @@ export default function TaskQueue() {
             const st = STATUS_MAP[task.status] || STATUS_MAP.pending;
             const done = task.success_count + task.failed_count;
             const pct = task.count > 0 ? Math.round((done / task.count) * 100) : 0;
+            const isActive = task.status === 'pending' || task.status === 'running';
             const isFinished = task.status === 'completed' || task.status === 'failed';
+            const imageCount = task.sub_tasks.filter(s => s.image_id).length;
 
             return (
               <div key={task.id} className="task-card">
@@ -81,7 +91,7 @@ export default function TaskQueue() {
                     <span>{task.count} 张</span>
                   </div>
 
-                  {(task.status === 'running') && (
+                  {task.status === 'running' && (
                     <div className="progress-bar-wrap">
                       <div className="progress-bar" style={{ width: `${pct}%` }} />
                       <span className="progress-text">{done} / {task.count} ({pct}%)</span>
@@ -111,7 +121,7 @@ export default function TaskQueue() {
                 </div>
 
                 <div className="task-card-actions">
-                  {(task.status === 'pending' || task.status === 'running') && (
+                  {isActive && (
                     <button className="cancel-btn" onClick={() => cancelTask(task.id)}>
                       取消任务
                     </button>
@@ -126,6 +136,11 @@ export default function TaskQueue() {
                       编辑重发
                     </button>
                   )}
+                  {!isActive && (
+                    <button className="delete-task-btn" onClick={() => setDeletingTask(task)}>
+                      删除
+                    </button>
+                  )}
                 </div>
               </div>
             );
@@ -135,6 +150,15 @@ export default function TaskQueue() {
 
       {editingTask && (
         <EditTaskModal task={editingTask} onClose={() => setEditingTask(null)} />
+      )}
+
+      {deletingTask && (
+        <DeleteTaskDialog
+          taskPrompt={deletingTask.prompt}
+          imageCount={deletingTask.sub_tasks.filter(s => s.image_id).length}
+          onConfirm={handleDeleteConfirm}
+          onCancel={() => setDeletingTask(null)}
+        />
       )}
     </div>
   );

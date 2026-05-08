@@ -10,6 +10,7 @@ interface TaskState {
   updateTask: (updated: Task) => void;
   refreshTask: (taskId: string) => Promise<void>;
   cancelTask: (taskId: string) => Promise<void>;
+  deleteTask: (taskId: string, deleteImages: boolean) => Promise<void>;
 }
 
 export const useTaskStore = create<TaskState>((set, get) => ({
@@ -43,5 +44,10 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     await api.cancelTask(taskId);
     const tasks = await api.getTasks();
     set({ tasks });
+  },
+
+  deleteTask: async (taskId, deleteImages) => {
+    await api.deleteTask(taskId, deleteImages);
+    set({ tasks: get().tasks.filter(t => t.id !== taskId) });
   },
 }));

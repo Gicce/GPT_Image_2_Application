@@ -6,6 +6,7 @@ import { api } from '../services/api';
 import type { ChatMessage } from '../types';
 import { marked } from 'marked';
 import './Chat.css';
+import './ImageEdit.css';
 
 marked.setOptions({ breaks: true });
 
@@ -26,6 +27,12 @@ export default function Chat() {
   const [showGalleryPicker, setShowGalleryPicker] = useState(false);
   const [galleryAsEditSource, setGalleryAsEditSource] = useState(false);
   const [galleryThumbs, setGalleryThumbs] = useState<Record<string, string>>({});
+  const [gpLayoutMode, setGpLayoutMode] = useState<'3x3' | '4x4'>('4x4');
+  const [gpSortOrder, setGpSortOrder] = useState<'desc' | 'asc'>('desc');
+  const [gpPage, setGpPage] = useState(0);
+  const [gpHoverPreview, setGpHoverPreview] = useState<{ id: string; url: string; x: number; y: number } | null>(null);
+  const gpHoverCache = useRef<Record<string, string>>({});
+  const gpHoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [previewImg, setPreviewImg] = useState<string | null>(null);
   const [copySuccess, setCopySuccess] = useState(false);
   const chatAreaRef = useRef<HTMLDivElement>(null);
@@ -98,23 +105,47 @@ export default function Chat() {
   // Load gallery thumbs when picker opens
   useEffect(() => {
     if (!showGalleryPicker) return;
+    setGpPage(0);
+    setGalleryThumbs({});
     loadImages();
   }, [showGalleryPicker]);
 
+  // Reset page when layout or sort changes
+  useEffect(() => { setGpPage(0); }, [gpLayoutMode, gpSortOrder]);
+
+  // Load thumbnails for current page
   useEffect(() => {
     if (!showGalleryPicker || images.length === 0) return;
     let cancelled = false;
+    const gpPageSize = gpLayoutMode === '3x3' ? 9 : 16;
+    const currentVisible = [...images]
+      .sort((a, b) => {
+        const cmp = a.created_at.localeCompare(b.created_at);
+        return gpSortOrder === 'desc' ? -cmp : cmp;
+      })
+      .slice(gpPage * gpPageSize, (gpPage + 1) * gpPageSize);
+    const toLoad = currentVisible.filter(img => !galleryThumbs[img.id]);
+    if (toLoad.length === 0) return;
     const load = async () => {
-      const urls: Record<string, string> = {};
-      for (const img of images.slice(0, 40)) {
+      for (const img of toLoad) {
         if (cancelled) return;
-        try { urls[img.id] = await api.readThumbnail(img.local_path); } catch {}
+        try {
+          const url = await api.readThumbnail(img.local_path);
+          if (!cancelled) setGalleryThumbs(prev => ({ ...prev, [img.id]: url }));
+        } catch {}
       }
-      if (!cancelled) setGalleryThumbs(urls);
     };
     load();
     return () => { cancelled = true; };
-  }, [showGalleryPicker, images]);
+  }, [showGalleryPicker, images, gpPage, gpLayoutMode, gpSortOrder]);
+
+  // Clear hover preview when picker closes
+  useEffect(() => {
+    if (!showGalleryPicker) {
+      setGpHoverPreview(null);
+      gpHoverCache.current = {};
+    }
+  }, [showGalleryPicker]);
 
   const getPlaceholder = () => {
     if (editImage) return '输入修改指令，如「把背景换成海滩」「去掉水印」...';
@@ -172,6 +203,29 @@ export default function Chat() {
     if (!path) return;
     const dataUrl = await api.readImageData(path);
     setEditImage({ dataUrl, filePath: path });
+  };
+
+  const handleGpMouseEnter = (e: React.MouseEvent<HTMLDivElement>, imgId: string, localPath: string) => {
+    if (gpHoverTimer.current) clearTimeout(gpHoverTimer.current);
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = rect.right + 8;
+    const y = rect.top;
+    gpHoverTimer.current = setTimeout(async () => {
+      if (gpHoverCache.current[imgId]) {
+        setGpHoverPreview({ id: imgId, url: gpHoverCache.current[imgId], x, y });
+        return;
+      }
+      try {
+        const url = await api.readImageData(localPath);
+        gpHoverCache.current[imgId] = url;
+        setGpHoverPreview({ id: imgId, url, x, y });
+      } catch {}
+    }, 1500);
+  };
+
+  const handleGpMouseLeave = () => {
+    if (gpHoverTimer.current) clearTimeout(gpHoverTimer.current);
+    gpHoverTimer.current = setTimeout(() => setGpHoverPreview(null), 100);
   };
 
   const handleSelectGalleryImage = async (imgPath: string) => {
@@ -324,34 +378,90 @@ export default function Chat() {
       )}
 
       {/* Gallery picker modal */}
-      {showGalleryPicker && (
-        <div className="chat-modal-overlay" onClick={() => setShowGalleryPicker(false)}>
-          <div className="gallery-picker-modal" onClick={e => e.stopPropagation()}>
-            <h3>从图片库选择</h3>
-            <div className="gp-edit-toggle-row">
-              <label className={`chat-toggle imggen-toggle ${galleryAsEditSource ? 'active' : ''}`} onClick={() => setGalleryAsEditSource(v => !v)}>
-                <span>选为图生图源图片</span>
-                <div className="toggle-track"><div className="toggle-thumb" /></div>
-              </label>
-            </div>
-            {images.length === 0 ? (
-              <p className="gallery-picker-empty">图片库暂无图片</p>
-            ) : (
-              <div className="gallery-picker-grid">
-                {images.slice(0, 40).map(img => (
-                  <div key={img.id} className="gallery-picker-item" onClick={() => handleSelectGalleryImage(img.local_path)}>
-                    {galleryThumbs[img.id] ? <img src={galleryThumbs[img.id]} alt={img.file_name} /> : <div className="gp-loading">...</div>}
-                    <span>{img.file_name}</span>
+      {showGalleryPicker && (() => {
+        const gpPageSize = gpLayoutMode === '3x3' ? 9 : 16;
+        const gpCols = gpLayoutMode === '3x3' ? 3 : 4;
+        const gpSorted = [...images].sort((a, b) => {
+          const cmp = a.created_at.localeCompare(b.created_at);
+          return gpSortOrder === 'desc' ? -cmp : cmp;
+        });
+        const gpVisible = gpSorted.slice(gpPage * gpPageSize, (gpPage + 1) * gpPageSize);
+        const gpTotalPages = Math.ceil(images.length / gpPageSize);
+        return (
+          <div className="gp-overlay" onClick={() => setShowGalleryPicker(false)}>
+            <div className="gp-modal" onClick={e => e.stopPropagation()}>
+              <div className="gp-header">
+                <h3 className="gp-title">从图片库选择</h3>
+                <div className="gp-header-right">
+                  <button
+                    className="gp-sort-btn"
+                    onClick={() => setGpSortOrder(o => o === 'desc' ? 'asc' : 'desc')}
+                    title={gpSortOrder === 'desc' ? '当前：最新优先' : '当前：最早优先'}
+                  >{gpSortOrder === 'desc' ? '↓ 最新' : '↑ 最早'}</button>
+                  <div className="gp-layout-switcher">
+                    {(['3x3', '4x4'] as const).map(m => (
+                      <button key={m} className={`gp-layout-btn${gpLayoutMode === m ? ' active' : ''}`} onClick={() => setGpLayoutMode(m)}>{m}</button>
+                    ))}
                   </div>
-                ))}
+                  <button className="gp-close" onClick={() => setShowGalleryPicker(false)}>✕</button>
+                </div>
               </div>
-            )}
-            <div className="gallery-picker-footer">
-              <button className="chat-modal-cancel" onClick={() => setShowGalleryPicker(false)}>关闭</button>
+
+              <div className="gp-edit-toggle-row">
+                <label className={`chat-toggle imggen-toggle ${galleryAsEditSource ? 'active' : ''}`} onClick={() => setGalleryAsEditSource(v => !v)}>
+                  <span>选为图生图源图片</span>
+                  <div className="toggle-track"><div className="toggle-thumb" /></div>
+                </label>
+              </div>
+
+              {images.length === 0 ? (
+                <div className="gp-empty">图片库暂无图片</div>
+              ) : (
+                <div className="gp-grid" style={{ gridTemplateColumns: `repeat(${gpCols}, 1fr)` }}>
+                  {gpVisible.map(img => {
+                    const url = galleryThumbs[img.id];
+                    return (
+                      <div
+                        key={img.id}
+                        className="gp-item"
+                        onClick={() => handleSelectGalleryImage(img.local_path)}
+                        onMouseEnter={e => handleGpMouseEnter(e, img.id, img.local_path)}
+                        onMouseLeave={handleGpMouseLeave}
+                        title={img.file_name}
+                      >
+                        {url ? <img src={url} alt={img.file_name} draggable={false} /> : <div className="gp-placeholder">...</div>}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              <div className="gp-footer">
+                <span className="gp-hint">点击图片选择</span>
+                <div className="gp-pagination">
+                  <button className="gp-page-btn" onClick={() => setGpPage(p => Math.max(0, p - 1))} disabled={gpPage === 0}>‹</button>
+                  <span className="gp-page-info">{gpPage + 1} / {gpTotalPages || 1}</span>
+                  <button className="gp-page-btn" onClick={() => setGpPage(p => Math.min(gpTotalPages - 1, p + 1))} disabled={gpPage >= gpTotalPages - 1}>›</button>
+                </div>
+                <div className="gp-footer-btns">
+                  <button className="gp-btn-cancel" onClick={() => setShowGalleryPicker(false)}>关闭</button>
+                </div>
+              </div>
+
+              {gpHoverPreview && gpHoverPreview.url && (
+                <div
+                  className="gp-hd-preview"
+                  style={{ left: gpHoverPreview.x, top: gpHoverPreview.y }}
+                  onMouseEnter={() => { if (gpHoverTimer.current) clearTimeout(gpHoverTimer.current); }}
+                  onMouseLeave={handleGpMouseLeave}
+                >
+                  <img src={gpHoverPreview.url} alt="" draggable={false} />
+                </div>
+              )}
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 }

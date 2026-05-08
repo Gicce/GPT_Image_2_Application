@@ -38,6 +38,7 @@ pub fn run() {
             commands::retry_task,
             commands::get_images,
             commands::delete_image,
+            commands::delete_task,
             commands::read_thumbnail,
             commands::read_image_data,
             commands::open_file,

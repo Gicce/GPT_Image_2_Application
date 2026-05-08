@@ -176,3 +176,19 @@
 .edit-resend-btn:hover {
   background: #4f46e5;
 }
+
+.delete-task-btn {
+  padding: 6px 14px;
+  border: 1px solid #fca5a5;
+  background: #fff;
+  color: #dc2626;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  font-family: inherit;
+  margin-left: 8px;
+}
+
+.delete-task-btn:hover {
+  background: #fef2f2;
+}

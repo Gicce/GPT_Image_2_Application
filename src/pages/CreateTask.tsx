@@ -3,6 +3,7 @@ import { useSettingsStore } from '../store/useSettingsStore';
 import { useTaskStore } from '../store/useTaskStore';
 import { api } from '../services/api';
 import { SIZES, QUALITIES, QUALITY_LABELS, FORMATS } from '../types';
+import SuccessDialog from '../components/SuccessDialog';
 import './CreateTask.css';
 
 export default function CreateTask() {
@@ -18,6 +19,8 @@ export default function CreateTask() {
   const [outputDir, setOutputDir] = useState(settings.default_output_dir);
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [showSuccess, setShowSuccess] = useState(false);
+  const [submittedCount, setSubmittedCount] = useState(0);
 
   useEffect(() => {
     setSize(settings.default_size);
@@ -61,10 +64,11 @@ export default function CreateTask() {
         source_images: [],
       });
       addTask(task);
+      setSubmittedCount(count);
       setPrompt('');
       setNegativePrompt('');
       setCount(4);
-      alert('提交成功，请在任务队列中查看任务进度。');
+      setShowSuccess(true);
     } catch (err: any) {
       setError(err?.toString() || '创建任务失败');
     } finally {
@@ -191,6 +195,14 @@ export default function CreateTask() {
           </p>
         </div>
       </div>
+
+      {showSuccess && (
+        <SuccessDialog
+          title="任务已提交"
+          message={`已成功创建 ${submittedCount} 张图片的生成任务，请前往「任务队列」查看实时进度。`}
+          onClose={() => setShowSuccess(false)}
+        />
+      )}
     </div>
   );
 }
