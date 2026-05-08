@@ -6,8 +6,10 @@ export default function VersionModal({ version, onClose }: { version: string; on
   const { status, checkUpdate, applyUpdate } = useUpdateStore();
 
   useEffect(() => {
-    // 每次打开弹窗都重新检查，确保状态最新
-    checkUpdate();
+    // 只在未初始化时才请求，避免每次打开都重新加载
+    if (!status.initialized) {
+      checkUpdate();
+    }
   }, []);
 
   const progress = status.contentLength > 0
@@ -50,7 +52,7 @@ export default function VersionModal({ version, onClose }: { version: string; on
             </div>
           )}
 
-          {!status.updateAvailable && !status.checking && !status.downloading && !status.installing && (
+          {status.initialized && !status.updateAvailable && !status.checking && !status.downloading && !status.installing && (
             <div className="version-up-to-date">当前已是最新版本</div>
           )}
 
@@ -90,7 +92,7 @@ export default function VersionModal({ version, onClose }: { version: string; on
 
         <div className="version-modal-footer">
           {!status.downloading && !status.installing && (
-            <button className="btn-check-update" onClick={checkUpdate} disabled={status.checking}>
+            <button className="btn-check-update" onClick={() => checkUpdate(true)} disabled={status.checking}>
               {status.checking ? '检查中...' : '检查更新'}
             </button>
           )}
