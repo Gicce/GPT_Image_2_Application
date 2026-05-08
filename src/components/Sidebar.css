@@ -97,11 +97,35 @@
   font-family: inherit;
   width: 100%;
   text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
 }
 
 .version-button:hover {
   color: rgba(255,255,255,0.65);
   background: rgba(255,255,255,0.05);
+}
+
+.version-button--update {
+  color: #f87171;
+}
+
+.version-button--update:hover {
+  color: #fca5a5;
+  background: rgba(248, 113, 113, 0.08);
+}
+
+.version-update-dot {
+  font-size: 10px;
+  color: #f87171;
+  animation: pulse-dot 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
 }
 
 .modal-overlay {

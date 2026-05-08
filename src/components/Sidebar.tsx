@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { getVersion } from '@tauri-apps/api/app';
 import type { PageType } from '../types';
 import VersionModal from './VersionModal';
+import { useUpdateStore } from '../store/useUpdateStore';
 import './Sidebar.css';
 
 interface SidebarProps {
@@ -23,10 +24,14 @@ const menuItems: { id: PageType; label: string; icon: string }[] = [
 export default function Sidebar({ currentPage, onNavigate }: SidebarProps) {
   const [appVersion, setAppVersion] = useState('');
   const [showVersionModal, setShowVersionModal] = useState(false);
+  const { status, checkUpdate } = useUpdateStore();
 
   useEffect(() => {
     getVersion().then(v => setAppVersion('v' + v));
+    checkUpdate();
   }, []);
+
+  const hasUpdate = status.updateAvailable;
 
   return (
     <aside className="sidebar">
@@ -48,8 +53,13 @@ export default function Sidebar({ currentPage, onNavigate }: SidebarProps) {
         ))}
       </nav>
       <div className="sidebar-footer">
-        <button className="version-button" onClick={() => setShowVersionModal(true)}>
+        <button
+          className={`version-button${hasUpdate ? ' version-button--update' : ''}`}
+          onClick={() => setShowVersionModal(true)}
+          title={hasUpdate ? `发现新版本 v${status.updateInfo?.version}，点击查看` : '点击查看版本信息'}
+        >
           {appVersion || '...'}
+          {hasUpdate && <span className="version-update-dot">★</span>}
         </button>
       </div>
       {showVersionModal && (

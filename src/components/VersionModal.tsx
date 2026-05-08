@@ -6,9 +6,8 @@ export default function VersionModal({ version, onClose }: { version: string; on
   const { status, checkUpdate, applyUpdate } = useUpdateStore();
 
   useEffect(() => {
-    if (status.recentReleases.length === 0 && !status.checking) {
-      checkUpdate();
-    }
+    // 每次打开弹窗都重新检查，确保状态最新
+    checkUpdate();
   }, []);
 
   const progress = status.contentLength > 0
@@ -19,12 +18,48 @@ export default function VersionModal({ version, onClose }: { version: string; on
     <div className="modal-overlay" onClick={onClose}>
       <div className="version-modal" onClick={e => e.stopPropagation()}>
         <div className="version-modal-header">
-          <h3>CyImagePro {version}</h3>
+          <h3>CyImagePro</h3>
           <button className="modal-close-btn" onClick={onClose}>&times;</button>
         </div>
 
         <div className="version-modal-body">
-          <h4>更新日志</h4>
+          {/* 当前版本 */}
+          <div className="version-current-row">
+            <span className="version-current-label">当前版本</span>
+            <span className="version-current-value">{version}</span>
+          </div>
+
+          {/* 更新状态区 */}
+          {status.downloading && (
+            <div className="update-progress">
+              <span>正在下载更新 v{status.updateInfo?.version}... {progress}%</span>
+              <div className="progress-bar">
+                <div className="progress-fill" style={{ width: `${progress}%` }} />
+              </div>
+            </div>
+          )}
+
+          {status.installing && (
+            <div className="update-installing">正在安装更新，应用将自动重启...</div>
+          )}
+
+          {status.updateAvailable && !status.downloading && !status.installing && (
+            <div className="update-available">
+              <span className="update-available-text">发现新版本 v{status.updateInfo?.version}</span>
+              <button className="btn-update-now" onClick={applyUpdate}>立即更新</button>
+            </div>
+          )}
+
+          {!status.updateAvailable && !status.checking && !status.downloading && !status.installing && (
+            <div className="version-up-to-date">当前已是最新版本</div>
+          )}
+
+          {status.error && (
+            <div className="update-error">{status.error}</div>
+          )}
+
+          {/* 更新日志 */}
+          <h4 className="changelog-section-title">更新日志</h4>
 
           {status.checking && status.recentReleases.length === 0 ? (
             <div className="changelog-loading">加载中...</div>
@@ -51,34 +86,10 @@ export default function VersionModal({ version, onClose }: { version: string; on
               ))}
             </div>
           )}
-
-          {status.error && (
-            <div className="update-error">{status.error}</div>
-          )}
-
-          {status.downloading && (
-            <div className="update-progress">
-              <span>正在下载更新 v{status.updateInfo?.version}... {progress}%</span>
-              <div className="progress-bar">
-                <div className="progress-fill" style={{ width: `${progress}%` }} />
-              </div>
-            </div>
-          )}
-
-          {status.installing && (
-            <div className="update-installing">正在安装更新，应用将自动重启...</div>
-          )}
-
-          {status.updateAvailable && !status.downloading && !status.installing && (
-            <div className="update-available">
-              <p>发现新版本 v{status.updateInfo?.version}，可立即更新</p>
-              <button className="btn-update-now" onClick={applyUpdate}>立即更新</button>
-            </div>
-          )}
         </div>
 
         <div className="version-modal-footer">
-          {!status.updateAvailable && !status.downloading && !status.installing && (
+          {!status.downloading && !status.installing && (
             <button className="btn-check-update" onClick={checkUpdate} disabled={status.checking}>
               {status.checking ? '检查中...' : '检查更新'}
             </button>

@@ -119,47 +119,86 @@
   font-size: 13px;
 }
 
-.update-available {
-  margin-top: 14px;
-}
-
-.update-available p {
-  font-size: 14px;
-  font-weight: 600;
-  color: #4f7cff;
-  margin-bottom: 8px;
-}
-
-.update-notes {
-  font-family: inherit;
-  font-size: 13px;
-  line-height: 1.6;
-  color: #ccc;
-  white-space: pre-wrap;
-  background: #181825;
+/* Current version row */
+.version-current-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   padding: 10px 14px;
+  background: #181825;
   border-radius: 8px;
-  margin-bottom: 12px;
-  max-height: 120px;
-  overflow-y: auto;
+  margin-bottom: 14px;
+}
+
+.version-current-label {
+  font-size: 13px;
+  color: #8e8ea0;
+}
+
+.version-current-value {
+  font-size: 13px;
+  font-weight: 600;
+  color: #ececec;
+  font-family: monospace;
+}
+
+.version-up-to-date {
+  padding: 8px 14px;
+  background: rgba(16, 163, 127, 0.1);
+  border: 1px solid rgba(16, 163, 127, 0.25);
+  border-radius: 8px;
+  color: #10a37f;
+  font-size: 13px;
+  text-align: center;
+  margin-bottom: 14px;
+}
+
+.changelog-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #8e8ea0;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin: 14px 0 10px;
+}
+
+.update-available {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  background: rgba(79, 124, 255, 0.1);
+  border: 1px solid rgba(79, 124, 255, 0.3);
+  border-radius: 8px;
+  margin-bottom: 14px;
+}
+
+.update-available-text {
+  font-size: 13px;
+  font-weight: 600;
+  color: #7fa8ff;
 }
 
 .btn-update-now {
-  width: 100%;
-  padding: 10px;
+  padding: 7px 18px;
   border-radius: 8px;
   border: none;
   background: #10a37f;
   color: #fff;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
   cursor: pointer;
   transition: background 0.15s;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .btn-update-now:hover {
   background: #0d8c6d;
 }
+
+
 
 /* Progress */
 .update-progress {
