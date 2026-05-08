@@ -7,6 +7,7 @@ use crate::storage;
 static HTTP_CLIENT: once_cell::sync::Lazy<reqwest::Client> = once_cell::sync::Lazy::new(|| {
     reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(120))
+        .use_native_tls()
         .build()
         .unwrap()
 });
@@ -189,6 +190,40 @@ pub fn delete_image(app: tauri::AppHandle, image_id: String) -> Result<(), Strin
     Ok(())
 }
 
+#[tauri::command]
+pub fn delete_task(app: tauri::AppHandle, task_id: String, delete_images: bool) -> Result<(), String> {
+    // Collect image IDs from sub-tasks before removing the task
+    let image_ids: Vec<String> = {
+        let tasks: Vec<Task> = storage::read_json(&storage::tasks_path(&app), Vec::new());
+        tasks.iter()
+            .find(|t| t.id == task_id)
+            .map(|t| t.sub_tasks.iter().filter_map(|s| s.image_id.clone()).collect())
+            .unwrap_or_default()
+    };
+
+    // Remove task
+    storage::with_tasks(&app, |tasks| {
+        tasks.retain(|t| t.id != task_id);
+    });
+
+    // Optionally delete associated images
+    if delete_images && !image_ids.is_empty() {
+        let images_path = storage::images_path(&app);
+        let mut images: Vec<ImageRecord> = storage::read_json(&images_path, Vec::new());
+        for id in &image_ids {
+            if let Some(img) = images.iter().find(|i| &i.id == id) {
+                if Path::new(&img.local_path).exists() {
+                    let _ = fs::remove_file(&img.local_path);
+                }
+            }
+        }
+        images.retain(|i| !image_ids.contains(&i.id));
+        storage::write_json(&images_path, &images);
+    }
+
+    Ok(())
+}
+
 // ========== File Operations ==========
 
 #[tauri::command]
@@ -317,7 +352,7 @@ pub fn save_chat_image(app: tauri::AppHandle, b64_data: String, conversation_id:
 // ========== Chat Image Generation via Rust (SSE streaming) ==========
 
 /// Extract base64 image data from a SSE event JSON value (recursive search)
-fn find_image_b64(value: &serde_json::Value) -> Option<String> {
+pub fn find_image_b64(value: &serde_json::Value) -> Option<String> {
     match value {
         serde_json::Value::Object(map) => {
             for (key, val) in map {

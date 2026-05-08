@@ -21,6 +21,7 @@ struct ApiRequestBody {
 #[derive(Debug, serde::Deserialize)]
 struct ApiResponseImage {
     b64_json: Option<String>,
+    #[allow(dead_code)]
     url: Option<String>,
 }
 
@@ -90,7 +91,8 @@ pub async fn process_next_task(app: &AppHandle) {
     }
 
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(120))
+        .timeout(std::time::Duration::from_secs(600))
+        .use_native_tls()
         .build()
         .unwrap();
 
@@ -262,11 +264,11 @@ async fn edit_single_image(
 ) -> Result<ImageRecord, String> {
 
     let mut form = reqwest::multipart::Form::new()
-        .text("model", "gpt-image-2".to_string())
+        .text("model", "gpt-image-2")
         .text("prompt", task.prompt.clone())
-        .text("n", "1".to_string())
+        .text("n", "1")
         .text("size", task.size.clone())
-        .text("response_format", "b64_json".to_string());
+        .text("response_format", "b64_json");
 
     for img_path in &task.source_images {
         let path = Path::new(img_path);
@@ -282,7 +284,7 @@ async fn edit_single_image(
             .file_name(file_name)
             .mime_str(mime)
             .unwrap();
-        form = form.part("image", part);
+        form = form.part("image[]", part);
     }
 
     let response = client
@@ -291,7 +293,7 @@ async fn edit_single_image(
         .multipart(form)
         .send()
         .await
-        .map_err(|e| format!("网络请求失败: {}", e))?;
+        .map_err(|e| format!("网络请求失败: {} (is_connect={}, is_timeout={})", e, e.is_connect(), e.is_timeout()))?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -313,14 +315,8 @@ async fn edit_single_image(
     let image_bytes = if let Some(b64) = image_data.b64_json {
         base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &b64)
             .map_err(|e| format!("Base64 解码失败: {}", e))?
-    } else if let Some(url) = image_data.url {
-        let resp = client.get(&url).send().await
-            .map_err(|e| format!("下载图片失败: {}", e))?;
-        resp.bytes().await
-            .map_err(|e| format!("读取图片数据失败: {}", e))?
-            .to_vec()
     } else {
-        return Err("响应中缺少图片数据（无 b64_json 也无 url）".to_string());
+        return Err("响应中缺少 b64_json 数据".to_string());
     };
 
     let now = chrono::Local::now();
