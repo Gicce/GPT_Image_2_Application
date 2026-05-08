@@ -147,7 +147,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
         if (!token) throw new Error('请先在设置页面配置对话 API Token');
 
         const conv = get().conversations.find(c => c.id === activeId)!;
-        const apiMessages: { role: string; content: string }[] = [];
+
+        type ContentPart = { type: 'input_text'; text: string } | { type: 'input_image'; image_url: string };
+        const apiMessages: { role: string; content: string | ContentPart[] }[] = [];
 
         let systemPrompt = settings.chat_system_prompt || '';
         if (options.deepThinking) {
@@ -157,7 +159,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
         if (systemPrompt) apiMessages.push({ role: 'system', content: systemPrompt });
 
         for (const m of conv.messages.filter(m => m.role === 'user' || m.role === 'assistant')) {
-          if (m.content) apiMessages.push({ role: m.role, content: m.content });
+          if (m.images && m.images.length > 0 && m.role === 'user') {
+            const parts: ContentPart[] = [];
+            if (m.content) parts.push({ type: 'input_text', text: m.content });
+            for (const imgUrl of m.images) {
+              parts.push({ type: 'input_image', image_url: imgUrl });
+            }
+            apiMessages.push({ role: m.role, content: parts });
+          } else if (m.content) {
+            apiMessages.push({ role: m.role, content: m.content });
+          }
         }
 
         const resp = await fetch(baseURL + '/chat/completions', {

@@ -4,6 +4,13 @@ use std::path::Path;
 use crate::models::{ChatConversation, CreateTaskParams, ImageRecord, Settings, SubTask, Task};
 use crate::storage;
 
+static HTTP_CLIENT: once_cell::sync::Lazy<reqwest::Client> = once_cell::sync::Lazy::new(|| {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .unwrap()
+});
+
 // ========== Settings ==========
 
 #[tauri::command]
@@ -383,9 +390,7 @@ pub async fn chat_generate_image(app: tauri::AppHandle, prompt: String, model: S
     let token = settings.token.clone();
     if token.is_empty() { return Err("请先在设置页面配置图片生成 API Token".to_string()); }
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(120))
-        .build().unwrap();
+    let client = &*HTTP_CLIENT;
 
     let body = serde_json::json!({
         "model": model,
@@ -430,9 +435,7 @@ pub async fn chat_edit_image(app: tauri::AppHandle, prompt: String, model: Strin
     let b64_encoded = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &file_bytes);
     let data_url = format!("data:{};base64,{}", mime, b64_encoded);
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(120))
-        .build().unwrap();
+    let client = &*HTTP_CLIENT;
 
     let body = serde_json::json!({
         "model": model,
@@ -461,4 +464,41 @@ pub async fn chat_edit_image(app: tauri::AppHandle, prompt: String, model: Strin
     }
 
     parse_sse_for_image(resp).await
+}
+
+// ========== Releases ==========
+
+#[derive(serde::Serialize)]
+pub struct ReleaseNote {
+    pub version: String,
+    pub date: String,
+    pub notes: String,
+}
+
+#[tauri::command]
+pub async fn fetch_releases() -> Result<Vec<ReleaseNote>, String> {
+    let resp = HTTP_CLIENT
+        .get("https://api.github.com/repos/Gicce/GPT_Image_2_Application/releases?per_page=3")
+        .header("Accept", "application/vnd.github+json")
+        .header("User-Agent", "CyImagePro")
+        .send()
+        .await
+        .map_err(|e| format!("请求失败: {}", e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("GitHub API 错误: {}", resp.status()));
+    }
+
+    let data: Vec<serde_json::Value> = resp.json().await
+        .map_err(|e| format!("解析失败: {}", e))?;
+
+    let releases = data.into_iter().take(3).map(|r| {
+        let tag = r["tag_name"].as_str().unwrap_or("").to_string();
+        let version = tag.trim_start_matches("app-v").trim_start_matches('v').to_string();
+        let date: String = r["published_at"].as_str().unwrap_or("").chars().take(10).collect();
+        let notes = r["body"].as_str().unwrap_or("").to_string();
+        ReleaseNote { version, date, notes }
+    }).collect();
+
+    Ok(releases)
 }

@@ -10,7 +10,7 @@ interface SidebarProps {
 }
 
 const menuItems: { id: PageType; label: string; icon: string }[] = [
-  { id: 'create', label: '创建任务', icon: '✦' },
+  { id: 'create', label: '文生图', icon: '✦' },
   { id: 'edit', label: '图生图', icon: '✎' },
   { id: 'chat', label: '智能对话', icon: '💬' },
   { id: 'queue', label: '任务队列', icon: '☰' },

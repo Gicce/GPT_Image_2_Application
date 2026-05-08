@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { getVersion } from '@tauri-apps/api/app';
+import { useUpdateStore } from '../store/useUpdateStore';
 import './About.css';
 
 const services = [
@@ -14,10 +15,19 @@ const services = [
 
 export default function About() {
   const [appVersion, setAppVersion] = useState('');
+  const { openChangelog, checkUpdate, status } = useUpdateStore();
 
   useEffect(() => {
     getVersion().then(v => setAppVersion(v));
   }, []);
+
+  const handleOpenChangelog = async () => {
+    // 如果还没拉过数据就先拉
+    if (status.recentReleases.length === 0) {
+      await checkUpdate();
+    }
+    openChangelog();
+  };
 
   return (
     <div className="about-page">
@@ -132,6 +142,9 @@ export default function About() {
       {/* 底部页脚 */}
       <div className="about-page-footer">
         <p>CyImagePro v{appVersion} · Powered by GPT Image 2</p>
+        <button className="about-changelog-btn" onClick={handleOpenChangelog}>
+          {status.checking ? '加载中...' : '查看更新日志'}
+        </button>
       </div>
     </div>
   );

@@ -282,10 +282,31 @@
   padding: 24px 0 8px;
   color: #bbb;
   font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
 }
 
 .about-page-footer p {
   margin: 0;
+}
+
+.about-changelog-btn {
+  padding: 6px 20px;
+  border-radius: 8px;
+  border: 1px solid #dde0e8;
+  background: #fff;
+  color: #4f7cff;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.about-changelog-btn:hover {
+  background: #f0f4ff;
+  border-color: #4f7cff;
 }
 
 /* Responsive */

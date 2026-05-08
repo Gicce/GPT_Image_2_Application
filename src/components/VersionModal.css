@@ -3,9 +3,12 @@
   border-radius: 14px;
   width: 420px;
   max-width: 90vw;
+  max-height: 80vh;
   border: 1px solid #3e3e3e;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .version-modal-header {
@@ -39,6 +42,8 @@
 
 .version-modal-body {
   padding: 20px;
+  overflow-y: auto;
+  flex: 1;
 }
 
 .version-modal-body h4 {
@@ -192,4 +197,74 @@
   color: #4f7cff;
   font-size: 13px;
   text-align: center;
+}
+
+/* Changelog list in modal */
+.changelog-loading,
+.changelog-empty-tip {
+  font-size: 13px;
+  color: #8e8ea0;
+  padding: 10px 0;
+}
+
+.changelog-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.cl-release {
+  border-left: 2px solid #3e3e4e;
+  padding-left: 12px;
+}
+
+.cl-release--latest {
+  border-left-color: #4f7cff;
+}
+
+.cl-release-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.cl-version {
+  font-size: 13px;
+  font-weight: 700;
+  color: #ececec;
+}
+
+.cl-badge {
+  font-size: 10px;
+  font-weight: 600;
+  background: #4f7cff;
+  color: #fff;
+  padding: 2px 7px;
+  border-radius: 10px;
+}
+
+.cl-date {
+  font-size: 11px;
+  color: #8e8ea0;
+  margin-left: auto;
+}
+
+.cl-notes {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.cl-line {
+  font-size: 13px;
+  color: #b0b0c0;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.cl-line-empty {
+  font-size: 13px;
+  color: #8e8ea0;
+  margin: 0;
 }

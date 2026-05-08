@@ -1,6 +1,12 @@
 import { create } from 'zustand';
-import { checkForUpdate, downloadAndInstallUpdate, restartApp } from '../services/updateService';
+import { checkForUpdate, downloadAndInstallUpdate, fetchRecentReleases } from '../services/updateService';
 import type { Update } from '@tauri-apps/plugin-updater';
+
+export interface ReleaseNote {
+  version: string;
+  date: string;
+  notes: string;
+}
 
 export interface UpdateStatus {
   checking: boolean;
@@ -11,12 +17,16 @@ export interface UpdateStatus {
   installing: boolean;
   error: string | null;
   updateInfo: Update | null;
+  showChangelog: boolean;
+  recentReleases: ReleaseNote[];
 }
 
 interface UpdateState {
   status: UpdateStatus;
   checkUpdate: () => Promise<void>;
   applyUpdate: () => Promise<void>;
+  openChangelog: () => void;
+  closeChangelog: () => void;
   reset: () => void;
 }
 
@@ -29,6 +39,8 @@ const initialStatus: UpdateStatus = {
   installing: false,
   error: null,
   updateInfo: null,
+  showChangelog: false,
+  recentReleases: [],
 };
 
 export const useUpdateStore = create<UpdateState>((set, get) => ({
@@ -36,23 +48,27 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
 
   checkUpdate: async () => {
     set({ status: { ...initialStatus, checking: true } });
-    try {
-      const update = await checkForUpdate();
-      if (update) {
-        set({ status: { ...initialStatus, updateAvailable: true, updateInfo: update } });
-      } else {
-        set({ status: { ...initialStatus } });
-      }
-    } catch (e: any) {
-      set({ status: { ...initialStatus, error: e?.toString() || '检查更新失败' } });
+
+    // 两个请求独立执行，互不影响
+    const [updateResult, releases] = await Promise.allSettled([
+      checkForUpdate(),
+      fetchRecentReleases(),
+    ]);
+
+    const update = updateResult.status === 'fulfilled' ? updateResult.value : null;
+    const releaseList = releases.status === 'fulfilled' ? releases.value : [];
+
+    if (update) {
+      set({ status: { ...initialStatus, updateAvailable: true, updateInfo: update, recentReleases: releaseList } });
+    } else {
+      set({ status: { ...initialStatus, recentReleases: releaseList } });
     }
   },
 
   applyUpdate: async () => {
     const { status } = get();
     if (!status.updateInfo) return;
-
-    set({ status: { ...status, downloading: true } });
+    set({ status: { ...status, downloading: true, showChangelog: false } });
     try {
       await downloadAndInstallUpdate(status.updateInfo, (downloaded, contentLength) => {
         set(s => ({ status: { ...s.status, downloaded, contentLength } }));
@@ -63,5 +79,7 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
     }
   },
 
-  reset: () => set({ status: { ...initialStatus } }),
+  openChangelog: () => set(s => ({ status: { ...s.status, showChangelog: true } })),
+  closeChangelog: () => set(s => ({ status: { ...s.status, showChangelog: false } })),
+  reset: () => set({ status: { ...get().status, updateAvailable: false, updateInfo: null, showChangelog: false } }),
 }));

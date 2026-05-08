@@ -50,6 +50,7 @@ pub fn run() {
             commands::save_image_as,
             commands::chat_generate_image,
             commands::chat_edit_image,
+            commands::fetch_releases,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

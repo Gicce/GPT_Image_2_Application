@@ -77,7 +77,7 @@ export interface ChatConversation {
   created_at: string;
 }
 
-export const SIZES = ['1024x1024', '1792x1024', '1024x1792', '3840x2160', '1920x1080'] as const;
+export const SIZES = ['1024x1024', '1792x1024', '1024x1792'] as const;
 export const QUALITIES = ['auto', 'high', 'medium', 'low'] as const;
 
 export const QUALITY_LABELS: Record<string, string> = {

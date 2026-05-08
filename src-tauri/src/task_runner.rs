@@ -89,6 +89,11 @@ pub async fn process_next_task(app: &AppHandle) {
         }
     }
 
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .unwrap();
+
     let mut success_count = 0usize;
     let mut failed_count = 0usize;
     let total = task.count;
@@ -118,9 +123,9 @@ pub async fn process_next_task(app: &AppHandle) {
         let _ = app.emit("task-updated", &task.id);
 
         let result = if task.task_type == "edit" {
-            edit_single_image(&token, &task, i).await
+            edit_single_image(&client, &token, &task, i).await
         } else {
-            generate_single_image(&token, &task, i).await
+            generate_single_image(&client, &token, &task, i).await
         };
 
         match result {
@@ -154,11 +159,6 @@ pub async fn process_next_task(app: &AppHandle) {
         }
 
         let _ = app.emit("task-updated", &task.id);
-
-        // Small delay between requests to avoid rate limiting
-        if i < total - 1 {
-            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-        }
     }
 
     // Finalize task status
@@ -177,11 +177,11 @@ pub async fn process_next_task(app: &AppHandle) {
 }
 
 async fn generate_single_image(
+    client: &reqwest::Client,
     token: &str,
     task: &Task,
     index: usize,
 ) -> Result<ImageRecord, String> {
-    let client = reqwest::Client::new();
 
     let body = serde_json::json!({
         "model": "gpt-image-2",
@@ -255,11 +255,11 @@ pub fn mime_for_path(path: &Path) -> &'static str {
 }
 
 async fn edit_single_image(
+    client: &reqwest::Client,
     token: &str,
     task: &Task,
     index: usize,
 ) -> Result<ImageRecord, String> {
-    let client = reqwest::Client::new();
 
     let mut form = reqwest::multipart::Form::new()
         .text("model", "gpt-image-2".to_string())
@@ -314,8 +314,7 @@ async fn edit_single_image(
         base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &b64)
             .map_err(|e| format!("Base64 解码失败: {}", e))?
     } else if let Some(url) = image_data.url {
-        let client2 = reqwest::Client::new();
-        let resp = client2.get(&url).send().await
+        let resp = client.get(&url).send().await
             .map_err(|e| format!("下载图片失败: {}", e))?;
         resp.bytes().await
             .map_err(|e| format!("读取图片数据失败: {}", e))?
