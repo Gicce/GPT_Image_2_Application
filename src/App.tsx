@@ -33,21 +33,21 @@ export default function App() {
     return () => clearTimeout(timer);
   }, []);
 
-  // 有服务器地址但未登录时，弹出登录框
-  useEffect(() => {
-    if (serverUrl && !isLoggedIn) {
-      setShowAuth(true);
-    } else {
-      setShowAuth(false);
-    }
-  }, [serverUrl, isLoggedIn]);
-
   // 登录后刷新用户信息
   useEffect(() => {
     if (isLoggedIn && serverUrl) {
       refreshUser();
     }
   }, [isLoggedIn]);
+
+  function handleNavigate(page: PageType) {
+    // 点「我的账户」时，若未登录则弹登录框
+    if (page === 'account' && !isLoggedIn) {
+      setShowAuth(true);
+      return;
+    }
+    setCurrentPage(page);
+  }
 
   const renderPage = () => {
     switch (currentPage) {
@@ -65,7 +65,7 @@ export default function App() {
 
   return (
     <div className="app">
-      <Sidebar currentPage={currentPage} onNavigate={setCurrentPage} />
+      <Sidebar currentPage={currentPage} onNavigate={handleNavigate} />
       <div className="main-wrapper">
         <MarqueeNotice />
         <main className={`main-content ${currentPage === 'chat' ? 'chat-mode' : ''}`}>
@@ -74,7 +74,10 @@ export default function App() {
         </main>
       </div>
       {showAuth && (
-        <Auth onSuccess={() => setShowAuth(false)} />
+        <Auth
+          onSuccess={() => { setShowAuth(false); setCurrentPage('account'); }}
+          onClose={() => setShowAuth(false)}
+        />
       )}
     </div>
   );

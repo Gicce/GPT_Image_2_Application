@@ -5,9 +5,10 @@ import './Auth.css';
 
 interface Props {
   onSuccess: () => void;
+  onClose?: () => void;
 }
 
-export default function Auth({ onSuccess }: Props) {
+export default function Auth({ onSuccess, onClose }: Props) {
   const [mode, setMode] = useState<'login' | 'register'>('login');
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
@@ -43,6 +44,9 @@ export default function Auth({ onSuccess }: Props) {
   return (
     <div className="auth-overlay">
       <div className="auth-card">
+        {onClose && (
+          <button className="auth-close" onClick={onClose} title="关闭">×</button>
+        )}
         <div className="auth-logo">CyImagePro</div>
         <div className="auth-tabs">
           <button

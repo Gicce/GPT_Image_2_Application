@@ -1,6 +1,9 @@
 import { create } from 'zustand';
 import type { ChatConversation, ChatMessage } from '../types';
 import { api } from '../services/api';
+import { serverApi } from '../services/serverApi';
+import { useAuthStore } from './useAuthStore';
+import { useSettingsStore } from './useSettingsStore';
 
 interface SendSettings {
   chat_token: string;
@@ -142,10 +145,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
         if (b64) {
           finishWithImage(activeId!, assistantMsg.id, '图片已生成', b64);
           // Report image usage
-          const { serverApi } = await import('../services/serverApi');
-          const { useAuthStore } = await import('./useAuthStore');
           const { isLoggedIn } = useAuthStore.getState();
-          const { settings: s2 } = (await import('./useSettingsStore')).useSettingsStore.getState();
+          const s2 = useSettingsStore.getState().settings;
           if (isLoggedIn && s2.server_url) {
             serverApi.reportImage('gpt-image-2', 1).then(res => {
               useAuthStore.getState().updateBalance(res.balance_usd);
@@ -204,10 +205,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
         // Report usage to backend (fire-and-forget)
         const usageData = data.usage;
         if (usageData) {
-          const { serverApi } = await import('../services/serverApi');
-          const { useAuthStore } = await import('./useAuthStore');
           const { isLoggedIn } = useAuthStore.getState();
-          const { settings: s2 } = (await import('./useSettingsStore')).useSettingsStore.getState();
+          const s2 = useSettingsStore.getState().settings;
           if (isLoggedIn && s2.server_url) {
             serverApi.reportChat(
               settings.chat_model,
