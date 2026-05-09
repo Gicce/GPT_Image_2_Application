@@ -28,7 +28,12 @@ export default function Auth({ onSuccess, onClose }: Props) {
     if (mode === 'register' && serverUrl) {
       setStockLoading(true);
       serverApi.getTrialStock()
-        .then(data => { setTrialStock(data); if (!data.available) setRegType('paid'); })
+        .then(data => {
+          const count = data.remaining ?? 0;
+          const available = data.available ?? count > 0;
+          setTrialStock({ count, available });
+          if (!available) setRegType('paid');
+        })
         .catch(() => setTrialStock(null))
         .finally(() => setStockLoading(false));
     }

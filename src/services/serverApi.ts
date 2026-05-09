@@ -149,7 +149,7 @@ export const serverApi = {
   getModels: () => request<ServerModel[]>('/api/models'),
 
   getTrialStock: () =>
-    request<{ count: number; available: boolean }>('/api/tokens/trial-stock'),
+    request<{ remaining: number; available: boolean }>('/api/tokens/trial-stock'),
 
   getPrompts: () => request<ServerPrompt[]>('/api/prompts'),
 };
