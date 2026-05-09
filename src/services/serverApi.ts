@@ -1,12 +1,15 @@
 import { useSettingsStore } from '../store/useSettingsStore';
 
+// 客户端统一使用的用户结构
 export interface UserInfo {
   id: string;
   username: string;
   email: string;
   account_type: 'trial' | 'paid';
-  balance_usd: number;
-  api_token: string;
+  balance_usd: number;        // 图片余额（主余额）
+  chat_balance_usd: number;   // 对话余额
+  api_token: string | null;   // 图片 API token
+  chat_api_token: string | null;
   trial_expires_at: string | null;
   trial_expired: boolean;
 }
@@ -100,20 +103,46 @@ async function request<T>(
   return res.json();
 }
 
+// 把后端返回的 user 原始结构标准化为客户端 UserInfo
+// 兼容两种字段命名：balance_usd / image_balance_usd
+function normalizeUser(raw: any): UserInfo {
+  return {
+    id: raw.id,
+    username: raw.username,
+    email: raw.email,
+    account_type: raw.account_type,
+    balance_usd: raw.image_balance_usd ?? raw.balance_usd ?? 0,
+    chat_balance_usd: raw.chat_balance_usd ?? 0,
+    api_token: raw.image_api_token ?? raw.api_token ?? null,
+    chat_api_token: raw.chat_api_token ?? null,
+    trial_expires_at: raw.trial_expires_at ?? null,
+    trial_expired: raw.trial_expired ?? false,
+  };
+}
+
+function normalizeAuthResponse(raw: any): AuthResponse {
+  return {
+    access_token: raw.access_token,
+    token_type: raw.token_type,
+    user: normalizeUser(raw.user),
+  };
+}
+
 export const serverApi = {
   register: (username: string, email: string, password: string, account_type: 'trial' | 'paid' = 'trial') =>
-    request<AuthResponse>('/api/auth/register', {
+    request<any>('/api/auth/register', {
       method: 'POST',
       body: JSON.stringify({ username, email, password, account_type }),
-    }),
+    }).then(normalizeAuthResponse),
 
   login: (username: string, password: string) =>
-    request<AuthResponse>('/api/auth/login', {
+    request<any>('/api/auth/login', {
       method: 'POST',
       body: JSON.stringify({ username, password }),
-    }),
+    }).then(normalizeAuthResponse),
 
-  getMe: () => request<UserInfo>('/api/users/me', {}, true),
+  getMe: () =>
+    request<any>('/api/users/me', {}, true).then(normalizeUser),
 
   getUsage: () =>
     request<any[]>('/api/users/me/usage', {}, true),
