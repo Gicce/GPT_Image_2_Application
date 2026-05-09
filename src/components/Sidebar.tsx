@@ -53,7 +53,7 @@ export default function Sidebar({ currentPage, onNavigate }: SidebarProps) {
             <span className="sidebar-icon">{item.icon}</span>
             <span className="sidebar-label">{item.label}</span>
             {item.id === 'account' && isLoggedIn && user && (
-              <span className="sidebar-balance">${user.balance_usd.toFixed(2)}</span>
+              <span className="sidebar-balance">${(user.balance_usd ?? 0).toFixed(2)}</span>
             )}
           </button>
         ))}

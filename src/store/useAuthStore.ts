@@ -2,6 +2,22 @@ import { create } from 'zustand';
 import type { UserInfo } from '../services/serverApi';
 import { serverApi } from '../services/serverApi';
 
+// Re-normalize user loaded from localStorage (may be old format)
+function normalizeStored(raw: any): UserInfo {
+  return {
+    id: raw.id,
+    username: raw.username,
+    email: raw.email,
+    account_type: raw.account_type,
+    balance_usd: raw.image_balance_usd ?? raw.balance_usd ?? 0,
+    chat_balance_usd: raw.chat_balance_usd ?? 0,
+    api_token: raw.image_api_token ?? raw.api_token ?? null,
+    chat_api_token: raw.chat_api_token ?? null,
+    trial_expires_at: raw.trial_expires_at ?? null,
+    trial_expired: raw.trial_expired ?? false,
+  };
+}
+
 interface AuthState {
   jwt: string | null;
   user: UserInfo | null;
@@ -25,7 +41,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       const jwt = localStorage.getItem('cy_jwt');
       const raw = localStorage.getItem('cy_user');
       if (jwt && raw) {
-        set({ jwt, user: JSON.parse(raw), isLoggedIn: true });
+        const user = normalizeStored(JSON.parse(raw));
+        set({ jwt, user, isLoggedIn: true });
       }
     } catch {}
   },

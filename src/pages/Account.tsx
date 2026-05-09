@@ -101,7 +101,7 @@ export default function Account() {
           </div>
           <div className="account-info-item">
             <span className="info-label">余额</span>
-            <span className="info-value balance">${user?.balance_usd?.toFixed(4)}</span>
+            <span className="info-value balance">${(user?.balance_usd ?? 0).toFixed(4)}</span>
           </div>
           {user?.account_type === 'trial' && user.trial_expires_at && (
             <div className="account-info-item">
@@ -126,8 +126,8 @@ export default function Account() {
               onClick={() => setSelectedPkg(pkg.package_usd)}
             >
               <div className="pkg-name">{pkg.name}</div>
-              <div className="pkg-price">¥{pkg.price_cny.toFixed(2)}</div>
-              <div className="pkg-rate">汇率 {pkg.exchange_rate.toFixed(4)}</div>
+              <div className="pkg-price">¥{(pkg.price_cny ?? 0).toFixed(2)}</div>
+              <div className="pkg-rate">汇率 {(pkg.exchange_rate ?? 0).toFixed(4)}</div>
             </div>
           ))}
         </div>
@@ -152,7 +152,7 @@ export default function Account() {
         {/* 支付二维码 */}
         {order && (
           <div className="qr-box">
-            <p className="qr-amount">¥{order.amount_cny.toFixed(2)} · {order.pay_type === 'alipay' ? '支付宝' : '微信支付'}</p>
+            <p className="qr-amount">¥{(order.amount_cny ?? 0).toFixed(2)} · {order.pay_type === 'alipay' ? '支付宝' : '微信支付'}</p>
             <p className="qr-hint">请用手机扫码完成支付</p>
             <a className="qr-link" href={order.pay_info} target="_blank" rel="noreferrer">
               点击打开支付页面
