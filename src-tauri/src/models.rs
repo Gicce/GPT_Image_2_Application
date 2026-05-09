@@ -15,6 +15,8 @@ pub struct Settings {
     pub chat_base_url: String,
     #[serde(default)]
     pub chat_system_prompt: String,
+    #[serde(default)]
+    pub server_url: String,
 }
 
 impl Default for Settings {
@@ -29,6 +31,7 @@ impl Default for Settings {
             chat_model: "gpt-4o".to_string(),
             chat_base_url: "https://www.packyapi.com/v1".to_string(),
             chat_system_prompt: String::new(),
+            server_url: String::new(),
         }
     }
 }

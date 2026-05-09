@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import Sidebar from './components/Sidebar';
 import UpdateNotification from './components/UpdateNotification';
+import MarqueeNotice from './components/MarqueeNotice';
+import Auth from './pages/Auth';
 import CreateTask from './pages/CreateTask';
 import ImageEdit from './pages/ImageEdit';
 import Chat from './pages/Chat';
@@ -9,21 +11,43 @@ import Gallery from './pages/Gallery';
 import History from './pages/History';
 import Settings from './pages/Settings';
 import About from './pages/About';
+import Account from './pages/Account';
 import { useSettingsStore } from './store/useSettingsStore';
 import { useUpdateStore } from './store/useUpdateStore';
+import { useAuthStore } from './store/useAuthStore';
 import type { PageType } from './types';
 import './App.css';
 
 export default function App() {
   const [currentPage, setCurrentPage] = useState<PageType>('create');
+  const [showAuth, setShowAuth] = useState(false);
   const loadSettings = useSettingsStore(s => s.loadSettings);
   const checkUpdate = useUpdateStore(s => s.checkUpdate);
+  const { loadFromStorage, isLoggedIn, refreshUser } = useAuthStore();
+  const serverUrl = useSettingsStore(s => s.settings.server_url);
 
   useEffect(() => {
     loadSettings();
+    loadFromStorage();
     const timer = setTimeout(() => { checkUpdate(); }, 3000);
     return () => clearTimeout(timer);
   }, []);
+
+  // 有服务器地址但未登录时，弹出登录框
+  useEffect(() => {
+    if (serverUrl && !isLoggedIn) {
+      setShowAuth(true);
+    } else {
+      setShowAuth(false);
+    }
+  }, [serverUrl, isLoggedIn]);
+
+  // 登录后刷新用户信息
+  useEffect(() => {
+    if (isLoggedIn && serverUrl) {
+      refreshUser();
+    }
+  }, [isLoggedIn]);
 
   const renderPage = () => {
     switch (currentPage) {
@@ -35,16 +59,23 @@ export default function App() {
       case 'history': return <History />;
       case 'settings': return <Settings />;
       case 'about': return <About />;
+      case 'account': return <Account />;
     }
   };
 
   return (
     <div className="app">
       <Sidebar currentPage={currentPage} onNavigate={setCurrentPage} />
-      <main className={`main-content ${currentPage === 'chat' ? 'chat-mode' : ''}`}>
-        <UpdateNotification />
-        {renderPage()}
-      </main>
+      <div className="main-wrapper">
+        <MarqueeNotice />
+        <main className={`main-content ${currentPage === 'chat' ? 'chat-mode' : ''}`}>
+          <UpdateNotification />
+          {renderPage()}
+        </main>
+      </div>
+      {showAuth && (
+        <Auth onSuccess={() => setShowAuth(false)} />
+      )}
     </div>
   );
 }

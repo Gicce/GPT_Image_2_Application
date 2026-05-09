@@ -141,6 +141,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
         if (b64) {
           finishWithImage(activeId!, assistantMsg.id, '图片已生成', b64);
+          // Report image usage
+          const { serverApi } = await import('../services/serverApi');
+          const { useAuthStore } = await import('./useAuthStore');
+          const { isLoggedIn } = useAuthStore.getState();
+          const { settings: s2 } = (await import('./useSettingsStore')).useSettingsStore.getState();
+          if (isLoggedIn && s2.server_url) {
+            serverApi.reportImage('gpt-image-2', 1).then(res => {
+              useAuthStore.getState().updateBalance(res.balance_usd);
+            }).catch(() => {});
+          }
         } else {
           finishWithText(activeId!, assistantMsg.id, '图片生成失败：API 未返回图片数据');
         }
@@ -190,6 +200,25 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
         const data = await resp.json();
         let reply = data.choices?.[0]?.message?.content || '(空回复)';
+
+        // Report usage to backend (fire-and-forget)
+        const usageData = data.usage;
+        if (usageData) {
+          const { serverApi } = await import('../services/serverApi');
+          const { useAuthStore } = await import('./useAuthStore');
+          const { isLoggedIn } = useAuthStore.getState();
+          const { settings: s2 } = (await import('./useSettingsStore')).useSettingsStore.getState();
+          if (isLoggedIn && s2.server_url) {
+            serverApi.reportChat(
+              settings.chat_model,
+              usageData.prompt_tokens || usageData.input_tokens || 0,
+              usageData.completion_tokens || usageData.output_tokens || 0,
+              usageData.prompt_tokens_details?.cached_tokens || 0,
+            ).then(res => {
+              useAuthStore.getState().updateBalance(res.balance_usd);
+            }).catch(() => {});
+          }
+        }
 
         // Extract reasoning from <thinking> tags
         let reasoning = '';

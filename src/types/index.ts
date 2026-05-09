@@ -8,6 +8,7 @@ export interface Settings {
   chat_model: string;
   chat_base_url: string;
   chat_system_prompt: string;
+  server_url: string;
 }
 
 export interface SubTask {
@@ -56,7 +57,7 @@ export interface CreateTaskParams {
   source_images: string[];
 }
 
-export type PageType = 'create' | 'edit' | 'chat' | 'queue' | 'gallery' | 'history' | 'settings' | 'about';
+export type PageType = 'create' | 'edit' | 'chat' | 'queue' | 'gallery' | 'history' | 'settings' | 'about' | 'account';
 
 // Chat types
 export interface ChatMessage {

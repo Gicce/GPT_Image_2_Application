@@ -20,6 +20,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     chat_model: 'gpt-4o',
     chat_base_url: 'https://www.packyapi.com/v1',
     chat_system_prompt: '',
+    server_url: '',
   },
   loading: false,
 

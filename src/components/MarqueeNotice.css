@@ -1,0 +1,33 @@
+.marquee-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #fffbeb;
+  border-bottom: 1px solid #fde68a;
+  padding: 6px 16px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.marquee-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.marquee-track {
+  flex: 1;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.marquee-text {
+  display: inline-block;
+  font-size: 13px;
+  color: #92400e;
+  animation: marquee-scroll 20s linear infinite;
+}
+
+@keyframes marquee-scroll {
+  0%   { transform: translateX(100%); }
+  100% { transform: translateX(-100%); }
+}

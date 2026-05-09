@@ -3,6 +3,7 @@ import { getVersion } from '@tauri-apps/api/app';
 import type { PageType } from '../types';
 import VersionModal from './VersionModal';
 import { useUpdateStore } from '../store/useUpdateStore';
+import { useAuthStore } from '../store/useAuthStore';
 import './Sidebar.css';
 
 interface SidebarProps {
@@ -17,6 +18,7 @@ const menuItems: { id: PageType; label: string; icon: string }[] = [
   { id: 'queue', label: '任务队列', icon: '☰' },
   { id: 'gallery', label: '图片库', icon: '▦' },
   { id: 'history', label: '历史记录', icon: '🕐' },
+  { id: 'account', label: '我的账户', icon: '👤' },
   { id: 'settings', label: '设置', icon: '⚙' },
   { id: 'about', label: '关于我们', icon: '◉' },
 ];
@@ -25,6 +27,7 @@ export default function Sidebar({ currentPage, onNavigate }: SidebarProps) {
   const [appVersion, setAppVersion] = useState('');
   const [showVersionModal, setShowVersionModal] = useState(false);
   const { status, checkUpdate } = useUpdateStore();
+  const { user, isLoggedIn } = useAuthStore();
 
   useEffect(() => {
     getVersion().then(v => setAppVersion('v' + v));
@@ -49,6 +52,9 @@ export default function Sidebar({ currentPage, onNavigate }: SidebarProps) {
           >
             <span className="sidebar-icon">{item.icon}</span>
             <span className="sidebar-label">{item.label}</span>
+            {item.id === 'account' && isLoggedIn && user && (
+              <span className="sidebar-balance">${user.balance_usd.toFixed(2)}</span>
+            )}
           </button>
         ))}
       </nav>

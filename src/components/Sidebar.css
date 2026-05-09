@@ -78,6 +78,14 @@
 
 .sidebar-label {
   font-weight: 400;
+  flex: 1;
+}
+
+.sidebar-balance {
+  font-size: 11px;
+  color: #6ee7b7;
+  font-weight: 600;
+  margin-left: auto;
 }
 
 .sidebar-footer {

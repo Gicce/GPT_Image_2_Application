@@ -134,6 +134,21 @@ export default function Settings() {
             placeholder="You are a helpful assistant."
           />
         </div>
+
+        <h3 className="settings-section-title">服务器设置</h3>
+
+        <div className="form-group">
+          <label>服务器地址</label>
+          <input
+            type="text"
+            value={settings.server_url}
+            onChange={e => saveSettings({ server_url: e.target.value })}
+            placeholder="http://150.158.124.224"
+          />
+          <p className="form-hint">
+            填写后端服务地址，用于账户登录、充值和用量计费。留空则不启用在线功能。
+          </p>
+        </div>
       </div>
     </div>
   );
