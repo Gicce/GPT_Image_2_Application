@@ -7,7 +7,7 @@ interface AuthState {
   user: UserInfo | null;
   isLoggedIn: boolean;
   login: (username: string, password: string) => Promise<void>;
-  register: (username: string, email: string, password: string) => Promise<void>;
+  register: (username: string, email: string, password: string, account_type?: 'trial' | 'paid') => Promise<void>;
   logout: () => void;
   refreshUser: () => Promise<void>;
   updateBalance: (balance_usd: number) => void;
@@ -37,8 +37,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     set({ jwt: res.access_token, user: res.user, isLoggedIn: true });
   },
 
-  register: async (username, email, password) => {
-    const res = await serverApi.register(username, email, password);
+  register: async (username, email, password, account_type = 'trial') => {
+    const res = await serverApi.register(username, email, password, account_type);
     localStorage.setItem('cy_jwt', res.access_token);
     localStorage.setItem('cy_user', JSON.stringify(res.user));
     set({ jwt: res.access_token, user: res.user, isLoggedIn: true });

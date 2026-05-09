@@ -101,10 +101,10 @@ async function request<T>(
 }
 
 export const serverApi = {
-  register: (username: string, email: string, password: string) =>
+  register: (username: string, email: string, password: string, account_type: 'trial' | 'paid' = 'trial') =>
     request<AuthResponse>('/api/auth/register', {
       method: 'POST',
-      body: JSON.stringify({ username, email, password }),
+      body: JSON.stringify({ username, email, password, account_type }),
     }),
 
   login: (username: string, password: string) =>
@@ -147,6 +147,9 @@ export const serverApi = {
   getNotice: () => request<{ content: string; is_active: boolean }>('/api/notice'),
 
   getModels: () => request<ServerModel[]>('/api/models'),
+
+  getTrialStock: () =>
+    request<{ count: number; available: boolean }>('/api/tokens/trial-stock'),
 
   getPrompts: () => request<ServerPrompt[]>('/api/prompts'),
 };

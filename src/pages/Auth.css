@@ -149,3 +149,62 @@
   text-align: center;
   margin-top: 16px;
 }
+
+/* 注册类型选择 */
+.reg-type-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.reg-type-btn {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 2px solid #e5e7eb;
+  border-radius: 10px;
+  background: #fff;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.15s;
+  width: 100%;
+}
+
+.reg-type-btn:hover:not(.disabled) {
+  border-color: #a5b4fc;
+}
+
+.reg-type-btn.active {
+  border-color: #6366f1;
+  background: #eef2ff;
+}
+
+.reg-type-btn.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  background: #f9fafb;
+}
+
+.reg-type-icon {
+  font-size: 20px;
+  flex-shrink: 0;
+}
+
+.reg-type-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.reg-type-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1a1a1a;
+}
+
+.reg-type-desc {
+  font-size: 12px;
+  color: #6b7280;
+}
