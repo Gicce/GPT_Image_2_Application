@@ -1,3 +1,125 @@
+/* ===== Theme Variables ===== */
+
+[data-theme="light"] {
+  --bg-body: #f5f5f5;
+  --bg-page: #fafafa;
+  --bg-card: #ffffff;
+  --bg-card-alt: #f8f9fa;
+  --bg-input: #ffffff;
+  --bg-hover: #f3f4f6;
+  --bg-subtle: #f9fafb;
+  --bg-inset: #f3f4f6;
+  --bg-sidebar: #1a1a2e;
+  --bg-chat: #f5f5f5;
+  --bg-chat-sidebar: #f0f0f0;
+  --bg-chat-input: #ffffff;
+  --bg-chat-hover: #e8e8e8;
+  --bg-dialog: #ffffff;
+  --text-primary: #1a1a1a;
+  --text-secondary: #333;
+  --text-tertiary: #555;
+  --text-muted: #888;
+  --text-faint: #9ca3af;
+  --text-placeholder: #aaa;
+  --text-heading: #1a1a2e;
+  --text-chat: #1a1a1a;
+  --text-chat-muted: #666;
+  --text-sidebar: rgba(255,255,255,0.6);
+  --text-sidebar-title: #ffffff;
+  --text-sidebar-subtitle: rgba(255,255,255,0.4);
+  --text-sidebar-active: #a5b4fc;
+  --text-dialog-title: #1a1a1a;
+  --text-dialog-desc: #444;
+  --border-default: #e5e7eb;
+  --border-light: #f3f4f6;
+  --border-input: #ddd;
+  --border-subtle: #d1d5db;
+  --border-chat: #e0e0e0;
+  --border-sidebar: rgba(255,255,255,0.06);
+  --bg-sidebar-item-hover: rgba(255,255,255,0.07);
+  --text-sidebar-hover: rgba(255,255,255,0.9);
+  --bg-sidebar-item-active: rgba(99,102,241,0.18);
+  --accent-primary: #6366f1;
+  --accent-primary-hover: #4f46e5;
+  --accent-primary-light: #eef2ff;
+  --accent-primary-text: #4f46e5;
+  --accent-success: #059669;
+  --accent-danger: #dc2626;
+  --scrollbar-thumb: #d1d5db;
+  --scrollbar-thumb-hover: #9ca3af;
+  --badge-warn-bg: #fef3c7;
+  --badge-warn-text: #92400e;
+  --badge-info-bg: #dbeafe;
+  --badge-info-text: #1e40af;
+  --badge-success-bg: #d1fae5;
+  --badge-success-text: #065f46;
+  --badge-danger-bg: #fee2e2;
+  --badge-danger-text: #991b1b;
+  --badge-muted-bg: #f3f4f6;
+  --badge-muted-text: #6b7280;
+}
+
+[data-theme="dark"] {
+  --bg-body: #1a1a1a;
+  --bg-page: #212121;
+  --bg-card: #2a2a2a;
+  --bg-card-alt: #2f2f2f;
+  --bg-input: #2f2f2f;
+  --bg-hover: #484848;
+  --bg-subtle: #2f2f2f;
+  --bg-inset: #1e1e1e;
+  --bg-sidebar: #171717;
+  --bg-chat: #212121;
+  --bg-chat-sidebar: #171717;
+  --bg-chat-input: #2f2f2f;
+  --bg-chat-hover: #3a3a3a;
+  --bg-dialog: #2a2a2a;
+  --text-primary: #ececec;
+  --text-secondary: #d1d5db;
+  --text-tertiary: #b4b4b4;
+  --text-muted: #9ca3af;
+  --text-faint: #9ca3af;
+  --text-placeholder: #666;
+  --text-heading: #f0f0f0;
+  --text-chat: #ececec;
+  --text-chat-muted: #9ca3af;
+  --text-sidebar: rgba(255,255,255,0.6);
+  --text-sidebar-title: #ffffff;
+  --text-sidebar-subtitle: rgba(255,255,255,0.4);
+  --text-sidebar-hover: rgba(255,255,255,0.9);
+  --text-sidebar-active: #a5b4fc;
+  --bg-sidebar-item-hover: rgba(255,255,255,0.12);
+  --bg-sidebar-item-active: rgba(99,102,241,0.25);
+  --text-dialog-title: #ececec;
+  --text-dialog-desc: #b4b4b4;
+  --border-default: #4a4a4a;
+  --border-light: #2e2e2e;
+  --border-input: #4a4a4a;
+  --border-subtle: #555;
+  --border-chat: #2e2e2e;
+  --border-sidebar: rgba(255,255,255,0.06);
+  --accent-primary: #6366f1;
+  --accent-primary-hover: #4f46e5;
+  --accent-primary-light: rgba(99,102,241,0.25);
+  --accent-primary-text: #a5b4fc;
+  --accent-success: #10b981;
+  --accent-danger: #ef4444;
+  --scrollbar-thumb: #4a4a4a;
+  --scrollbar-thumb-hover: #555;
+  --badge-warn-bg: rgba(251,191,36,0.15);
+  --badge-warn-text: #fbbf24;
+  --badge-info-bg: rgba(96,165,250,0.15);
+  --badge-info-text: #93c5fd;
+  --badge-success-bg: rgba(16,185,129,0.15);
+  --badge-success-text: #6ee7b7;
+  --badge-danger-bg: rgba(239,68,68,0.15);
+  --badge-danger-text: #fca5a5;
+  --badge-muted-bg: rgba(255,255,255,0.08);
+  --badge-muted-text: #9ca3af;
+}
+
+/* ===== Base Styles ===== */
+
 * {
   margin: 0;
   padding: 0;
@@ -11,8 +133,8 @@ html, body {
 
 body {
   font-family: 'Segoe UI Variable', 'Segoe UI', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
-  background: #f5f5f5;
-  color: #333;
+  background: var(--bg-body);
+  color: var(--text-secondary);
   -webkit-font-smoothing: antialiased;
 }
 
@@ -36,11 +158,11 @@ body {
 .main-content {
   flex: 1;
   overflow-y: auto;
-  background: #fafafa;
+  background: var(--bg-page);
 }
 
 .main-content.chat-mode {
-  background: #212121;
+  background: var(--bg-chat);
   overflow: hidden;
 }
 
@@ -62,19 +184,19 @@ body {
 .page-header h2 {
   font-size: 22px;
   font-weight: 600;
-  color: #1a1a1a;
+  color: var(--text-primary);
   margin-bottom: 4px;
 }
 
 .page-header p {
   font-size: 13px;
-  color: #888;
+  color: var(--text-muted);
 }
 
 .empty-state {
   text-align: center;
   padding: 80px 20px;
-  color: #9ca3af;
+  color: var(--text-faint);
 }
 
 .empty-state p {
@@ -84,7 +206,7 @@ body {
 .empty-hint {
   font-size: 13px !important;
   margin-top: 8px;
-  color: #bbb !important;
+  color: var(--text-placeholder) !important;
 }
 
 /* Scrollbar */
@@ -97,10 +219,10 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #d1d5db;
+  background: var(--scrollbar-thumb);
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #9ca3af;
+  background: var(--scrollbar-thumb-hover);
 }

@@ -11,6 +11,16 @@ export default function History() {
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [imageUrls, setImageUrls] = useState<Record<string, string>>({});
   const [sourceUrls, setSourceUrls] = useState<Record<string, string>>({});
+  const [expandedPrompts, setExpandedPrompts] = useState<Set<string>>(new Set());
+
+  const togglePrompt = (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    setExpandedPrompts(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
 
   useEffect(() => {
     loadTasks();
@@ -85,7 +95,11 @@ export default function History() {
                 className={`history-item ${selectedTaskId === task.id ? 'active' : ''}`}
                 onClick={() => setSelectedTaskId(task.id)}
               >
-                <p className="history-prompt">{task.prompt}</p>
+                <p
+                  className={`history-prompt ${expandedPrompts.has(task.id) ? 'expanded' : ''}`}
+                  title={task.prompt}
+                  onClick={(e) => togglePrompt(e, task.id)}
+                >{task.prompt}</p>
                 <div className="history-meta">
                   {task.task_type === 'edit' && <span className="type-badge edit-badge">图生图</span>}
                   <span>{task.size}</span>
@@ -104,9 +118,9 @@ export default function History() {
             <h3>任务详情</h3>
             <div className="detail-params">
               <div className="detail-row"><span>类型</span><span>{selectedTask.task_type === 'edit' ? '图生图' : '文生图'}</span></div>
-              <div className="detail-row"><span>提示词</span><span>{selectedTask.prompt}</span></div>
+              <div className="detail-row"><span>提示词</span><span className="detail-prompt">{selectedTask.prompt}</span></div>
               {selectedTask.negative_prompt && (
-                <div className="detail-row"><span>负面提示词</span><span>{selectedTask.negative_prompt}</span></div>
+                <div className="detail-row"><span>负面提示词</span><span className="detail-prompt">{selectedTask.negative_prompt}</span></div>
               )}
               <div className="detail-row"><span>尺寸</span><span>{selectedTask.size}</span></div>
               <div className="detail-row"><span>质量</span><span>{selectedTask.quality}</span></div>

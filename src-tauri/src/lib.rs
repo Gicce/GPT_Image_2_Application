@@ -57,6 +57,7 @@ pub fn run() {
             commands::open_folder,
             commands::select_directory,
             commands::select_image_file,
+            commands::select_text_file,
             commands::get_conversations,
             commands::save_conversations,
             commands::save_chat_image,

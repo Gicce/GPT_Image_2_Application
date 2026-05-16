@@ -1,0 +1,86 @@
+.token-field {
+  background: var(--bg-card-alt);
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+
+.token-field-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.token-field-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.token-text {
+  font-family: 'Courier New', monospace;
+  font-size: 13px;
+  color: var(--text-primary);
+  line-height: 1.6;
+  padding: 8px 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  /* 密文单行，明文自动换行 */
+  word-break: break-all;
+  white-space: pre-wrap;
+}
+
+.token-text.masked {
+  letter-spacing: 2px;
+  color: var(--text-faint);
+  user-select: none;
+}
+
+.token-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.token-btn {
+  padding: 3px 12px;
+  font-size: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-card);
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.token-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--text-faint);
+}
+
+.token-btn.copy {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+}
+
+.token-btn.copy:hover {
+  background: var(--accent-primary-light);
+}
+
+.token-btn.copy.copied {
+  background: var(--badge-success-bg);
+  border-color: var(--accent-success);
+  color: var(--accent-success);
+}
+
+.token-field-empty {
+  font-size: 13px;
+  color: var(--text-faint);
+  font-style: italic;
+  padding: 4px 0;
+}

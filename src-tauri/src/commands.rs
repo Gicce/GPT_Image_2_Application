@@ -272,6 +272,53 @@ pub async fn select_image_file(app: tauri::AppHandle) -> Option<String> {
     file.map(|p| p.to_string())
 }
 
+// ========== Text File Selection ==========
+
+#[derive(serde::Serialize)]
+pub struct TextFileResult {
+    pub name: String,
+    pub content: String,
+    pub size: usize,
+}
+
+#[tauri::command]
+pub async fn select_text_file(app: tauri::AppHandle) -> Option<TextFileResult> {
+    use tauri_plugin_dialog::DialogExt;
+    let file = app.dialog()
+        .file()
+        .add_filter("Text Files", &[
+            "txt", "md", "json", "csv", "xml", "yaml", "yml", "toml", "ini", "cfg", "conf", "log",
+            "py", "js", "ts", "tsx", "jsx", "html", "css", "scss", "less",
+            "java", "c", "cpp", "h", "hpp", "cs", "go", "rs", "rb", "php", "sh", "bat", "ps1",
+            "sql", "graphql", "vue", "svelte",
+        ])
+        .set_title("选择文件")
+        .blocking_pick_file();
+    match file {
+        Some(path) => {
+            let path_str = path.to_string();
+            let p = Path::new(&path_str);
+            let name = p.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("file")
+                .to_string();
+            match fs::read_to_string(p) {
+                Ok(content) => {
+                    let size = content.len();
+                    // Limit to 2MB
+                    if size > 2 * 1024 * 1024 {
+                        None
+                    } else {
+                        Some(TextFileResult { name, content, size })
+                    }
+                }
+                Err(_) => None,
+            }
+        }
+        None => None,
+    }
+}
+
 // ========== Save Image As ==========
 
 #[tauri::command]

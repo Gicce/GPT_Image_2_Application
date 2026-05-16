@@ -2,13 +2,103 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { useChatStore } from '../store/useChatStore';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { useImageStore } from '../store/useImageStore';
+import { useAuthStore, setGroupTypeMap } from '../store/useAuthStore';
 import { api } from '../services/api';
+import { serverApi, type ServerModel } from '../services/serverApi';
 import type { ChatMessage } from '../types';
 import { marked } from 'marked';
+import hljs from 'highlight.js';
+import { Command } from '@tauri-apps/plugin-shell';
+import { invoke } from '@tauri-apps/api/core';
+import DeleteConvDialog from '../components/DeleteConvDialog';
+import 'highlight.js/styles/atom-one-dark.css';
 import './Chat.css';
 import './ImageEdit.css';
 
 marked.setOptions({ breaks: true });
+
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+// 自定义 code renderer：接入 highlight.js + 注入复制按钮 + 提示词框
+const renderer = new marked.Renderer();
+const originalCode = renderer.code.bind(renderer);
+renderer.code = function(code: any) {
+  const raw = typeof code === 'string' ? code : (code.text ?? '');
+  const lang = typeof code === 'object' ? (code.lang || '') : '';
+
+  const isPromptBlock = lang === 'prompt' || lang === '提示词' || lang === 'template';
+  const encoded = btoa(unescape(encodeURIComponent(raw)));
+
+  if (isPromptBlock) {
+    return `<div class="prompt-block"><div class="prompt-header"><span class="prompt-label">📝 提示词</span><button class="prompt-copy-btn" data-code="${encoded}" type="button">复制提示词</button></div><pre class="prompt-body"><code>${escapeHtml(raw)}</code></pre></div>`;
+  }
+
+  let highlighted = '';
+  try {
+    highlighted = lang && hljs.getLanguage(lang)
+      ? hljs.highlight(raw, { language: lang, ignoreIllegals: true }).value
+      : hljs.highlightAuto(raw).value;
+  } catch {
+    return originalCode(code);
+  }
+  return `<pre class="code-block"><div class="code-header"><span class="code-lang">${lang || 'text'}</span><button class="code-copy-btn" data-code="${encoded}" type="button">复制</button></div><code class="hljs language-${lang || 'plaintext'}">${highlighted}</code></pre>`;
+};
+
+// Callout blockquote renderer
+renderer.blockquote = function({ tokens, text }: any) {
+  const rawText = (text || '').trim();
+  const body = this.parser.parse(tokens);
+
+  const calloutPatterns: Array<{ regex: RegExp; className: string; icon: string }> = [
+    { regex: /^\[!WARNING\]/i,   className: 'callout-warning',  icon: '⚠️' },
+    { regex: /^\[!CAUTION\]/i,   className: 'callout-danger',   icon: '🔴' },
+    { regex: /^\[!IMPORTANT\]/i, className: 'callout-important',icon: '❗' },
+    { regex: /^\[!NOTE\]/i,      className: 'callout-note',     icon: 'ℹ️' },
+    { regex: /^\[!TIP\]/i,       className: 'callout-tip',      icon: '💡' },
+    { regex: /^[⚠️⚡🔴❗]/,      className: 'callout-warning',  icon: '' },
+    { regex: /^[💡✨]/,          className: 'callout-tip',       icon: '' },
+    { regex: /^[ℹ️📝]/,         className: 'callout-note',     icon: '' },
+  ];
+
+  for (const { regex, className, icon } of calloutPatterns) {
+    if (regex.test(rawText)) {
+      let cleanBody = body.replace(/<p>\[!\w+\]\s*/i, '<p>');
+      const iconHtml = icon ? `<span class="callout-icon">${icon}</span>` : '';
+      return `<div class="callout ${className}">${iconHtml}<div class="callout-content">${cleanBody}</div></div>`;
+    }
+  }
+
+  return `<blockquote>${body}</blockquote>`;
+};
+
+marked.use({ renderer });
+
+async function copyCodeBlock(encoded: string): Promise<boolean> {
+  try {
+    const text = decodeURIComponent(escape(atob(encoded)));
+    return await copyTextToClipboard(text);
+  } catch {
+    return false;
+  }
+}
+
+async function copyTextToClipboard(text: string): Promise<boolean> {
+  try {
+    const cmd = Command.create('clip', [], { encoding: 'raw' });
+    const child = await cmd.spawn();
+    await child.write(new TextEncoder().encode(text));
+    await child.kill();
+    return true;
+  } catch {
+    try { await navigator.clipboard.writeText(text); return true; } catch { return false; }
+  }
+}
 
 export default function Chat() {
   const {
@@ -16,13 +106,17 @@ export default function Chat() {
     loadConversations, newConversation, switchConversation,
     deleteConversation, renameConversation, sendMessage, stopGeneration,
   } = useChatStore();
-  const { settings } = useSettingsStore();
+  const { settings, saveSettings } = useSettingsStore();
+  const { user, isLoggedIn } = useAuthStore();
+  const [chatModels, setChatModels] = useState<ServerModel[]>([]);
   const { images, loadImages } = useImageStore();
   const [input, setInput] = useState('');
   const [deepThinking, setDeepThinking] = useState(false);
   const [imageGenMode, setImageGenMode] = useState(false);
   const [pendingImages, setPendingImages] = useState<{ dataUrl: string; name: string }[]>([]);
   const [editImage, setEditImage] = useState<{ dataUrl: string; filePath: string } | null>(null);
+  const [pendingFiles, setPendingFiles] = useState<{ name: string; content: string; size: number }[]>([]);
+  const [deletingConv, setDeletingConv] = useState<{ id: string; title: string } | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [showGalleryPicker, setShowGalleryPicker] = useState(false);
   const [galleryAsEditSource, setGalleryAsEditSource] = useState(false);
@@ -36,6 +130,8 @@ export default function Chat() {
   const [previewImg, setPreviewImg] = useState<string | null>(null);
   const [copySuccess, setCopySuccess] = useState(false);
   const chatAreaRef = useRef<HTMLDivElement>(null);
+  const isNearBottomRef = useRef(true);
+  const [showScrollBtn, setShowScrollBtn] = useState(false);
 
   const copyImageToClipboard = useCallback(async (imgSrc: string) => {
     try {
@@ -96,11 +192,64 @@ export default function Chat() {
 
   useEffect(() => { loadConversations(); }, []);
 
+  // 拉取可用对话模型列表 + 默认值自愈 + group→type 映射缓存
+  useEffect(() => {
+    if (!isLoggedIn) return;
+    serverApi.getModels()
+      .then(list => {
+        // 缓存 group→model_type 映射，让 syncTokensToSettings 能正确分配
+        const map: Record<string, 'image' | 'chat'> = {};
+        for (const m of list) {
+          if (m.group) map[m.group] = m.model_type;
+        }
+        setGroupTypeMap(map);
+
+        const chatList = list.filter(m => m.model_type === 'chat');
+        setChatModels(chatList);
+        if (chatList.length > 0 && !chatList.find(m => m.name === settings.chat_model)) {
+          const isTrial = user?.account_type === 'trial';
+          const first = isTrial ? (chatList.find(m => m.trial_allowed) ?? chatList[0]) : chatList[0];
+          if (first) saveSettings({ chat_model: first.name });
+        }
+      })
+      .catch((err: any) => {
+        if (err?.status === 401) {
+          useAuthStore.getState().logout();
+          useAuthStore.getState().showAuthPrompt();
+        }
+      });
+  }, [user?.account_type, isLoggedIn]);
+
   const activeConv = conversations.find(c => c.id === activeId);
 
+  // Scroll listener to track whether user is near bottom
   useEffect(() => {
-    if (chatAreaRef.current) chatAreaRef.current.scrollTop = chatAreaRef.current.scrollHeight;
+    const el = chatAreaRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      const near = el.scrollHeight - el.scrollTop - el.clientHeight < 100;
+      isNearBottomRef.current = near;
+      setShowScrollBtn(!near);
+    };
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => el.removeEventListener('scroll', onScroll);
+  }, []);
+
+  // Auto-scroll only when near bottom
+  useEffect(() => {
+    if (chatAreaRef.current && isNearBottomRef.current) {
+      chatAreaRef.current.scrollTop = chatAreaRef.current.scrollHeight;
+    }
   }, [activeConv?.messages]);
+
+  // Force scroll to bottom on conversation switch
+  useEffect(() => {
+    if (chatAreaRef.current) {
+      isNearBottomRef.current = true;
+      chatAreaRef.current.scrollTop = chatAreaRef.current.scrollHeight;
+      setShowScrollBtn(false);
+    }
+  }, [activeId]);
 
   // Load gallery thumbs when picker opens
   useEffect(() => {
@@ -155,7 +304,7 @@ export default function Chat() {
 
   const handleSend = useCallback(async () => {
     const text = input.trim();
-    if (!text && !pendingImages.length && !editImage) return;
+    if (!text && !pendingImages.length && !editImage && !pendingFiles.length) return;
     if (isSending) return;
 
     const isImageMode = imageGenMode || !!editImage;
@@ -168,19 +317,28 @@ export default function Chat() {
       return;
     }
 
+    let finalText = text;
+    if (pendingFiles.length > 0) {
+      const fileParts = pendingFiles.map(f =>
+        `--- 文件: ${f.name} ---\n${f.content}\n--- 结束 ---`
+      );
+      finalText = fileParts.join('\n\n') + (text ? '\n\n' + text : '');
+    }
+
     setInput('');
     setPendingImages([]);
+    setPendingFiles([]);
     setEditImage(null);
     if (inputRef.current) inputRef.current.style.height = 'auto';
 
-    await sendMessage(text || '(图片)', {
+    await sendMessage(finalText || '(附件)', {
       chat_token: settings.chat_token,
       token: settings.token,
       chat_model: settings.chat_model,
       chat_base_url: settings.chat_base_url,
       chat_system_prompt: settings.chat_system_prompt,
     }, { imageGenMode, editImage, deepThinking, pendingImages });
-  }, [input, isSending, settings, sendMessage, pendingImages, editImage, imageGenMode, deepThinking]);
+  }, [input, isSending, settings, sendMessage, pendingImages, pendingFiles, editImage, imageGenMode, deepThinking]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
@@ -203,6 +361,38 @@ export default function Chat() {
     if (!path) return;
     const dataUrl = await api.readImageData(path);
     setEditImage({ dataUrl, filePath: path });
+  };
+
+  const handlePaste = useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.type.startsWith('image/')) {
+        e.preventDefault();
+        const file = item.getAsFile();
+        if (!file) continue;
+        const reader = new FileReader();
+        reader.onload = () => {
+          const dataUrl = reader.result as string;
+          if (dataUrl) {
+            setPendingImages(prev => [...prev, { dataUrl, name: `粘贴图片_${Date.now()}.png` }]);
+          }
+        };
+        reader.readAsDataURL(file);
+      }
+    }
+  }, []);
+
+  const handleAddFile = async () => {
+    try {
+      const result = await invoke<{ name: string; content: string; size: number } | null>('select_text_file');
+      if (result) {
+        setPendingFiles(prev => [...prev, result]);
+      }
+    } catch (e) {
+      console.error('选择文件失败', e);
+    }
   };
 
   const handleGpMouseEnter = (e: React.MouseEvent<HTMLDivElement>, imgId: string, localPath: string) => {
@@ -238,6 +428,28 @@ export default function Chat() {
     setShowGalleryPicker(false);
   };
 
+  // 已登录但没有任何 chat 组 token：显示占位
+  // 简单判定：settings.chat_token 由 syncTokensToSettings 自动写入"非 image 组"的第一个 token
+  // 如果它为空，说明用户没有任何对话组的 token
+  const chatBlocked = isLoggedIn && !settings.chat_token;
+  if (chatBlocked) {
+    return (
+      <div className="chat-blocked-wrap">
+        <div className="chat-blocked">
+          <div className="chat-blocked-icon">💬</div>
+          <h3>对话功能未开通</h3>
+          <p>当前账户尚未购买对话分组的 Token。<br/>请前往「我的账户」充值，或申请试用。</p>
+          <div className="chat-blocked-actions">
+            <button
+              className="chat-blocked-btn primary"
+              onClick={() => useAuthStore.getState().setRequestedPage('account')}
+            >前往我的账户</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="chat-page">
       <div className={`chat-sidebar ${sidebarCollapsed ? 'collapsed' : ''}`}>
@@ -257,7 +469,7 @@ export default function Chat() {
                 }}>
                   {c.title || '新对话'}
                 </span>
-                <button className="chat-conv-del" onClick={(e) => { e.stopPropagation(); deleteConversation(c.id); }} title="删除">×</button>
+                <button className="chat-conv-del" onClick={(e) => { e.stopPropagation(); setDeletingConv({ id: c.id, title: c.title || '新对话' }); }} title="删除">×</button>
               </div>
             ))
           )}
@@ -293,7 +505,35 @@ export default function Chat() {
           </div>
         </div>
 
-        {error && <div className="chat-error">{error}</div>}
+        {showScrollBtn && (
+          <button
+            className="scroll-to-bottom"
+            onClick={() => {
+              if (chatAreaRef.current) {
+                chatAreaRef.current.scrollTop = chatAreaRef.current.scrollHeight;
+                isNearBottomRef.current = true;
+                setShowScrollBtn(false);
+              }
+            }}
+          >
+            <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+              <path d="M12 5v14M5 12l7 7 7-7"/>
+            </svg>
+          </button>
+        )}
+
+        {error && (
+          <div className="chat-error">
+            <div className="chat-error-text">{error}</div>
+            <button
+              className="chat-error-copy"
+              onClick={() => copyTextToClipboard(error)}
+              title="复制错误信息以便反馈"
+            >
+              复制
+            </button>
+          </div>
+        )}
 
         <div className="chat-input-area">
           <div className="chat-input-wrapper">
@@ -316,6 +556,19 @@ export default function Chat() {
                       <button className="remove-img" onClick={() => setPendingImages(prev => prev.filter((_, j) => j !== i))}>×</button>
                     </div>
                   ))}
+                  <span className="paste-hint">支持 Ctrl+V 粘贴图片</span>
+                </div>
+              )}
+              {pendingFiles.length > 0 && (
+                <div className="pending-files">
+                  {pendingFiles.map((f, i) => (
+                    <div key={i} className="pending-file-chip">
+                      <span className="pending-file-icon">📄</span>
+                      <span className="pending-file-name">{f.name}</span>
+                      <span className="pending-file-size">{f.size < 1024 ? f.size + 'B' : (f.size / 1024).toFixed(1) + 'KB'}</span>
+                      <button className="pending-file-remove" onClick={() => setPendingFiles(prev => prev.filter((_, j) => j !== i))}>×</button>
+                    </div>
+                  ))}
                 </div>
               )}
               <textarea
@@ -323,6 +576,7 @@ export default function Chat() {
                 value={input}
                 onChange={e => { setInput(e.target.value); autoResize(e.target); }}
                 onKeyDown={handleKeyDown}
+                onPaste={handlePaste}
                 placeholder={isSending ? '等待回复中...' : getPlaceholder()}
                 disabled={isSending}
                 rows={1}
@@ -338,6 +592,9 @@ export default function Chat() {
                   <button className="chat-input-btn" onClick={handlePickEditImage} title="图生图 / 编辑图片">
                     <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M15 3h4a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="10 14 15 3"/><polyline points="17 3 15 3 17 5"/></svg>
                   </button>
+                  <button className="chat-input-btn" onClick={handleAddFile} title="附加文件">
+                    <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
+                  </button>
                 </div>
                 <div className="chat-input-right">
                   <div className={`chat-toggle thinking-toggle ${deepThinking ? 'active' : ''}`} onClick={() => setDeepThinking(v => !v)} title="深度思考">
@@ -348,13 +605,21 @@ export default function Chat() {
                     <span>文生图</span>
                     <div className="toggle-track"><div className="toggle-thumb" /></div>
                   </div>
-                  <button className={`chat-btn-send ${(!input.trim() && !pendingImages.length && !editImage) || isSending ? 'disabled' : ''}`} onClick={handleSend} disabled={(!input.trim() && !pendingImages.length && !editImage) || isSending} title="发送">
+                  <button className={`chat-btn-send ${(!input.trim() && !pendingImages.length && !editImage && !pendingFiles.length) || isSending ? 'disabled' : ''}`} onClick={handleSend} disabled={(!input.trim() && !pendingImages.length && !editImage && !pendingFiles.length) || isSending} title="发送">
                     <svg width="16" height="16" fill="currentColor" viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
                   </button>
                 </div>
               </div>
             </div>
-            <div className="chat-disclaimer">AI 可能产生错误信息，请核实重要内容</div>
+            <div className="chat-disclaimer-row">
+              <ModelPicker
+                models={chatModels}
+                value={settings.chat_model}
+                isTrial={user?.account_type === 'trial'}
+                onChange={(name) => saveSettings({ chat_model: name })}
+              />
+              <span className="chat-disclaimer">AI 可能产生错误信息，请核实重要内容</span>
+            </div>
           </div>
         </div>
       </div>
@@ -462,6 +727,14 @@ export default function Chat() {
           </div>
         );
       })()}
+
+      {deletingConv && (
+        <DeleteConvDialog
+          convTitle={deletingConv.title}
+          onConfirm={() => { deleteConversation(deletingConv.id); setDeletingConv(null); }}
+          onCancel={() => setDeletingConv(null)}
+        />
+      )}
     </div>
   );
 }
@@ -489,19 +762,50 @@ function MessageItem({ message, isStreaming, onImageClick }: { message: ChatMess
     if (!isUser && message.content) {
       const html = marked.parse(message.content) as string;
       contentRef.current.innerHTML = html;
-      contentRef.current.querySelectorAll('pre code').forEach((el) => {
-        Object.assign((el as HTMLElement).style, { background: '#1e1e1e', padding: '14px 16px', borderRadius: '8px', display: 'block', overflowX: 'auto', fontSize: '13px', lineHeight: '1.5', fontFamily: '"Cascadia Code","Fira Code",Consolas,monospace' });
-      });
-      contentRef.current.querySelectorAll('pre').forEach((el) => {
-        Object.assign((el as HTMLElement).style, { background: '#1e1e1e', borderRadius: '8px', padding: '0', margin: '10px 0', overflow: 'hidden', position: 'relative' });
-      });
+      // 内联 code 样式 + 包裹复制按钮
       contentRef.current.querySelectorAll('code:not(pre code)').forEach((el) => {
-        Object.assign((el as HTMLElement).style, { background: '#2a2a3a', padding: '2px 6px', borderRadius: '4px', fontSize: '13px' });
+        (el as HTMLElement).classList.add('inline-code');
+        const wrap = document.createElement('span');
+        wrap.className = 'inline-code-wrap';
+        const btn = document.createElement('button');
+        btn.className = 'inline-copy-btn';
+        btn.type = 'button';
+        btn.textContent = '复制';
+        const codeText = (el as HTMLElement).textContent || '';
+        btn.dataset.code = btoa(unescape(encodeURIComponent(codeText)));
+        (el as HTMLElement).parentNode!.insertBefore(wrap, el);
+        wrap.appendChild(el);
+        wrap.appendChild(btn);
       });
     }
   }, [message.content, message.images, isUser, onImageClick]);
 
+  // 事件委托：复制代码块（放到顶层 div，支持流式更新过程中动态出现的按钮）
+  useEffect(() => {
+    const container = contentRef.current;
+    if (!container || isUser) return;
+    const handler = async (e: Event) => {
+      const target = e.target as HTMLElement;
+      const btn = (target.closest('.code-copy-btn') || target.closest('.inline-copy-btn') || target.closest('.prompt-copy-btn')) as HTMLButtonElement | null;
+      if (!btn) return;
+      const encoded = btn.dataset.code || '';
+      const ok = await copyCodeBlock(encoded);
+      if (ok) {
+        const original = btn.textContent;
+        btn.textContent = '已复制';
+        btn.classList.add('copied');
+        setTimeout(() => {
+          btn.textContent = original;
+          btn.classList.remove('copied');
+        }, 1500);
+      }
+    };
+    container.addEventListener('click', handler);
+    return () => container.removeEventListener('click', handler);
+  }, [isUser]);
+
   const generatedImgUrl = message.generated_image ? `data:image/png;base64,${message.generated_image}` : null;
+  const isImageStage = !isUser && isStreaming && message.is_image && !generatedImgUrl;
 
   return (
     <div className={`chat-msg ${message.role} ${isStreaming ? 'streaming' : ''}`}>
@@ -528,10 +832,89 @@ function MessageItem({ message, isStreaming, onImageClick }: { message: ChatMess
             </div>
           </div>
         )}
-        <div className="chat-msg-content" ref={contentRef}>
-          {isUser ? message.content : (message.content || (isStreaming ? <span className="chat-thinking">思考中<span className="dots">...</span></span> : null))}
-        </div>
+        {isImageStage ? (
+          <div className="chat-image-stage">
+            <div className="image-stage-loader" />
+            <div className="image-stage-text">{message.content}</div>
+          </div>
+        ) : (
+          <div className="chat-msg-content" ref={contentRef}>
+            {isUser ? message.content : (message.content || (isStreaming ? <span className="chat-thinking">思考中<span className="dots">...</span></span> : null))}
+          </div>
+        )}
+        {/* Token 计量徽标 */}
+        {isUser && message.input_tokens !== undefined && (
+          <div className="msg-token-badge">{message.input_tokens} tokens</div>
+        )}
+        {!isUser && !isStreaming && message.output_tokens !== undefined && !message.is_image && (
+          <div className="msg-token-badge">{message.output_tokens} tokens</div>
+        )}
       </div>
+    </div>
+  );
+}
+
+function ModelPicker({ models, value, isTrial, onChange }: { models: ServerModel[]; value: string; isTrial: boolean; onChange: (name: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onClick = (e: MouseEvent) => {
+      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onClick);
+    return () => document.removeEventListener('mousedown', onClick);
+  }, [open]);
+
+  const current = models.find(m => m.name === value);
+  const display = current?.display_name || current?.name || value || '选择模型';
+
+  return (
+    <div className="model-picker" ref={wrapRef}>
+      <button
+        type="button"
+        className={`model-picker-btn ${open ? 'open' : ''}`}
+        onClick={() => setOpen(v => !v)}
+      >
+        <span className="model-picker-name">{display}</span>
+        <svg width="10" height="10" viewBox="0 0 12 12" fill="currentColor">
+          <path d="M2 4l4 4 4-4" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
+        </svg>
+      </button>
+      {open && (
+        <div className="model-picker-panel">
+          {models.length === 0 ? (
+            <div className="model-option empty">暂无可用模型</div>
+          ) : (
+            models.map(m => {
+              const disabled = isTrial && !m.trial_allowed;
+              const selected = m.name === value;
+              return (
+                <div
+                  key={m.name}
+                  className={`model-option ${selected ? 'selected' : ''} ${disabled ? 'disabled' : ''}`}
+                  title={disabled ? '付费套餐可用' : undefined}
+                  onClick={() => {
+                    if (disabled) return;
+                    onChange(m.name);
+                    setOpen(false);
+                  }}
+                >
+                  <span className="model-option-name">{m.display_name || m.name}</span>
+                  {m.group && <span className="model-option-group">{m.group}</span>}
+                  {disabled && <span className="model-option-tag">🔒 付费</span>}
+                  {selected && !disabled && (
+                    <svg className="model-option-check" width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                      <path d="M13.5 4.5L6 12 2.5 8.5" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
+                    </svg>
+                  )}
+                </div>
+              );
+            })
+          )}
+        </div>
+      )}
     </div>
   );
 }

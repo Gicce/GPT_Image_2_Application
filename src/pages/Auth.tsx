@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useAuthStore } from '../store/useAuthStore';
-import { useSettingsStore } from '../store/useSettingsStore';
 import { serverApi } from '../services/serverApi';
+import { explainError } from '../utils/errors';
 import './Auth.css';
 
 interface Props {
@@ -11,7 +11,7 @@ interface Props {
 
 export default function Auth({ onSuccess, onClose }: Props) {
   const [mode, setMode] = useState<'login' | 'register'>('login');
-  const [regType, setRegType] = useState<'trial' | 'paid'>('trial');
+  const [regType, setRegType] = useState<'trial' | 'normal'>('trial');
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -21,27 +21,25 @@ export default function Auth({ onSuccess, onClose }: Props) {
   const [stockLoading, setStockLoading] = useState(false);
 
   const { login, register } = useAuthStore();
-  const serverUrl = useSettingsStore(s => s.settings.server_url);
 
   // 切到注册 tab 时拉取试用库存
   useEffect(() => {
-    if (mode === 'register' && serverUrl) {
+    if (mode === 'register') {
       setStockLoading(true);
       serverApi.getTrialStock()
         .then(data => {
           const count = data.remaining ?? 0;
           const available = data.available ?? count > 0;
           setTrialStock({ count, available });
-          if (!available) setRegType('paid');
+          if (!available) setRegType('normal');
         })
         .catch(() => setTrialStock(null))
         .finally(() => setStockLoading(false));
     }
-  }, [mode, serverUrl]);
+  }, [mode]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!serverUrl) { setError('请先在「设置」页填写服务器地址'); return; }
     setError('');
     setLoading(true);
     try {
@@ -52,7 +50,7 @@ export default function Auth({ onSuccess, onClose }: Props) {
       }
       onSuccess();
     } catch (e: any) {
-      setError(e.message || '操作失败，请重试');
+      setError(explainError(e));
     } finally {
       setLoading(false);
     }
@@ -104,8 +102,8 @@ export default function Auth({ onSuccess, onClose }: Props) {
             {/* 普通账号 */}
             <button
               type="button"
-              className={`reg-type-btn ${regType === 'paid' ? 'active' : ''}`}
-              onClick={() => setRegType('paid')}
+              className={`reg-type-btn ${regType === 'normal' ? 'active' : ''}`}
+              onClick={() => setRegType('normal')}
             >
               <span className="reg-type-icon">✅</span>
               <span className="reg-type-info">
@@ -144,9 +142,6 @@ export default function Auth({ onSuccess, onClose }: Props) {
           </button>
         </form>
 
-        {!serverUrl && (
-          <p className="auth-hint">提示：请先在「设置」页配置服务器地址</p>
-        )}
       </div>
     </div>
   );

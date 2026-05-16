@@ -15,7 +15,7 @@
 }
 
 .sd-dialog {
-  background: #ffffff;
+  background: var(--bg-dialog);
   border-radius: 8px;
   width: 360px;
   max-width: 92vw;
@@ -45,7 +45,7 @@
   width: 40px;
   height: 40px;
   border-radius: 50%;
-  background: #DFF6DD;
+  background: var(--badge-success-bg);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -58,14 +58,14 @@
 .sd-title {
   font-size: 16px;
   font-weight: 600;
-  color: #1a1a1a;
+  color: var(--text-dialog-title);
   margin: 0 0 8px;
   line-height: 1.3;
 }
 
 .sd-message {
   font-size: 13px;
-  color: #444;
+  color: var(--text-dialog-desc);
   margin: 0;
   line-height: 1.6;
 }
@@ -87,12 +87,12 @@
 }
 
 .sd-btn-ok {
-  background: #0067C0;
-  border: 1px solid #0067C0;
+  background: var(--accent-primary);
+  border: 1px solid var(--accent-primary);
   color: #fff;
 }
 
 .sd-btn-ok:hover {
-  background: #005BA4;
-  border-color: #005BA4;
+  background: var(--accent-primary-hover);
+  border-color: var(--accent-primary-hover);
 }

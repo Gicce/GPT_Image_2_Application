@@ -12,7 +12,7 @@
 .task-summary-card {
   width: 300px;
   min-width: 300px;
-  background: #f8f9fa;
+  background: var(--bg-card-alt);
   border-radius: 12px;
   padding: 20px;
   position: sticky;
@@ -22,7 +22,7 @@
 .task-summary-card h3 {
   margin: 0 0 16px;
   font-size: 15px;
-  color: #333;
+  color: var(--text-secondary);
 }
 
 .summary-item {
@@ -34,12 +34,12 @@
 }
 
 .summary-label {
-  color: #888;
+  color: var(--text-muted);
   flex-shrink: 0;
 }
 
 .summary-value {
-  color: #333;
+  color: var(--text-secondary);
   text-align: right;
   max-width: 180px;
   overflow: hidden;
@@ -55,21 +55,21 @@
 }
 
 .summary-item.highlight .summary-value {
-  color: #6366f1;
+  color: var(--accent-primary);
   font-weight: 600;
   font-size: 20px;
 }
 
 .summary-divider {
   height: 1px;
-  background: #e0e0e0;
+  background: var(--border-chat);
   margin: 12px 0;
 }
 
 .start-btn {
   width: 100%;
   padding: 13px;
-  background: #6366f1;
+  background: var(--accent-primary);
   color: white;
   border: none;
   border-radius: 8px;
@@ -82,25 +82,25 @@
 }
 
 .start-btn:hover:not(:disabled) {
-  background: #4f46e5;
+  background: var(--accent-primary-hover);
 }
 
 .start-btn:disabled {
-  background: #a5b4fc;
+  background: var(--accent-primary-text);
   cursor: not-allowed;
 }
 
 .summary-note {
   font-size: 11px;
-  color: #aaa;
+  color: var(--text-placeholder);
   margin: 10px 0 0;
   line-height: 1.5;
 }
 
 .error-banner {
-  background: #fef2f2;
-  border: 1px solid #fecaca;
-  color: #dc2626;
+  background: var(--badge-danger-bg);
+  border: 1px solid var(--accent-danger);
+  color: var(--accent-danger);
   padding: 10px 14px;
   border-radius: 8px;
   margin-bottom: 16px;
@@ -108,14 +108,15 @@
 }
 
 .required {
-  color: #ef4444;
+  color: var(--accent-danger);
 }
 
 .browse-btn {
   padding: 10px 16px;
-  border: 1px solid #ddd;
+  border: 1px solid var(--border-input);
   border-radius: 8px;
-  background: #f5f5f5;
+  background: var(--bg-body);
+  color: var(--text-primary);
   cursor: pointer;
   font-size: 14px;
   white-space: nowrap;
@@ -123,7 +124,8 @@
 }
 
 .browse-btn:hover {
-  background: #eee;
+  background: var(--bg-hover);
+  color: var(--text-secondary);
 }
 
 .dir-input {
@@ -144,7 +146,7 @@
   display: block;
   font-size: 13px;
   font-weight: 500;
-  color: #555;
+  color: var(--text-tertiary);
   margin-bottom: 6px;
 }
 
@@ -153,13 +155,13 @@
 .form-group textarea {
   width: 100%;
   padding: 10px 12px;
-  border: 1px solid #ddd;
+  border: 1px solid var(--border-input);
   border-radius: 8px;
   font-size: 14px;
   outline: none;
   transition: border-color 0.15s;
-  background: #fff;
-  color: #333;
+  background: var(--bg-card);
+  color: var(--text-secondary);
   box-sizing: border-box;
   font-family: inherit;
 }
@@ -167,8 +169,8 @@
 .form-group input:focus,
 .form-group select:focus,
 .form-group textarea:focus {
-  border-color: #6366f1;
-  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.08);
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 3px var(--accent-primary-light);
 }
 
 .form-group textarea {

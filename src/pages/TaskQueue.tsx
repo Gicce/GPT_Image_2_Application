@@ -19,6 +19,15 @@ export default function TaskQueue() {
   const { tasks, loadTasks, cancelTask, deleteTask } = useTaskStore();
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [deletingTask, setDeletingTask] = useState<Task | null>(null);
+  const [expandedPrompts, setExpandedPrompts] = useState<Set<string>>(new Set());
+
+  const togglePrompt = (id: string) => {
+    setExpandedPrompts(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
 
   useEffect(() => {
     loadTasks();
@@ -84,7 +93,11 @@ export default function TaskQueue() {
                   </span>
                 </div>
                 <div className="task-card-body">
-                  <p className="task-prompt">{task.prompt}</p>
+                  <p
+                    className={`task-prompt ${expandedPrompts.has(task.id) ? 'expanded' : ''}`}
+                    title={task.prompt}
+                    onClick={() => togglePrompt(task.id)}
+                  >{task.prompt}</p>
                   <div className="task-meta">
                     <span>{task.size}</span>
                     <span>{task.quality}</span>

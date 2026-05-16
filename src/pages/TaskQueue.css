@@ -5,8 +5,8 @@
 }
 
 .task-card {
-  background: #fff;
-  border: 1px solid #e5e7eb;
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
   border-radius: 12px;
   padding: 16px 20px;
   transition: box-shadow 0.15s;
@@ -30,49 +30,67 @@
   font-weight: 500;
 }
 
-.status-pending { background: #fef3c7; color: #92400e; }
-.status-running { background: #dbeafe; color: #1e40af; }
-.status-completed { background: #d1fae5; color: #065f46; }
-.status-failed { background: #fee2e2; color: #991b1b; }
-.status-cancelled { background: #f3f4f6; color: #6b7280; }
+.status-pending { background: var(--badge-warn-bg); color: var(--badge-warn-text); }
+.status-running { background: var(--badge-info-bg); color: var(--badge-info-text); }
+.status-completed { background: var(--badge-success-bg); color: var(--badge-success-text); }
+.status-failed { background: var(--badge-danger-bg); color: var(--badge-danger-text); }
+.status-cancelled { background: var(--bg-inset); color: var(--text-muted); }
 
 .task-id {
   margin-left: 8px;
   font-size: 12px;
-  color: #9ca3af;
+  color: var(--text-faint);
   font-family: monospace;
 }
 
 .task-time {
   font-size: 12px;
-  color: #9ca3af;
+  color: var(--text-faint);
 }
 
 .task-prompt {
   margin: 0 0 8px;
   font-size: 14px;
-  color: #333;
+  color: var(--text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.15s;
+  padding: 2px 4px;
+  margin-left: -4px;
+  margin-right: -4px;
+  border-radius: 4px;
+}
+
+.task-prompt:hover {
+  background: var(--bg-inset);
+}
+
+.task-prompt.expanded {
+  white-space: pre-wrap;
+  overflow: visible;
+  text-overflow: clip;
+  word-break: break-word;
+  background: var(--bg-subtle);
 }
 
 .task-meta {
   display: flex;
   gap: 8px;
   font-size: 12px;
-  color: #888;
+  color: var(--text-muted);
   margin-bottom: 8px;
 }
 
 .task-meta span {
-  background: #f3f4f6;
+  background: var(--bg-inset);
   padding: 2px 8px;
   border-radius: 4px;
 }
 
 .progress-bar-wrap {
-  background: #e5e7eb;
+  background: var(--border-default);
   border-radius: 4px;
   height: 22px;
   position: relative;
@@ -82,7 +100,7 @@
 
 .progress-bar {
   height: 100%;
-  background: linear-gradient(90deg, #6366f1, #818cf8);
+  background: linear-gradient(90deg, var(--accent-primary), var(--accent-primary-light));
   border-radius: 4px;
   transition: width 0.4s ease;
 }
@@ -93,7 +111,7 @@
   left: 50%;
   transform: translate(-50%, -50%);
   font-size: 11px;
-  color: #333;
+  color: var(--text-secondary);
   font-weight: 500;
 }
 
@@ -103,12 +121,12 @@
   font-size: 13px;
 }
 
-.stat-ok { color: #059669; }
-.stat-fail { color: #dc2626; }
+.stat-ok { color: var(--accent-success); }
+.stat-fail { color: var(--accent-danger); }
 
 .task-dir {
   font-size: 12px;
-  color: #9ca3af;
+  color: var(--text-faint);
   margin: 6px 0 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -121,21 +139,21 @@
 
 .task-error {
   font-size: 12px;
-  color: #dc2626;
+  color: var(--accent-danger);
   margin: 2px 0;
 }
 
 .task-card-actions {
   margin-top: 10px;
   padding-top: 10px;
-  border-top: 1px solid #f3f4f6;
+  border-top: 1px solid var(--bg-inset);
 }
 
 .cancel-btn {
   padding: 6px 14px;
-  border: 1px solid #fca5a5;
-  background: #fff;
-  color: #dc2626;
+  border: 1px solid var(--accent-danger);
+  background: var(--bg-card);
+  color: var(--accent-danger);
   border-radius: 6px;
   font-size: 13px;
   cursor: pointer;
@@ -143,14 +161,14 @@
 }
 
 .cancel-btn:hover {
-  background: #fef2f2;
+  background: var(--badge-danger-bg);
 }
 
 .retry-btn {
   padding: 6px 14px;
-  border: 1px solid #6366f1;
-  background: #fff;
-  color: #6366f1;
+  border: 1px solid var(--accent-primary);
+  background: var(--bg-card);
+  color: var(--accent-primary);
   border-radius: 6px;
   font-size: 13px;
   cursor: pointer;
@@ -159,13 +177,13 @@
 }
 
 .retry-btn:hover {
-  background: #eef2ff;
+  background: var(--accent-primary-light);
 }
 
 .edit-resend-btn {
   padding: 6px 14px;
-  border: 1px solid #6366f1;
-  background: #6366f1;
+  border: 1px solid var(--accent-primary);
+  background: var(--accent-primary);
   color: #fff;
   border-radius: 6px;
   font-size: 13px;
@@ -174,14 +192,14 @@
 }
 
 .edit-resend-btn:hover {
-  background: #4f46e5;
+  background: var(--accent-primary-hover);
 }
 
 .delete-task-btn {
   padding: 6px 14px;
-  border: 1px solid #fca5a5;
-  background: #fff;
-  color: #dc2626;
+  border: 1px solid var(--accent-danger);
+  background: var(--bg-card);
+  color: var(--accent-danger);
   border-radius: 6px;
   font-size: 13px;
   cursor: pointer;
@@ -190,5 +208,5 @@
 }
 
 .delete-task-btn:hover {
-  background: #fef2f2;
+  background: var(--badge-danger-bg);
 }

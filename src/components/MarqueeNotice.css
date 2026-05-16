@@ -2,11 +2,33 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  background: #fffbeb;
-  border-bottom: 1px solid #fde68a;
+  background: var(--badge-warn-bg);
+  border-bottom: 1px solid var(--badge-warn-text);
   padding: 6px 16px;
   overflow: hidden;
   flex-shrink: 0;
+}
+
+.marquee-close {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border: none;
+  background: transparent;
+  color: var(--badge-warn-text);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: background 0.15s;
+}
+
+.marquee-close:hover {
+  background: rgba(146, 64, 14, 0.1);
 }
 
 .marquee-icon {
@@ -20,14 +42,28 @@
   white-space: nowrap;
 }
 
+/* 两份文字并排，整体向左平移一个 step（文字宽 + 间距） */
+.marquee-wrapper {
+  display: inline-flex;
+  align-items: center;
+  animation: marquee-loop var(--marquee-duration, 20s) linear infinite;
+}
+
 .marquee-text {
   display: inline-block;
   font-size: 13px;
-  color: #92400e;
-  animation: marquee-scroll 20s linear infinite;
+  color: var(--badge-warn-text);
+  white-space: nowrap;
 }
 
-@keyframes marquee-scroll {
-  0%   { transform: translateX(100%); }
-  100% { transform: translateX(-100%); }
+/* 两段文字之间的空白间隔，宽度由 JS 的 SPACER 常量控制 */
+.marquee-gap {
+  display: inline-block;
+  width: 120px;
+  flex-shrink: 0;
+}
+
+@keyframes marquee-loop {
+  0%   { transform: translateX(0); }
+  100% { transform: translateX(var(--marquee-step, -50%)); }
 }

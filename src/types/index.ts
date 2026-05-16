@@ -9,6 +9,8 @@ export interface Settings {
   chat_base_url: string;
   chat_system_prompt: string;
   server_url: string;
+  notice_enabled: boolean;
+  theme: 'light' | 'dark' | 'system';
 }
 
 export interface SubTask {
@@ -69,6 +71,9 @@ export interface ChatMessage {
   reasoning_duration?: string;
   generated_image?: string;
   created_at: string;
+  input_tokens?: number;
+  output_tokens?: number;
+  is_image?: boolean;
 }
 
 export interface ChatConversation {
@@ -76,6 +81,8 @@ export interface ChatConversation {
   title: string;
   messages: ChatMessage[];
   created_at: string;
+  last_prompt_tokens?: number;
+  last_completion_tokens?: number;
 }
 
 export const SIZES = ['1024x1024', '1792x1024', '1024x1792'] as const;

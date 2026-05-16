@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { useTaskStore } from '../store/useTaskStore';
 import { useImageStore } from '../store/useImageStore';
+import { useDraftStore } from '../store/useDraftStore';
 import { api } from '../services/api';
 import { SIZES, QUALITIES, QUALITY_LABELS, FORMATS } from '../types';
 import SuccessDialog from '../components/SuccessDialog';
@@ -15,10 +16,18 @@ export default function ImageEdit() {
   const { settings } = useSettingsStore();
   const { addTask } = useTaskStore();
   const { images, loadImages } = useImageStore();
+  const { imageEditPrompt: prompt, setImageEditPrompt: setPrompt } = useDraftStore();
+  const sourceImages = useDraftStore(s => s.imageEditSourceImages);
+  const setSourceImagesRaw = useDraftStore(s => s.setImageEditSourceImages);
+  const setSourceImages = (updater: string[] | ((prev: string[]) => string[])) => {
+    if (typeof updater === 'function') {
+      setSourceImagesRaw(updater(useDraftStore.getState().imageEditSourceImages));
+    } else {
+      setSourceImagesRaw(updater);
+    }
+  };
 
-  const [sourceImages, setSourceImages] = useState<string[]>([]);
   const [previewUrls, setPreviewUrls] = useState<Record<string, string>>({});
-  const [prompt, setPrompt] = useState('');
   const [size, setSize] = useState(settings.default_size);
   const [quality, setQuality] = useState(settings.default_quality);
   const [format, setFormat] = useState(settings.default_format);

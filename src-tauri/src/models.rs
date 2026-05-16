@@ -17,7 +17,11 @@ pub struct Settings {
     pub chat_system_prompt: String,
     #[serde(default)]
     pub server_url: String,
+    #[serde(default = "default_true")]
+    pub notice_enabled: bool,
 }
+
+fn default_true() -> bool { true }
 
 impl Default for Settings {
     fn default() -> Self {
@@ -32,6 +36,7 @@ impl Default for Settings {
             chat_base_url: "https://www.packyapi.com/v1".to_string(),
             chat_system_prompt: String::new(),
             server_url: String::new(),
+            notice_enabled: true,
         }
     }
 }

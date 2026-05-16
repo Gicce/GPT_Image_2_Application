@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { useTaskStore } from '../store/useTaskStore';
+import { useDraftStore } from '../store/useDraftStore';
 import { api } from '../services/api';
 import { SIZES, QUALITIES, QUALITY_LABELS, FORMATS } from '../types';
 import SuccessDialog from '../components/SuccessDialog';
@@ -9,9 +10,13 @@ import './CreateTask.css';
 export default function CreateTask() {
   const { settings } = useSettingsStore();
   const { addTask } = useTaskStore();
+  const {
+    textToImagePrompt: prompt,
+    textToImageNegative: negativePrompt,
+    setTextToImagePrompt: setPrompt,
+    setTextToImageNegative: setNegativePrompt,
+  } = useDraftStore();
 
-  const [prompt, setPrompt] = useState('');
-  const [negativePrompt, setNegativePrompt] = useState('');
   const [size, setSize] = useState(settings.default_size);
   const [quality, setQuality] = useState(settings.default_quality);
   const [format, setFormat] = useState(settings.default_format);

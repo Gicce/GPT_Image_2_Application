@@ -20,7 +20,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     chat_model: 'gpt-4o',
     chat_base_url: 'https://www.packyapi.com/v1',
     chat_system_prompt: '',
-    server_url: '',
+    server_url: 'https://www.zjcypc.com',
+    notice_enabled: true,
+    theme: 'system',
   },
   loading: false,
 
@@ -28,7 +30,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     set({ loading: true });
     try {
       const settings = await api.getSettings();
-      set({ settings, loading: false });
+      // 兼容旧配置：缺失字段用默认值兜底
+      const merged = { ...get().settings, ...settings };
+      if (merged.notice_enabled === undefined) merged.notice_enabled = true;
+      if (!merged.theme) merged.theme = 'system';
+      set({ settings: merged, loading: false });
     } catch {
       set({ loading: false });
     }

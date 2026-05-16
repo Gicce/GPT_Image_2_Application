@@ -23,8 +23,23 @@ export default function App() {
   const [showAuth, setShowAuth] = useState(false);
   const loadSettings = useSettingsStore(s => s.loadSettings);
   const checkUpdate = useUpdateStore(s => s.checkUpdate);
-  const { loadFromStorage, isLoggedIn, refreshUser } = useAuthStore();
-  const serverUrl = useSettingsStore(s => s.settings.server_url);
+  const { loadFromStorage, isLoggedIn, refreshUser, authPromptVisible, hideAuthPrompt, requestedPage, clearRequestedPage } = useAuthStore();
+  const theme = useSettingsStore(s => s.settings.theme);
+
+  // 主题应用
+  useEffect(() => {
+    const root = document.documentElement;
+    const apply = (dark: boolean) => root.setAttribute('data-theme', dark ? 'dark' : 'light');
+    if (theme === 'system') {
+      const mq = window.matchMedia('(prefers-color-scheme: dark)');
+      apply(mq.matches);
+      const handler = (e: MediaQueryListEvent) => apply(e.matches);
+      mq.addEventListener('change', handler);
+      return () => mq.removeEventListener('change', handler);
+    } else {
+      apply(theme === 'dark');
+    }
+  }, [theme]);
 
   useEffect(() => {
     loadSettings();
@@ -35,10 +50,23 @@ export default function App() {
 
   // 登录后刷新用户信息
   useEffect(() => {
-    if (isLoggedIn && serverUrl) {
+    if (isLoggedIn) {
       refreshUser();
     }
   }, [isLoggedIn]);
+
+  // 全局登录提示触发（比如 401 后从 store 触发）
+  useEffect(() => {
+    if (authPromptVisible) setShowAuth(true);
+  }, [authPromptVisible]);
+
+  // 跨页面跳转请求（如 Chat 页占位的"前往账户页"）
+  useEffect(() => {
+    if (requestedPage) {
+      setCurrentPage(requestedPage as PageType);
+      clearRequestedPage();
+    }
+  }, [requestedPage]);
 
   function handleNavigate(page: PageType) {
     // 点「我的账户」时，若未登录则弹登录框
@@ -75,8 +103,8 @@ export default function App() {
       </div>
       {showAuth && (
         <Auth
-          onSuccess={() => { setShowAuth(false); setCurrentPage('account'); }}
-          onClose={() => setShowAuth(false)}
+          onSuccess={() => { setShowAuth(false); hideAuthPrompt(); setCurrentPage('account'); }}
+          onClose={() => { setShowAuth(false); hideAuthPrompt(); }}
         />
       )}
     </div>
