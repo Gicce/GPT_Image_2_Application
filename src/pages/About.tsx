@@ -13,6 +13,13 @@ const services = [
   { icon: '🏠', title: '智能家居', desc: '智能安防/家居系统方案' },
 ];
 
+const features = [
+  { icon: '🎨', title: '批量图像生成', desc: '支持 GPT Image 2 等模型，一键批量生成高质量图像' },
+  { icon: '✏️', title: '图生图编辑', desc: '上传参考图，AI 智能改写与风格迁移' },
+  { icon: '💬', title: '智能对话', desc: '多模型对话支持，GPT-4o / Claude 等主流模型' },
+  { icon: '📦', title: '多模型支持', desc: '图像与对话模型自由切换，按需选择' },
+];
+
 export default function About() {
   const [appVersion, setAppVersion] = useState('');
   const { openChangelog, checkUpdate, status } = useUpdateStore();
@@ -22,7 +29,6 @@ export default function About() {
   }, []);
 
   const handleOpenChangelog = async () => {
-    // 如果还没拉过数据就先拉
     if (status.recentReleases.length === 0) {
       await checkUpdate();
     }
@@ -43,7 +49,7 @@ export default function About() {
         <div className="about-card about-left-card">
           <h2 className="card-title">关于晨阳电脑</h2>
           <p className="card-desc">
-            晨阳电脑成立于2004年，至今已有20年专业服务经验。
+            晨阳电脑成立于2004年，至今已有20年专业服务经验。我们专注于 AI 图像处理与智能对话领域，致力于为用户提供高效、便捷的 AI 创作工具。
           </p>
           <p className="card-desc">
             由一名拥有8年代码开发经验的工程师经营，我们始终坚持"专业、诚信、用心"的服务理念，为个人、家庭和企业客户提供高效、可靠的技术支持与解决方案。
@@ -89,53 +95,44 @@ export default function About() {
         </div>
       </div>
 
-      {/* API Token 模块 + 二维码 */}
+      {/* 产品特性 + 联系我们 */}
       <div className="about-main-row">
-        <div className="about-card about-token-card">
-          <h2 className="card-title light">如何获取 API Token</h2>
-          <div className="steps-flow">
-            <div className="step-box">
-              <div className="step-num">Step 1</div>
-              <div className="step-heading">添加微信</div>
-              <div className="step-detail">添加上方微信号</div>
-              <div className="step-highlight">18106683831</div>
-            </div>
-            <div className="flow-arrow">→</div>
-            <div className="step-box">
-              <div className="step-num">Step 2</div>
-              <div className="step-heading">免费试用</div>
-              <div className="step-detail">添加后可免费试用</div>
-              <div className="step-highlight">1美元额度</div>
-            </div>
-            <div className="flow-arrow">→</div>
-            <div className="step-box">
-              <div className="step-num">Step 3</div>
-              <div className="step-heading">获取 Token</div>
-              <div className="step-detail">联系微信客服获取</div>
-              <div className="step-highlight">您的专属 API Token</div>
-            </div>
+        {/* 产品特性 */}
+        <div className="about-card about-features-card">
+          <h2 className="card-title">产品特性</h2>
+          <div className="features-grid">
+            {features.map((f, i) => (
+              <div className="feature-card" key={i}>
+                <span className="feature-icon">{f.icon}</span>
+                <div>
+                  <div className="feature-title">{f.title}</div>
+                  <div className="feature-desc">{f.desc}</div>
+                </div>
+              </div>
+            ))}
           </div>
-          <div className="token-footer-row">
-            <div className="token-note">
-              <strong>如需购买更多 Token</strong><br />
-              可通过微信联系购买，支持按需定制套餐。
-            </div>
-            <div className="token-note">
-              <strong>安全可靠</strong><br />
-              您的 Token 仅用于 API 调用，我们严格保护您的数据安全。
-            </div>
-          </div>
-          <p className="token-tip">有任何问题或技术支持，欢迎随时联系微信客服！</p>
         </div>
 
-        {/* 二维码卡片 */}
-        <div className="about-card about-qr-card">
-          <h2 className="card-title">微信联系（扫一扫添加）</h2>
+        {/* 联系我们 */}
+        <div className="about-card about-contact-card">
+          <h2 className="card-title">联系我们</h2>
+          <div className="contact-sections">
+            <div className="contact-section">
+              <div className="contact-label">售前咨询</div>
+              <div className="contact-wechat">微信：18106683831</div>
+              <div className="contact-desc">产品咨询、功能介绍、方案定制</div>
+            </div>
+            <div className="contact-divider" />
+            <div className="contact-section">
+              <div className="contact-label">售后咨询</div>
+              <div className="contact-wechat">微信：18106683831</div>
+              <div className="contact-desc">技术支持、问题反馈、使用指导</div>
+            </div>
+          </div>
           <div className="qr-wrapper">
             <img src="/wechat-qr.jpg" alt="微信二维码" className="qr-img" />
           </div>
-          <p className="qr-info">微信号：18106683831</p>
-          <p className="qr-sub">添加后可免费试用 1 美元</p>
+          <p className="qr-info">扫码添加微信</p>
         </div>
       </div>
 

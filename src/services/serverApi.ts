@@ -24,6 +24,11 @@ export interface AuthResponse {
   user: UserInfo;
 }
 
+export interface OrderItem {
+  group: string;
+  amount_usd: number;
+}
+
 export interface OrderResult {
   out_trade_no: string;
   code_url: string;
@@ -31,6 +36,7 @@ export interface OrderResult {
   exchange_rate: number;
   amount_usd: number;
   group: string;
+  items: OrderItem[];
   status?: 'pending' | 'paid' | 'closed';
 }
 
@@ -40,6 +46,7 @@ export interface OrderStatus {
   amount_usd: number;
   amount_cny: number;
   group: string;
+  items?: OrderItem[];
   paid_at: string | null;
   api_token?: string | null;
 }
@@ -49,9 +56,16 @@ export interface PackageGroup {
   description?: string;
 }
 
+export interface PayLimits {
+  min_total_usd: number;
+  max_total_usd: number;
+  min_per_item_usd: number;
+}
+
 export interface PackagesResponse {
   exchange_rate: number;
   groups: PackageGroup[];
+  limits?: PayLimits;
 }
 
 export interface ServerModel {
@@ -149,6 +163,18 @@ export const serverApi = {
       body: JSON.stringify({ username, email, password, account_type }),
     }).then(normalizeAuthResponse),
 
+  registerSendCode: (username: string, email: string, password: string, account_type: 'trial' | 'normal' = 'normal') =>
+    request<{ message: string }>('/api/auth/register/send-code', {
+      method: 'POST',
+      body: JSON.stringify({ username, email, password, account_type }),
+    }),
+
+  registerVerify: (email: string, code: string, username: string, password: string, account_type: 'trial' | 'normal' = 'normal') =>
+    request<any>('/api/auth/register/verify', {
+      method: 'POST',
+      body: JSON.stringify({ email, code, username, password, account_type }),
+    }).then(normalizeAuthResponse),
+
   login: (username: string, password: string) =>
     request<any>('/api/auth/login', {
       method: 'POST',
@@ -181,10 +207,10 @@ export const serverApi = {
 
   getPackages: () => request<PackagesResponse>('/api/pay/packages'),
 
-  createOrder: (group: string, amount_usd: number, pay_type: string = 'wxpay') =>
+  createOrder: (items: OrderItem[], pay_type: string = 'wxpay') =>
     request<OrderResult>(
       '/api/pay/create_order',
-      { method: 'POST', body: JSON.stringify({ group, amount_usd, pay_type }) },
+      { method: 'POST', body: JSON.stringify({ items, pay_type }) },
       true
     ),
 
@@ -206,4 +232,16 @@ export const serverApi = {
     request<{ remaining: number; available: boolean }>('/api/tokens/trial-stock'),
 
   getPrompts: () => request<ServerPrompt[]>('/api/prompts'),
+
+  forgotPassword: (email: string) =>
+    request<{ message: string }>('/api/auth/forgot-password/send-code', {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    }),
+
+  resetPassword: (email: string, code: string, new_password: string) =>
+    request<{ message: string }>('/api/auth/forgot-password/reset', {
+      method: 'POST',
+      body: JSON.stringify({ email, code, new_password }),
+    }),
 };

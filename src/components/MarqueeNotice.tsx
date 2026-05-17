@@ -14,6 +14,7 @@ export default function MarqueeNotice() {
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const firstSpanRef = useRef<HTMLSpanElement>(null);
+  const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   async function fetchNotice() {
     try {
@@ -55,7 +56,11 @@ export default function MarqueeNotice() {
     <div className="marquee-bar">
       <span className="marquee-icon">📢</span>
       <div className="marquee-track">
-        <div className="marquee-wrapper" ref={wrapperRef}>
+        <div
+          className="marquee-wrapper"
+          ref={wrapperRef}
+          style={prefersReducedMotion ? { animation: 'none' } : undefined}
+        >
           <span className="marquee-text" ref={firstSpanRef}>{text}</span>
           <span className="marquee-gap" />
           <span className="marquee-text">{text}</span>

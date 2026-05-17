@@ -145,6 +145,62 @@
   cursor: not-allowed;
 }
 
+/* ====== 忘记密码 ====== */
+.auth-forgot-link {
+  display: block;
+  background: none;
+  border: none;
+  color: var(--text-link);
+  font-size: 13px;
+  cursor: pointer;
+  text-align: right;
+  padding: 4px 0;
+  margin-top: -4px;
+  margin-bottom: 8px;
+}
+.auth-forgot-link:hover {
+  color: var(--text-link-hover);
+  text-decoration: underline;
+}
+.auth-forgot-hint {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-bottom: 16px;
+  line-height: 1.5;
+}
+.auth-forgot-hint strong {
+  color: var(--text-primary);
+}
+.auth-back-link {
+  display: block;
+  width: 100%;
+  background: none;
+  border: none;
+  color: var(--text-link);
+  font-size: 13px;
+  cursor: pointer;
+  text-align: center;
+  padding: 8px 0;
+  margin-top: 8px;
+}
+.auth-back-link:hover {
+  color: var(--text-link-hover);
+}
+.auth-forgot-success {
+  text-align: center;
+  padding: 24px 0;
+}
+.auth-forgot-success-icon {
+  font-size: 40px;
+  display: block;
+  margin-bottom: 12px;
+}
+.auth-forgot-success p {
+  color: var(--text-secondary);
+  margin-bottom: 20px;
+  font-size: 14px;
+}
+
 .auth-hint {
   font-size: 12px;
   color: var(--text-faint);
@@ -209,4 +265,42 @@
 .reg-type-desc {
   font-size: 12px;
   color: var(--text-muted);
+}
+
+/* 注册验证码 */
+.auth-verify-hint {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-bottom: 16px;
+  line-height: 1.5;
+}
+.auth-verify-hint strong {
+  color: var(--text-primary);
+}
+.auth-code-row {
+  display: flex;
+  gap: 8px;
+}
+.auth-code-row input {
+  flex: 1;
+}
+.auth-code-row button {
+  white-space: nowrap;
+  padding: 10px 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-card);
+  font-size: 13px;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s;
+  font-family: inherit;
+}
+.auth-code-row button:hover:not(:disabled) {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary-text);
+}
+.auth-code-row button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }

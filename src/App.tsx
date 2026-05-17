@@ -24,7 +24,7 @@ export default function App() {
   const [showAuth, setShowAuth] = useState(false);
   const loadSettings = useSettingsStore(s => s.loadSettings);
   const checkUpdate = useUpdateStore(s => s.checkUpdate);
-  const { loadFromStorage, isLoggedIn, refreshUser, authPromptVisible, hideAuthPrompt, requestedPage, clearRequestedPage } = useAuthStore();
+  const { loadFromStorage, isLoggedIn, refreshUser, authPromptVisible, hideAuthPrompt, clearRequestedPage } = useAuthStore();
   const theme = useSettingsStore(s => s.settings.theme);
 
   // 主题应用
@@ -68,18 +68,11 @@ export default function App() {
     if (authPromptVisible) setShowAuth(true);
   }, [authPromptVisible]);
 
-  // 跨页面跳转请求（如 Chat 页占位的"前往账户页"）
-  useEffect(() => {
-    if (requestedPage) {
-      setCurrentPage(requestedPage as PageType);
-      clearRequestedPage();
-    }
-  }, [requestedPage]);
-
   function handleNavigate(page: PageType) {
-    // 点「我的账户」时，若未登录则弹登录框
-    if (page === 'account' && !isLoggedIn) {
+    const authRequiredPages: PageType[] = ['create', 'edit', 'chat', 'queue', 'account'];
+    if (authRequiredPages.includes(page) && !isLoggedIn) {
       setShowAuth(true);
+      useAuthStore.getState().setRequestedPage(page);
       return;
     }
     setCurrentPage(page);
@@ -111,7 +104,17 @@ export default function App() {
       </div>
       {showAuth && (
         <Auth
-          onSuccess={() => { setShowAuth(false); hideAuthPrompt(); setCurrentPage('account'); }}
+          onSuccess={() => {
+            setShowAuth(false);
+            hideAuthPrompt();
+            const target = useAuthStore.getState().requestedPage;
+            if (target) {
+              setCurrentPage(target as PageType);
+              clearRequestedPage();
+            } else {
+              setCurrentPage('account');
+            }
+          }}
           onClose={() => { setShowAuth(false); hideAuthPrompt(); }}
         />
       )}

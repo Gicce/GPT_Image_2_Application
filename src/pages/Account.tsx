@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useAuthStore, setGroupTypeMap, isImageGroup, getGroupTypeMap } from '../store/useAuthStore';
-import { serverApi, type ServerModel, type UserToken, type PackageGroup } from '../services/serverApi';
+import { serverApi, type ServerModel, type UserToken, type PackageGroup, type PayLimits } from '../services/serverApi';
 import TokenField from '../components/TokenField';
 import TokenInfoDialog from '../components/TokenInfoDialog';
 import { explainError } from '../utils/errors';
@@ -17,6 +17,7 @@ interface PendingOrder {
   group: string;
   amount_usd: number;
   amount_cny: number;
+  items: { group: string; amount_usd: number }[];
 }
 
 type AllocStatus = 'pending' | 'paid' | 'allocated' | 'closed' | 'unknown';
@@ -29,6 +30,7 @@ export default function Account() {
   const [exchangeRate, setExchangeRate] = useState<number>(0);
   const [groupDescs, setGroupDescs] = useState<Record<string, string>>({});
   const [groupAmounts, setGroupAmounts] = useState<Record<string, string>>({});
+  const [payLimits, setPayLimits] = useState<PayLimits | null>(null);
   const [ordering, setOrdering] = useState(false);
   const [pendingOrders, setPendingOrders] = useState<PendingOrder[]>([]);
   const [allocMap, setAllocMap] = useState<Record<string, AllocStatus>>({});
@@ -70,6 +72,7 @@ export default function Account() {
     try {
       const pkg = await serverApi.getPackages();
       setExchangeRate(pkg.exchange_rate || 0);
+      if (pkg.limits) setPayLimits(pkg.limits);
       const descs: Record<string, string> = {};
       for (const g of pkg.groups || []) {
         if (g.name && g.description) descs[g.name] = g.description;
@@ -144,7 +147,9 @@ export default function Account() {
 
   const totalUsd = Object.values(groupAmounts).reduce((s, v) => s + (parseFloat(v) || 0), 0);
   const totalCny = exchangeRate ? totalUsd * exchangeRate : 0;
-  const minUsd = exchangeRate > 0 ? 1 / exchangeRate : 1;
+  const minUsdPerGroup = payLimits?.min_per_item_usd ?? (exchangeRate > 0 ? 0.01 / exchangeRate : 0.01);
+  const minUsdTotal = payLimits?.min_total_usd ?? 1;
+  const maxUsdTotal = payLimits?.max_total_usd ?? 1000;
 
   function setAmount(group: string, value: string) {
     if (!/^\d{0,4}(\.\d{0,2})?$/.test(value) && value !== '') return;
@@ -154,35 +159,38 @@ export default function Account() {
   async function handleBuy() {
     const items = Object.entries(groupAmounts)
       .map(([group, v]) => ({ group, amount_usd: parseFloat(v) || 0 }))
-      .filter(i => i.amount_usd >= minUsd && i.amount_usd <= 1000);
+      .filter(i => i.amount_usd >= minUsdPerGroup && i.amount_usd <= maxUsdTotal);
     if (items.length === 0) {
-      alert(`请至少为一个分组输入有效金额（${minUsd.toFixed(2)}-1000 美元）`);
+      alert(`请至少为一个分组输入有效金额（${minUsdPerGroup.toFixed(2)}-${maxUsdTotal.toFixed(0)} 美元）`);
+      return;
+    }
+    const totalAmount = items.reduce((s, i) => s + i.amount_usd, 0);
+    if (totalAmount < minUsdTotal) {
+      alert(`订单总额需至少 $${minUsdTotal.toFixed(2)}，当前 $${totalAmount.toFixed(2)}`);
+      return;
+    }
+    if (totalAmount > maxUsdTotal) {
+      alert(`订单总额不能超过 $${maxUsdTotal.toFixed(2)}，当前 $${totalAmount.toFixed(2)}`);
       return;
     }
     setOrdering(true);
     setStatusMsg('正在创建订单...');
     try {
-      const orders: PendingOrder[] = [];
-      const initAlloc: Record<string, AllocStatus> = {};
-      let firstCodeUrl = '';
-      for (const it of items) {
-        const r = await serverApi.createOrder(it.group, it.amount_usd, 'wxpay');
-        orders.push({
-          out_trade_no: r.out_trade_no,
-          group: it.group,
-          amount_usd: it.amount_usd,
-          amount_cny: r.amount_cny,
-        });
-        initAlloc[r.out_trade_no] = 'pending';
-        if (r.code_url && !firstCodeUrl) firstCodeUrl = r.code_url;
-      }
+      const r = await serverApi.createOrder(items, 'wxpay');
+      const orders: PendingOrder[] = [{
+        out_trade_no: r.out_trade_no,
+        group: r.group,
+        amount_usd: r.amount_usd,
+        amount_cny: r.amount_cny,
+        items: r.items || [],
+      }];
       setPendingOrders(orders);
-      setAllocMap(initAlloc);
+      setAllocMap({ [r.out_trade_no]: 'pending' });
 
-      if (firstCodeUrl) {
-        const qrDataUrl = await QRCode.toDataURL(firstCodeUrl, { width: 200, margin: 2 });
+      if (r.code_url) {
+        const qrDataUrl = await QRCode.toDataURL(r.code_url, { width: 200, margin: 2 });
         setQrCodeUrl(qrDataUrl);
-        setQrCodeLink(firstCodeUrl);
+        setQrCodeLink(r.code_url);
         setStatusMsg('请使用微信扫描二维码支付');
       } else {
         setStatusMsg('订单已创建，等待支付...');
@@ -435,7 +443,7 @@ export default function Account() {
           <p className="balance-empty">暂无可用分组（请确认服务器地址正确）</p>
         ) : (
           <>
-            <p className="recharge-hint">为不同模型分别输入充值金额（USD），可同时充多个，金额范围 {minUsd.toFixed(2)} ~ 1000。</p>
+            <p className="recharge-hint">为不同模型分别输入充值金额（USD），可同时充多个，每组最低 {minUsdPerGroup < 0.01 ? '$0.01' : minUsdPerGroup.toFixed(2)} ~ {maxUsdTotal.toFixed(0)}，订单总额需 ≥ ${minUsdTotal.toFixed(2)}。</p>
 
             {/* 图文模型 */}
             {groupsByType.image.length > 0 && (
@@ -478,7 +486,7 @@ export default function Account() {
               <button
                 className="buy-btn"
                 onClick={handleBuy}
-                disabled={ordering || polling || totalUsd < minUsd}
+                disabled={ordering || polling || totalUsd < minUsdTotal || totalUsd > maxUsdTotal}
               >
                 {ordering ? '创建中...' : polling ? '处理中...' : '立即支付'}
               </button>
@@ -520,7 +528,7 @@ export default function Account() {
                 return (
                   <div key={o.out_trade_no} className="alloc-order-row">
                     <span className="alloc-order-info">
-                      {o.group} · ${o.amount_usd.toFixed(2)}（¥{o.amount_cny.toFixed(2)}）
+                      {(o.items?.map(i => i.group).join(' + ') || o.group.replace(/,/g, ' + '))} · ${o.amount_usd.toFixed(2)}（¥{o.amount_cny.toFixed(2)}）
                     </span>
                     <span className={`alloc-tag alloc-tag-${st}`}>{tagText}</span>
                   </div>

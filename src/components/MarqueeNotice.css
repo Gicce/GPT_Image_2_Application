@@ -31,6 +31,10 @@
   background: rgba(146, 64, 14, 0.1);
 }
 
+[data-theme="dark"] .marquee-close:hover {
+  background: rgba(251, 191, 36, 0.15);
+}
+
 .marquee-icon {
   font-size: 14px;
   flex-shrink: 0;
@@ -40,13 +44,19 @@
   flex: 1;
   overflow: hidden;
   white-space: nowrap;
+  -webkit-mask-image: linear-gradient(to right, transparent, black 16px, black calc(100% - 16px), transparent);
+  mask-image: linear-gradient(to right, transparent, black 16px, black calc(100% - 16px), transparent);
 }
 
-/* 两份文字并排，整体向左平移一个 step（文字宽 + 间距） */
+.marquee-bar:hover .marquee-wrapper {
+  animation-play-state: paused;
+}
+
 .marquee-wrapper {
   display: inline-flex;
   align-items: center;
   animation: marquee-loop var(--marquee-duration, 20s) linear infinite;
+  will-change: transform;
 }
 
 .marquee-text {
@@ -56,7 +66,6 @@
   white-space: nowrap;
 }
 
-/* 两段文字之间的空白间隔，宽度由 JS 的 SPACER 常量控制 */
 .marquee-gap {
   display: inline-block;
   width: 120px;
@@ -66,4 +75,17 @@
 @keyframes marquee-loop {
   0%   { transform: translateX(0); }
   100% { transform: translateX(var(--marquee-step, -50%)); }
+}
+
+@media (max-width: 640px) {
+  .marquee-bar {
+    padding: 4px 10px;
+    gap: 6px;
+  }
+  .marquee-text {
+    font-size: 12px;
+  }
+  .marquee-gap {
+    width: 60px;
+  }
 }
