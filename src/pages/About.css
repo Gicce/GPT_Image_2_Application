@@ -310,7 +310,7 @@
 }
 
 /* Responsive */
-@media (max-width: 1100px) {
+@media (max-width: 1320px) {
   .steps-flow {
     grid-template-columns: 1fr;
     gap: 8px;
@@ -322,7 +322,7 @@
   }
 }
 
-@media (max-width: 900px) {
+@media (max-width: 1120px) {
   .about-main-row {
     grid-template-columns: 1fr;
   }

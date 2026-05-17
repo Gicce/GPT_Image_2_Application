@@ -1,0 +1,145 @@
+.ti-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--bg-overlay);
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: ti-fade-in 0.1s ease;
+}
+
+.ti-dialog {
+  background: var(--bg-dialog);
+  border-radius: 12px;
+  width: 420px;
+  max-width: 92vw;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+  animation: ti-slide-in 0.15s ease;
+}
+
+.ti-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-default);
+}
+
+.ti-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.ti-close {
+  background: none;
+  border: none;
+  font-size: 18px;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 6px;
+  transition: background 0.15s;
+}
+.ti-close:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.ti-body {
+  padding: 16px 20px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.ti-empty {
+  text-align: center;
+  color: var(--text-muted);
+  padding: 24px 0;
+  margin: 0;
+}
+
+.ti-group-card {
+  background: var(--bg-card-alt);
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.ti-group-card:last-child {
+  margin-bottom: 0;
+}
+
+.ti-group-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.ti-group-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.ti-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+.ti-badge.trial {
+  background: var(--badge-warn-bg);
+  color: var(--badge-warn-text);
+}
+.ti-badge.paid {
+  background: var(--badge-info-bg);
+  color: var(--badge-info-text);
+}
+
+.ti-balance {
+  margin-left: auto;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--accent-primary);
+}
+
+.ti-footer {
+  padding: 12px 20px;
+  border-top: 1px solid var(--border-default);
+  display: flex;
+  justify-content: flex-end;
+}
+
+.ti-btn {
+  padding: 8px 24px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+  transition: background 0.15s;
+}
+
+.ti-btn-ok {
+  background: var(--accent-primary);
+  color: var(--text-on-accent);
+}
+.ti-btn-ok:hover {
+  background: var(--accent-primary-hover);
+}
+
+@keyframes ti-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes ti-slide-in {
+  from { opacity: 0; transform: translateY(-8px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}

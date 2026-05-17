@@ -1,7 +1,7 @@
 .dtd-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.45);
+  background: var(--bg-overlay);
   z-index: 2000;
   display: flex;
   align-items: center;
@@ -49,6 +49,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  color: var(--accent-danger);
 }
 
 .dtd-content {
@@ -99,7 +100,7 @@
 .dtd-checkbox {
   width: 16px;
   height: 16px;
-  accent-color: #C42B1C;
+  accent-color: var(--accent-danger);
   cursor: pointer;
   flex-shrink: 0;
 }
@@ -139,12 +140,11 @@
 }
 
 .dtd-btn-delete {
-  background: #C42B1C;
-  border: 1px solid #C42B1C;
-  color: #fff;
+  background: var(--accent-danger);
+  border: 1px solid var(--accent-danger);
+  color: var(--text-on-accent);
 }
 
 .dtd-btn-delete:hover {
-  background: #a82318;
-  border-color: #a82318;
+  filter: brightness(0.85);
 }

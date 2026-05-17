@@ -32,6 +32,15 @@ export default function History() {
     ? images.filter(img => img.task_id === selectedTaskId)
     : [];
 
+  const historyTasks = tasks
+    .filter(t => t.status === 'completed' || t.status === 'failed' || t.status === 'running' || t.status === 'pending')
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+  const taskIds = new Set(tasks.map(t => t.id));
+  const chatImages = images
+    .filter(img => !taskIds.has(img.task_id))
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
   useEffect(() => {
     if (!selectedTaskId || taskImages.length === 0) return;
     let cancelled = false;
@@ -55,6 +64,28 @@ export default function History() {
   }, [selectedTaskId]);
 
   useEffect(() => {
+    if (chatImages.length === 0) return;
+    let cancelled = false;
+    const load = async () => {
+      const urls: Record<string, string> = {};
+      const BATCH = 6;
+      for (let i = 0; i < chatImages.length; i += BATCH) {
+        if (cancelled) return;
+        const batch = chatImages.slice(i, i + BATCH);
+        const results = await Promise.all(
+          batch.map(img => api.readThumbnail(img.local_path).catch(() => ''))
+        );
+        batch.forEach((img, j) => {
+          if (results[j]) urls[img.id] = results[j];
+        });
+      }
+      if (!cancelled) setImageUrls(prev => ({ ...prev, ...urls }));
+    };
+    load();
+    return () => { cancelled = true; };
+  }, [chatImages.length]);
+
+  useEffect(() => {
     const loadSourceUrls = async () => {
       if (!selectedTask || selectedTask.task_type !== 'edit' || selectedTask.source_images.length === 0) {
         setSourceUrls({});
@@ -70,10 +101,6 @@ export default function History() {
     };
     loadSourceUrls();
   }, [selectedTaskId]);
-
-  const historyTasks = tasks
-    .filter(t => t.status === 'completed' || t.status === 'failed')
-    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
   return (
     <div className="page">
@@ -177,6 +204,28 @@ export default function History() {
           </div>
         )}
       </div>
+
+      {chatImages.length > 0 && (
+        <div className="history-chat-section">
+          <h3 className="history-chat-title">对话生成图片 ({chatImages.length})</h3>
+          <div className="history-images">
+            {chatImages.map(img => (
+              <div
+                key={img.id}
+                className="history-img-item"
+                onClick={() => api.openFile(img.local_path)}
+              >
+                {imageUrls[img.id] ? (
+                  <img src={imageUrls[img.id]} alt={img.file_name} />
+                ) : (
+                  <div className="gallery-loading">加载中...</div>
+                )}
+                <span>{img.file_name}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { useChatStore } from '../store/useChatStore';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { useImageStore } from '../store/useImageStore';
-import { useAuthStore, setGroupTypeMap } from '../store/useAuthStore';
+import { useAuthStore, setGroupTypeMap, isGroupTypeMapReady } from '../store/useAuthStore';
 import { api } from '../services/api';
 import { serverApi, type ServerModel } from '../services/serverApi';
 import type { ChatMessage } from '../types';
@@ -109,6 +109,7 @@ export default function Chat() {
   const { settings, saveSettings } = useSettingsStore();
   const { user, isLoggedIn } = useAuthStore();
   const [chatModels, setChatModels] = useState<ServerModel[]>([]);
+  const [modelLoadError, setModelLoadError] = useState<string | null>(null);
   const { images, loadImages } = useImageStore();
   const [input, setInput] = useState('');
   const [deepThinking, setDeepThinking] = useState(false);
@@ -197,6 +198,10 @@ export default function Chat() {
     if (!isLoggedIn) return;
     serverApi.getModels()
       .then(list => {
+        setModelLoadError(null);
+        if (list.length === 0) {
+          console.warn('[Chat] /api/models 返回空数组，服务器可能未配置模型');
+        }
         // 缓存 group→model_type 映射，让 syncTokensToSettings 能正确分配
         const map: Record<string, 'image' | 'chat'> = {};
         for (const m of list) {
@@ -216,6 +221,9 @@ export default function Chat() {
         if (err?.status === 401) {
           useAuthStore.getState().logout();
           useAuthStore.getState().showAuthPrompt();
+        } else {
+          console.error('[Chat] 加载模型列表失败:', err);
+          setModelLoadError(err?.message || '加载模型列表失败');
         }
       });
   }, [user?.account_type, isLoggedIn]);
@@ -428,17 +436,19 @@ export default function Chat() {
     setShowGalleryPicker(false);
   };
 
-  // 已登录但没有任何 chat 组 token：显示占位
-  // 简单判定：settings.chat_token 由 syncTokensToSettings 自动写入"非 image 组"的第一个 token
-  // 如果它为空，说明用户没有任何对话组的 token
-  const chatBlocked = isLoggedIn && !settings.chat_token;
+  // 已登录但无可用对话模型或无 chat token：显示占位
+  // 仅在 groupTypeMap 已填充（模型列表已加载）时才拦截，避免启动时误判
+  const chatBlocked = isLoggedIn && isGroupTypeMapReady() && (chatModels.length === 0 || !settings.chat_token);
   if (chatBlocked) {
+    const noModels = chatModels.length === 0;
     return (
       <div className="chat-blocked-wrap">
         <div className="chat-blocked">
           <div className="chat-blocked-icon">💬</div>
-          <h3>对话功能未开通</h3>
-          <p>当前账户尚未购买对话分组的 Token。<br/>请前往「我的账户」充值，或申请试用。</p>
+          <h3>{noModels ? '对话功能暂未开通' : '对话功能未开通'}</h3>
+          <p>{noModels
+            ? '当前账户暂无可用对话模型，请联系管理员开通，或前往「我的账户」充值。'
+            : '当前账户尚未购买对话分组的 Token。\n请前往「我的账户」充值，或申请试用。'}</p>
           <div className="chat-blocked-actions">
             <button
               className="chat-blocked-btn primary"
@@ -620,6 +630,23 @@ export default function Chat() {
               />
               <span className="chat-disclaimer">AI 可能产生错误信息，请核实重要内容</span>
             </div>
+            {modelLoadError && (
+              <div className="chat-model-error">
+                <span>模型列表加载失败：{modelLoadError}</span>
+                <button onClick={() => {
+                  setModelLoadError(null);
+                  serverApi.getModels()
+                    .then(list => {
+                      const map: Record<string, 'image' | 'chat'> = {};
+                      for (const m of list) if (m.group) map[m.group] = m.model_type;
+                      setGroupTypeMap(map);
+                      setChatModels(list.filter(m => m.model_type === 'chat'));
+                    })
+                    .catch(() => setModelLoadError('重试失败，请检查网络'));
+                }}>重试</button>
+                <button onClick={() => setModelLoadError(null)}>关闭</button>
+              </div>
+            )}
           </div>
         </div>
       </div>

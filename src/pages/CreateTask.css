@@ -70,7 +70,7 @@
   width: 100%;
   padding: 13px;
   background: var(--accent-primary);
-  color: white;
+  color: var(--text-on-accent);
   border: none;
   border-radius: 8px;
   font-size: 15px;
@@ -86,7 +86,8 @@
 }
 
 .start-btn:disabled {
-  background: var(--accent-primary-text);
+  background: var(--border-default);
+  color: var(--text-muted);
   cursor: not-allowed;
 }
 
@@ -135,47 +136,6 @@
 
 .dir-input input {
   flex: 1;
-}
-
-/* Shared form styles */
-.form-group {
-  margin-bottom: 18px;
-}
-
-.form-group label {
-  display: block;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text-tertiary);
-  margin-bottom: 6px;
-}
-
-.form-group input,
-.form-group select,
-.form-group textarea {
-  width: 100%;
-  padding: 10px 12px;
-  border: 1px solid var(--border-input);
-  border-radius: 8px;
-  font-size: 14px;
-  outline: none;
-  transition: border-color 0.15s;
-  background: var(--bg-card);
-  color: var(--text-secondary);
-  box-sizing: border-box;
-  font-family: inherit;
-}
-
-.form-group input:focus,
-.form-group select:focus,
-.form-group textarea:focus {
-  border-color: var(--accent-primary);
-  box-shadow: 0 0 0 3px var(--accent-primary-light);
-}
-
-.form-group textarea {
-  resize: vertical;
-  min-height: 80px;
 }
 
 .form-row {

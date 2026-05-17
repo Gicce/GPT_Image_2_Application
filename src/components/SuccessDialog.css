@@ -1,7 +1,7 @@
 .sd-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.45);
+  background: var(--bg-overlay);
   z-index: 2000;
   display: flex;
   align-items: center;
@@ -49,6 +49,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  color: var(--accent-success);
 }
 
 .sd-content {
@@ -89,7 +90,7 @@
 .sd-btn-ok {
   background: var(--accent-primary);
   border: 1px solid var(--accent-primary);
-  color: #fff;
+  color: var(--text-on-accent);
 }
 
 .sd-btn-ok:hover {

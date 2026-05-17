@@ -37,8 +37,8 @@
   width: 20px;
   height: 20px;
   border-radius: 50%;
-  background: rgba(0, 0, 0, 0.6);
-  color: #fff;
+  background: var(--bg-overlay);
+  color: var(--text-on-accent);
   border: none;
   cursor: pointer;
   font-size: 12px;
@@ -194,7 +194,7 @@
 
 .gp-layout-btn.active {
   background: var(--accent-success);
-  color: #fff;
+  color: var(--text-on-accent);
 }
 
 .gp-close {
@@ -280,7 +280,7 @@
   height: 20px;
   border-radius: 50%;
   background: var(--accent-success);
-  color: #fff;
+  color: var(--text-on-accent);
   font-size: 11px;
   display: flex;
   align-items: center;
@@ -392,7 +392,7 @@
   font-family: inherit;
   background: var(--accent-success);
   border: 1px solid var(--accent-success);
-  color: #fff;
+  color: var(--text-on-accent);
   transition: background 0.1s;
 }
 

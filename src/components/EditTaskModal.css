@@ -4,7 +4,7 @@
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(0, 0, 0, 0.4);
+  background: var(--bg-overlay);
   backdrop-filter: blur(4px);
   display: flex;
   align-items: center;
@@ -84,7 +84,7 @@
   padding: 9px 20px;
   border: none;
   background: var(--accent-primary);
-  color: #fff;
+  color: var(--text-on-accent);
   border-radius: 8px;
   font-size: 14px;
   cursor: pointer;

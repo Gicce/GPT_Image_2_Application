@@ -12,19 +12,34 @@ export function setGroupTypeMap(map: Record<string, 'image' | 'chat'>) {
   if (u) syncTokensToSettings(u);
 }
 
-function isImageGroup(group: string): boolean {
-  if (groupTypeMap[group]) return groupTypeMap[group] === 'image';
-  // 兜底：约定 sora 等是图片组，否则视为 chat
-  return /sora|image|imag|gpt-?image/i.test(group);
+export function getGroupTypeMap() {
+  return groupTypeMap;
+}
+
+export function isGroupTypeMapReady(): boolean {
+  return Object.keys(groupTypeMap).length > 0;
+}
+
+export function isImageGroup(group: string): boolean {
+  if (group in groupTypeMap) return groupTypeMap[group] === 'image';
+  // groupTypeMap 非空但该 group 不在其中：保守归为 chat
+  if (Object.keys(groupTypeMap).length > 0) return false;
+  // groupTypeMap 为空（loadModels 未完成）：用正则兜底（仅用于显示，syncTokensToSettings 不依赖此路径）
+  return /sora|gpt-?image/i.test(group);
 }
 
 // 把后端下发的 token 自动同步到本地 settings，让 Rust 端能读
 function syncTokensToSettings(user: UserInfo | null) {
   if (!user) return;
+  // groupTypeMap 未填充时不做同步，避免用正则猜测导致 token 分配错误
+  // setGroupTypeMap() 填充后会再次调用此函数
+  if (Object.keys(groupTypeMap).length === 0) return;
+
   const settings = useSettingsStore.getState().settings;
-  const imageToken = user.tokens.find(t => isImageGroup(t.group))?.api_token ?? '';
-  const chatToken = user.tokens.find(t => !isImageGroup(t.group))?.api_token ?? '';
   const partial: any = {};
+  // 直接用 groupTypeMap 做精确匹配，不再依赖 isImageGroup()
+  const imageToken = user.tokens.find(t => groupTypeMap[t.group] === 'image')?.api_token ?? '';
+  const chatToken = user.tokens.find(t => groupTypeMap[t.group] === 'chat')?.api_token ?? '';
   if (settings.token !== imageToken) partial.token = imageToken;
   if (settings.chat_token !== chatToken) partial.chat_token = chatToken;
   if (Object.keys(partial).length > 0) {

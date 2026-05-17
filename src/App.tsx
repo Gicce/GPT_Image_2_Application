@@ -14,7 +14,8 @@ import About from './pages/About';
 import Account from './pages/Account';
 import { useSettingsStore } from './store/useSettingsStore';
 import { useUpdateStore } from './store/useUpdateStore';
-import { useAuthStore } from './store/useAuthStore';
+import { useAuthStore, setGroupTypeMap } from './store/useAuthStore';
+import { serverApi } from './services/serverApi';
 import type { PageType } from './types';
 import './App.css';
 
@@ -48,10 +49,17 @@ export default function App() {
     return () => clearTimeout(timer);
   }, []);
 
-  // 登录后刷新用户信息
+  // 登录后刷新用户信息 + 预取模型列表填充 groupTypeMap
   useEffect(() => {
     if (isLoggedIn) {
       refreshUser();
+      serverApi.getModels()
+        .then(list => {
+          const map: Record<string, 'image' | 'chat'> = {};
+          for (const m of list) if (m.group) map[m.group] = m.model_type;
+          setGroupTypeMap(map);
+        })
+        .catch(() => {});
     }
   }, [isLoggedIn]);
 

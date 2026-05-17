@@ -129,6 +129,17 @@
   margin-bottom: 20px;
 }
 
+@media (max-width: 900px) {
+  .pkg-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+@media (max-width: 600px) {
+  .pkg-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .pkg-card {
   border: 2px solid var(--border-default);
   border-radius: 10px;
@@ -203,7 +214,7 @@
 .buy-btn {
   padding: 9px 24px;
   background: var(--accent-primary);
-  color: #fff;
+  color: var(--text-on-accent);
   border: none;
   border-radius: 8px;
   font-size: 14px;
@@ -248,7 +259,7 @@
   display: inline-block;
   padding: 10px 24px;
   background: var(--accent-primary);
-  color: #fff;
+  color: var(--text-on-accent);
   border-radius: 8px;
   text-decoration: none;
   font-size: 14px;
@@ -320,7 +331,7 @@
 
 .upgrade-trial-btn:hover:not(:disabled) {
   background: var(--accent-primary);
-  color: #fff;
+  color: var(--text-on-accent);
 }
 
 .upgrade-trial-btn:disabled {
@@ -360,7 +371,7 @@
 .account-login-btn {
   padding: 10px 32px;
   background: var(--accent-primary);
-  color: #fff;
+  color: var(--text-on-accent);
   border: none;
   border-radius: 10px;
   font-size: 14px;
@@ -770,4 +781,19 @@
   text-transform: uppercase;
   letter-spacing: 0.05em;
   margin-bottom: 8px;
+}
+
+.token-info-btn {
+  padding: 10px 32px;
+  background: var(--accent-primary);
+  color: var(--text-on-accent);
+  border: none;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.token-info-btn:hover {
+  background: var(--accent-primary-hover);
 }

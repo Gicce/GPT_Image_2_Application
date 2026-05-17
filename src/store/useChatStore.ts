@@ -176,7 +176,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
           const { isLoggedIn } = useAuthStore.getState();
           const s2 = useSettingsStore.getState().settings;
           if (isLoggedIn) {
+            console.log('[reportImage] 上报图片用量: model=gpt-image-2, count=1');
             serverApi.reportImage('gpt-image-2', 1).then(res => {
+              console.log('[reportImage] 上报成功:', res);
               const auth = useAuthStore.getState();
               const prev = auth.user?.account_type;
               if (res.group) auth.updateTokenBalance(res.group, res.balance_usd);
@@ -320,12 +322,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
           const { isLoggedIn } = useAuthStore.getState();
           const s2 = useSettingsStore.getState().settings;
           if (isLoggedIn) {
+            console.log('[reportChat] 上报对话用量:', settings.chat_model, usageData);
             serverApi.reportChat(
               settings.chat_model,
               usageData.prompt_tokens || usageData.input_tokens || 0,
               usageData.completion_tokens || usageData.output_tokens || 0,
               usageData.prompt_tokens_details?.cached_tokens || 0,
             ).then(res => {
+              console.log('[reportChat] 上报成功:', res);
               const auth = useAuthStore.getState();
               const prev = auth.user?.account_type;
               if (res.group) auth.updateTokenBalance(res.group, res.balance_usd);

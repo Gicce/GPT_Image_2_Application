@@ -3,7 +3,7 @@ import { getVersion } from '@tauri-apps/api/app';
 import type { PageType } from '../types';
 import VersionModal from './VersionModal';
 import { useUpdateStore } from '../store/useUpdateStore';
-import { useAuthStore } from '../store/useAuthStore';
+import { useAuthStore, isImageGroup } from '../store/useAuthStore';
 import './Sidebar.css';
 
 interface SidebarProps {
@@ -52,10 +52,14 @@ export default function Sidebar({ currentPage, onNavigate }: SidebarProps) {
           >
             <span className="sidebar-icon">{item.icon}</span>
             <span className="sidebar-label">{item.label}</span>
-            {item.id === 'account' && isLoggedIn && user && (
-              <span className="sidebar-balance">
-                ${(user.tokens?.reduce((s, t) => s + (t.balance_usd || 0), 0) ?? 0).toFixed(2)}
-              </span>
+            {item.id === 'account' && isLoggedIn && user && user.tokens && user.tokens.length > 0 && (
+              <div className="sidebar-balance-group">
+                {user.tokens.map(t => (
+                  <span key={t.group} className={`sidebar-balance ${isImageGroup(t.group) ? 'img' : 'chat'}`}>
+                    ${t.balance_usd.toFixed(2)}
+                  </span>
+                ))}
+              </div>
             )}
           </button>
         ))}

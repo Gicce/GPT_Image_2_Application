@@ -39,15 +39,18 @@ export default function Gallery() {
 
   const handleScroll = useCallback(() => {
     if (!hasMore) return;
-    const el = document.documentElement;
+    const el = document.querySelector('.main-content');
+    if (!el) return;
     if (el.scrollHeight - el.scrollTop - el.clientHeight < 400) {
       setVisibleCount(prev => prev + PAGE_SIZE);
     }
   }, [hasMore]);
 
   useEffect(() => {
-    window.addEventListener('scroll', handleScroll);
-    return () => window.removeEventListener('scroll', handleScroll);
+    const el = document.querySelector('.main-content');
+    if (!el) return;
+    el.addEventListener('scroll', handleScroll);
+    return () => el.removeEventListener('scroll', handleScroll);
   }, [handleScroll]);
 
   const handleDelete = async (img: ImageRecord) => {

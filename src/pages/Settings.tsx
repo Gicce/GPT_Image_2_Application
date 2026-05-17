@@ -39,7 +39,7 @@ export default function Settings() {
     savedKeys[k] ? <span className="saved-tip">✓ 已保存</span> : null;
 
   return (
-    <div className="page">
+    <div className="page settings-page">
       <div className="page-header">
         <h2>设置</h2>
         <p>配置默认生成参数。Token 由账户自动同步，无需手填。</p>

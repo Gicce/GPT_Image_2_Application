@@ -1,7 +1,7 @@
 .dcd-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.45);
+  background: var(--bg-overlay);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -33,6 +33,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  color: var(--accent-danger);
 }
 
 .dcd-content {
@@ -90,12 +91,12 @@
 }
 
 .dcd-btn-delete {
-  background: #dc2626;
-  color: #fff;
+  background: var(--accent-danger);
+  color: var(--text-on-accent);
 }
 
 .dcd-btn-delete:hover {
-  background: #b91c1c;
+  filter: brightness(0.85);
 }
 
 @keyframes dcd-fade-in {

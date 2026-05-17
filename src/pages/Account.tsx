@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { useAuthStore, setGroupTypeMap } from '../store/useAuthStore';
+import { useAuthStore, setGroupTypeMap, isImageGroup, getGroupTypeMap } from '../store/useAuthStore';
 import { serverApi, type ServerModel, type UserToken, type PackageGroup } from '../services/serverApi';
 import TokenField from '../components/TokenField';
+import TokenInfoDialog from '../components/TokenInfoDialog';
 import { explainError } from '../utils/errors';
 import QRCode from 'qrcode';
 import {
@@ -37,6 +38,7 @@ export default function Account() {
   const [usageChartTab, setUsageChartTab] = useState<'line' | 'pie' | 'bar'>('line');
   const [qrCodeUrl, setQrCodeUrl] = useState<string>('');
   const [qrCodeLink, setQrCodeLink] = useState<string>('');
+  const [showTokenDialog, setShowTokenDialog] = useState(false);
   const allocTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -54,11 +56,14 @@ export default function Account() {
   async function loadModels() {
     try {
       const list = await serverApi.getModels();
+      console.log('[loadModels] 获取到模型列表:', list.length, list.map(m => `${m.name}(${m.model_type},group=${m.group})`));
       setModels(list);
       const map: Record<string, 'image' | 'chat'> = {};
       for (const m of list) if (m.group) map[m.group] = m.model_type;
       setGroupTypeMap(map);
-    } catch {}
+    } catch (e) {
+      console.error('[loadModels] 获取模型列表失败:', e);
+    }
   }
 
   async function loadPackages() {
@@ -101,6 +106,36 @@ export default function Account() {
         chat.push({ name: m.group });
       }
     }
+    // 防御：models API 未返回 chat 分组，但用户已有 chat token
+    const gMap = getGroupTypeMap();
+    if (chat.length === 0) {
+      for (const t of (user?.tokens ?? [])) {
+        if (seenChat.has(t.group)) continue;
+        if (gMap[t.group]) {
+          if (gMap[t.group] === 'chat') {
+            seenChat.add(t.group);
+            chat.push({ name: t.group });
+          }
+        } else if (!isImageGroup(t.group)) {
+          seenChat.add(t.group);
+          chat.push({ name: t.group });
+        }
+      }
+    }
+    if (img.length === 0) {
+      for (const t of (user?.tokens ?? [])) {
+        if (seenImg.has(t.group)) continue;
+        if (gMap[t.group]) {
+          if (gMap[t.group] === 'image') {
+            seenImg.add(t.group);
+            img.push({ name: t.group });
+          }
+        } else if (isImageGroup(t.group)) {
+          seenImg.add(t.group);
+          img.push({ name: t.group });
+        }
+      }
+    }
     return { image: img, chat };
   })();
 
@@ -109,6 +144,7 @@ export default function Account() {
 
   const totalUsd = Object.values(groupAmounts).reduce((s, v) => s + (parseFloat(v) || 0), 0);
   const totalCny = exchangeRate ? totalUsd * exchangeRate : 0;
+  const minUsd = exchangeRate > 0 ? 1 / exchangeRate : 1;
 
   function setAmount(group: string, value: string) {
     if (!/^\d{0,4}(\.\d{0,2})?$/.test(value) && value !== '') return;
@@ -118,9 +154,9 @@ export default function Account() {
   async function handleBuy() {
     const items = Object.entries(groupAmounts)
       .map(([group, v]) => ({ group, amount_usd: parseFloat(v) || 0 }))
-      .filter(i => i.amount_usd >= 1 && i.amount_usd <= 1000);
+      .filter(i => i.amount_usd >= minUsd && i.amount_usd <= 1000);
     if (items.length === 0) {
-      alert('请至少为一个分组输入有效金额（1-1000 美元）');
+      alert(`请至少为一个分组输入有效金额（${minUsd.toFixed(2)}-1000 美元）`);
       return;
     }
     setOrdering(true);
@@ -286,8 +322,8 @@ export default function Account() {
     const img = usage.filter(u => u.usage_type === 'image').reduce((s: number, u: any) => s + Number(u.cost_usd), 0);
     const chat = usage.filter(u => u.usage_type === 'chat').reduce((s: number, u: any) => s + Number(u.cost_usd), 0);
     return [
-      { name: '图片生成', value: parseFloat(img.toFixed(4)), fill: '#6366f1' },
-      { name: '智能对话', value: parseFloat(chat.toFixed(4)), fill: '#10b981' },
+      { name: '图片生成', value: parseFloat(img.toFixed(4)), fill: 'var(--accent-primary)' },
+      { name: '智能对话', value: parseFloat(chat.toFixed(4)), fill: 'var(--accent-success)' },
     ].filter(d => d.value > 0);
   }, [usage]);
 
@@ -383,18 +419,12 @@ export default function Account() {
         )}
       </div>
 
-      {/* Token 卡片：按 tokens[] 渲染 */}
+      {/* Token 信息按钮 */}
       {userTokens.length > 0 && (
-        <div className="account-section">
-          <h3>我的 Token</h3>
-          {userTokens.map(t => (
-            <TokenField
-              key={t.group}
-              label={`${t.group} Token${t.is_trial ? '（试用）' : ''}`}
-              value={t.api_token}
-              emptyHint=""
-            />
-          ))}
+        <div className="account-section" style={{ display: 'flex', justifyContent: 'center' }}>
+          <button className="token-info-btn" onClick={() => setShowTokenDialog(true)}>
+            Token 信息
+          </button>
         </div>
       )}
 
@@ -405,7 +435,7 @@ export default function Account() {
           <p className="balance-empty">暂无可用分组（请确认服务器地址正确）</p>
         ) : (
           <>
-            <p className="recharge-hint">为不同模型分别输入充值金额（USD），可同时充多个，金额范围 1 ~ 1000。</p>
+            <p className="recharge-hint">为不同模型分别输入充值金额（USD），可同时充多个，金额范围 {minUsd.toFixed(2)} ~ 1000。</p>
 
             {/* 图文模型 */}
             {groupsByType.image.length > 0 && (
@@ -448,7 +478,7 @@ export default function Account() {
               <button
                 className="buy-btn"
                 onClick={handleBuy}
-                disabled={ordering || polling || totalUsd < 1}
+                disabled={ordering || polling || totalUsd < minUsd}
               >
                 {ordering ? '创建中...' : polling ? '处理中...' : '立即支付'}
               </button>
@@ -528,11 +558,11 @@ export default function Account() {
                     <div className="usage-chart-title">每日费用趋势</div>
                     <ResponsiveContainer width="100%" height={200}>
                       <LineChart data={dailyCost} margin={{ top: 4, right: 8, left: -16, bottom: 0 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                        <CartesianGrid strokeDasharray="3 3" stroke="var(--border-light)" />
                         <XAxis dataKey="date" tick={{ fontSize: 10 }} />
                         <YAxis tick={{ fontSize: 10 }} />
                         <Tooltip formatter={(v) => [`$${v}`, '费用']} />
-                        <Line type="monotone" dataKey="cost" stroke="#6366f1" strokeWidth={2} dot={false} />
+                        <Line type="monotone" dataKey="cost" stroke="var(--accent-primary)" strokeWidth={2} dot={false} />
                       </LineChart>
                     </ResponsiveContainer>
                   </>
@@ -555,11 +585,11 @@ export default function Account() {
                     <div className="usage-chart-title">模型调用次数</div>
                     <ResponsiveContainer width="100%" height={200}>
                       <BarChart data={modelCount} margin={{ top: 4, right: 8, left: -16, bottom: 0 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                        <CartesianGrid strokeDasharray="3 3" stroke="var(--border-light)" />
                         <XAxis dataKey="model" tick={{ fontSize: 9 }} />
                         <YAxis tick={{ fontSize: 10 }} allowDecimals={false} />
                         <Tooltip />
-                        <Bar dataKey="count" fill="#f59e0b" radius={[3, 3, 0, 0]} />
+                        <Bar dataKey="count" fill="var(--accent-orange)" radius={[3, 3, 0, 0]} />
                       </BarChart>
                     </ResponsiveContainer>
                   </>
@@ -591,6 +621,10 @@ export default function Account() {
           </>
         )}
       </div>
+
+      {showTokenDialog && (
+        <TokenInfoDialog tokens={userTokens} onClose={() => setShowTokenDialog(false)} />
+      )}
     </div>
   );
 }

@@ -93,12 +93,15 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     }
 
     if (newlyCompleted > 0) {
+      console.log('[reportImage] 上报批量图片用量: model=gpt-image-2, count=', newlyCompleted);
       serverApi.reportImage('gpt-image-2', newlyCompleted).then(res => {
+        console.log('[reportImage] 上报成功:', res);
         const auth = useAuthStore.getState();
         if (res.group) auth.updateTokenBalance(res.group, res.balance_usd);
         if (res.account_type) auth.updateAccountType(res.account_type);
         if (!res.group) auth.refreshUser();
       }).catch((err: any) => {
+        console.error('[reportImage] 上报失败:', err);
         if (isAuthError(err)) {
           useAuthStore.getState().logout();
           useAuthStore.getState().showAuthPrompt();

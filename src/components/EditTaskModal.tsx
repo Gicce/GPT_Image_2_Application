@@ -119,7 +119,7 @@ export default function EditTaskModal({ task, onClose }: Props) {
                     {previewUrls[path] ? (
                       <img src={previewUrls[path]} alt="" />
                     ) : (
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#9ca3af', fontSize: 12 }}>加载中</div>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-faint)', fontSize: 12 }}>加载中</div>
                     )}
                     <button className="remove-btn" onClick={() => handleRemoveSource(path)}>✕</button>
                   </div>
@@ -198,7 +198,7 @@ export default function EditTaskModal({ task, onClose }: Props) {
                 <div className="gallery-picker-grid">
                   {images.map(img => (
                     <div key={img.id} className="gallery-picker-item" onClick={() => handleAddFromGallery(img.local_path)}>
-                      {galleryUrls[img.id] ? <img src={galleryUrls[img.id]} alt={img.file_name} /> : <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#9ca3af', fontSize: 11 }}>加载中</div>}
+                      {galleryUrls[img.id] ? <img src={galleryUrls[img.id]} alt={img.file_name} /> : <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-faint)', fontSize: 11 }}>加载中</div>}
                     </div>
                   ))}
                 </div>
