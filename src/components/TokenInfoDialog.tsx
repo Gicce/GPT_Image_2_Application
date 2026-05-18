@@ -26,7 +26,7 @@ export default function TokenInfoDialog({ tokens, onClose }: Props) {
                   <span className={`ti-badge ${t.is_trial ? 'trial' : 'paid'}`}>
                     {t.is_trial ? '试用' : '付费'}
                   </span>
-                  <span className="ti-balance">${t.balance_usd.toFixed(4)}</span>
+                  <span className="ti-balance">${Number(t.balance_usd).toFixed(4)}</span>
                 </div>
                 <TokenField
                   label={`${t.group} API Token`}

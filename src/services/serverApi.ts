@@ -62,6 +62,25 @@ export interface PayLimits {
   min_per_item_usd: number;
 }
 
+export interface UserOrder {
+  out_trade_no: string;
+  total_usd: number;
+  total_cny: number;
+  status: 'pending' | 'paid' | 'allocated' | 'refunding' | 'refunded' | 'closed';
+  items: { group: string; amount_usd: number }[];
+  created_at: string;
+  paid_at?: string;
+  allocated_at?: string;
+}
+
+export interface UsageRecord {
+  model: string;
+  type: string;
+  quantity: number;
+  cost_usd: number;
+  created_at: string;
+}
+
 export interface PackagesResponse {
   exchange_rate: number;
   groups: PackageGroup[];
@@ -221,8 +240,28 @@ export const serverApi = {
       true
     ),
 
+  refundOrder: (out_trade_no: string) =>
+    request<{ status: string; out_refund_no: string }>(
+      `/api/pay/refund_order/${out_trade_no}`,
+      { method: 'POST' },
+      true
+    ),
+
+  refundStatus: (out_trade_no: string) =>
+    request<{ status: string; out_refund_no: string; amount_cny: number }>(
+      `/api/pay/refund_status/${out_trade_no}`,
+      {},
+      true
+    ),
+
   queryOrder: (out_trade_no: string) =>
     request<OrderStatus>(`/api/pay/query/${out_trade_no}`, {}, true),
+
+  getOrders: () =>
+    request<UserOrder[]>('/api/pay/orders', {}, true),
+
+  getUsageRecords: () =>
+    request<UsageRecord[]>('/api/usage/records', {}, true),
 
   getNotice: () => request<{ content: string; is_active: boolean }>('/api/notice'),
 

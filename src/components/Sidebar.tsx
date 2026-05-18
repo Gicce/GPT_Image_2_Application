@@ -56,7 +56,7 @@ export default function Sidebar({ currentPage, onNavigate }: SidebarProps) {
               <div className="sidebar-balance-group">
                 {user.tokens.map(t => (
                   <span key={t.group} className={`sidebar-balance ${isImageGroup(t.group) ? 'img' : 'chat'}`}>
-                    ${t.balance_usd.toFixed(2)}
+                    ${Number(t.balance_usd).toFixed(2)}
                   </span>
                 ))}
               </div>
