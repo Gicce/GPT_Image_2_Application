@@ -47,7 +47,10 @@ export default function Account() {
   const [ordersLoading, setOrdersLoading] = useState(false);
   const [orderActionLoading, setOrderActionLoading] = useState<string | null>(null);
   const [refundConfirmId, setRefundConfirmId] = useState<string | null>(null);
+  const [refundPollingId, setRefundPollingId] = useState<string | null>(null);
+  const [refundStatusMsg, setRefundStatusMsg] = useState('');
   const allocTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const refundTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     if (!isLoggedIn) return;
@@ -60,6 +63,7 @@ export default function Account() {
 
   useEffect(() => () => {
     if (allocTimerRef.current) clearInterval(allocTimerRef.current);
+    if (refundTimerRef.current) clearInterval(refundTimerRef.current);
   }, []);
 
   async function loadOrders() {
@@ -71,11 +75,13 @@ export default function Account() {
         out_trade_no: o.out_trade_no,
         total_usd: Number(o.total_usd ?? o.amount_usd ?? 0),
         total_cny: Number(o.total_cny ?? o.amount_cny ?? 0),
-        status: o.status,
+        status: o.status === 'assigned' ? 'allocated' : o.status,
         items: Array.isArray(o.items) ? o.items : [],
         created_at: o.created_at ?? '',
         paid_at: o.paid_at,
         allocated_at: o.allocated_at,
+        amount_cny: o.amount_cny != null ? Number(o.amount_cny) : undefined,
+        amount_usd: o.amount_usd != null ? Number(o.amount_usd) : undefined,
       }));
       setOrders(data);
     } catch {} finally {
@@ -98,16 +104,65 @@ export default function Account() {
   async function handleRefundOrder(id: string) {
     setOrderActionLoading(id);
     try {
-      await serverApi.refundOrder(id);
+      const res = await serverApi.refundOrder(id);
       await loadOrders();
-      refreshUser();
+      setRefundStatusMsg(res.message || '退款申请已提交，等待确认');
+      startRefundPolling(id);
     } catch (e: any) {
-      alert(e.message || '退款失败');
+      alert(e.message || '退款申请失败');
     } finally {
       setOrderActionLoading(null);
       setRefundConfirmId(null);
     }
   }
+
+  const startRefundPolling = useCallback((out_trade_no: string) => {
+    if (refundTimerRef.current) clearInterval(refundTimerRef.current);
+    setRefundPollingId(out_trade_no);
+    let count = 0;
+    const MAX_POLL_COUNT = 310;
+    refundTimerRef.current = setInterval(async () => {
+      count++;
+      if (count > MAX_POLL_COUNT) {
+        if (refundTimerRef.current) clearInterval(refundTimerRef.current);
+        setRefundPollingId(null);
+        setRefundStatusMsg('退款确认超时，请刷新页面查看最新状态');
+        return;
+      }
+      try {
+        const res = await serverApi.refundStatus(out_trade_no);
+        if (res.status === 'refunded') {
+          if (refundTimerRef.current) clearInterval(refundTimerRef.current);
+          setRefundPollingId(null);
+          setRefundStatusMsg('退款已完成，余额已返还');
+          await loadOrders();
+          await refreshUser();
+          setTimeout(() => setRefundStatusMsg(''), 5000);
+        } else if (res.status === 'paid' || res.status === 'assigned' || res.status === 'allocated') {
+          if (refundTimerRef.current) clearInterval(refundTimerRef.current);
+          setRefundPollingId(null);
+          setRefundStatusMsg('退款申请被拒绝，订单状态已恢复');
+          await loadOrders();
+          setTimeout(() => setRefundStatusMsg(''), 5000);
+        } else if (res.status === 'refund_change') {
+          if (refundTimerRef.current) clearInterval(refundTimerRef.current);
+          setRefundPollingId(null);
+          setRefundStatusMsg('退款异常，请联系客服');
+          await loadOrders();
+          setTimeout(() => setRefundStatusMsg(''), 8000);
+        }
+      } catch {
+        // transient error, continue polling
+      }
+    }, 3000);
+  }, [loadOrders, refreshUser]);
+
+  useEffect(() => {
+    const refundingOrder = orders.find(o => o.status === 'refunding');
+    if (refundingOrder && !refundPollingId) {
+      startRefundPolling(refundingOrder.out_trade_no);
+    }
+  }, [orders, refundPollingId, startRefundPolling]);
 
   async function loadModels() {
     try {
@@ -420,6 +475,17 @@ export default function Account() {
 
   const hasGroups = groupsByType.image.length + groupsByType.chat.length > 0;
 
+  const statusMap: Record<string, { label: string; cls: string }> = {
+    pending:       { label: '待支付',   cls: 'pending' },
+    paid:          { label: '已支付',   cls: 'paid' },
+    allocated:     { label: '已到账',   cls: 'allocated' },
+    assigned:      { label: '已到账',   cls: 'allocated' },
+    closed:        { label: '已关闭',   cls: 'closed' },
+    refunding:     { label: '退款中',   cls: 'refunding' },
+    refunded:      { label: '已退款',   cls: 'refunded' },
+    refund_change: { label: '退款异常', cls: 'refund_change' },
+  };
+
   return (
     <div className="page">
       <div className="page-header">
@@ -683,47 +749,53 @@ export default function Account() {
       {/* 订单查询 */}
       <div className="account-section order-history-section">
         <h3>订单查询</h3>
+        {refundStatusMsg && <div className="refund-status-bar">{refundStatusMsg}</div>}
         {ordersLoading ? (
           <p className="balance-empty">加载中...</p>
         ) : orders.length === 0 ? (
           <p className="balance-empty">暂无订单记录</p>
         ) : (
-          <div className="order-list">
-            {orders.map(o => (
-              <div key={o.out_trade_no} className="order-item">
-                <div className="order-item-left">
-                  <span className="order-item-amount">${Number(o.total_usd).toFixed(2)}</span>
-                  <span className="order-item-groups">
-                    {o.items?.map(i => i.group).join(' + ') || '-'}
-                  </span>
-                  <span className="order-item-date">{o.created_at?.replace('T', ' ').slice(0, 16)}</span>
-                </div>
-                <span className={`order-item-tag ${o.status}`}>
-                  {o.status === 'allocated' ? '已到账' : o.status === 'paid' ? '已支付' : o.status === 'refunding' ? '退款中' : o.status === 'refunded' ? '已退款' : o.status === 'closed' ? '已关闭' : '待支付'}
-                </span>
-                <div className="order-item-actions">
-                  {o.status === 'pending' && (
-                    <button
-                      className="order-action-btn cancel"
-                      disabled={orderActionLoading === o.out_trade_no}
-                      onClick={() => handleCancelOrder(o.out_trade_no)}
-                    >
-                      {orderActionLoading === o.out_trade_no ? '...' : '取消'}
-                    </button>
-                  )}
-                  {(o.status === 'paid' || o.status === 'allocated') && (
-                    <button
-                      className="order-action-btn refund"
-                      disabled={orderActionLoading === o.out_trade_no}
-                      onClick={() => setRefundConfirmId(o.out_trade_no)}
-                    >
-                      {orderActionLoading === o.out_trade_no ? '...' : '退款'}
-                    </button>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
+          <table className="order-table">
+            <thead>
+              <tr>
+                <th>订单号</th>
+                <th>创建时间</th>
+                <th>支付时间</th>
+                <th>付款金额</th>
+                <th>购买分组</th>
+                <th>状态</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {orders.map(o => {
+                const sm = statusMap[o.status] ?? { label: o.status, cls: 'pending' };
+                const payCny = o.amount_cny ?? o.total_cny ?? 0;
+                return (
+                  <tr key={o.out_trade_no}>
+                    <td className="order-cell-id">{o.out_trade_no.slice(-8)}</td>
+                    <td>{o.created_at?.replace('T', ' ').slice(0, 16) || '-'}</td>
+                    <td>{o.paid_at?.replace('T', ' ').slice(0, 16) || '-'}</td>
+                    <td>¥{Number(payCny).toFixed(2)}</td>
+                    <td>{o.items?.map(i => i.group).join(' + ') || '-'}</td>
+                    <td><span className={`order-item-tag ${sm.cls}`}>{sm.label}</span>{refundPollingId === o.out_trade_no && <span className="refund-polling-spinner" />}</td>
+                    <td className="order-cell-actions">
+                      {o.status === 'pending' && (
+                        <button className="order-action-btn cancel" disabled={orderActionLoading === o.out_trade_no} onClick={() => handleCancelOrder(o.out_trade_no)}>
+                          {orderActionLoading === o.out_trade_no ? '...' : '取消'}
+                        </button>
+                      )}
+                      {(o.status === 'paid' || o.status === 'allocated') && (
+                        <button className="order-action-btn refund" disabled={orderActionLoading === o.out_trade_no} onClick={() => setRefundConfirmId(o.out_trade_no)}>
+                          {orderActionLoading === o.out_trade_no ? '...' : '退款'}
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         )}
       </div>
 
@@ -733,11 +805,11 @@ export default function Account() {
         return (
           <div className="refund-confirm-overlay" onClick={() => setRefundConfirmId(null)}>
             <div className="refund-confirm-dialog" onClick={e => e.stopPropagation()}>
-              <h3>确认退款</h3>
+              <h3>申请退款</h3>
               <p className="refund-confirm-hint">
                 {ro
-                  ? <>订单 <strong>{ro.out_trade_no}</strong>，金额 <strong>${Number(ro.total_usd).toFixed(2)}</strong>{ro.total_cny > 0 && <>（¥{Number(ro.total_cny).toFixed(2)}）</>}<br />退款后余额将被扣除，确认退款？</>
-                  : '确认退款？'}
+                  ? <>订单 <strong>{ro.out_trade_no}</strong>，金额 <strong>${Number(ro.total_usd).toFixed(2)}</strong>{ro.total_cny > 0 && <>（¥{Number(ro.total_cny).toFixed(2)}）</>}<br />提交退款申请后需等待管理员确认，确认后余额将返还。是否提交退款申请？</>
+                  : '提交退款申请后需等待管理员确认，确认后余额将返还。是否提交退款申请？'}
               </p>
               <div className="refund-confirm-actions">
                 <button className="refund-confirm-cancel" onClick={() => setRefundConfirmId(null)}>取消</button>
@@ -746,7 +818,7 @@ export default function Account() {
                   disabled={orderActionLoading === refundConfirmId}
                   onClick={() => handleRefundOrder(refundConfirmId)}
                 >
-                  {orderActionLoading === refundConfirmId ? '处理中...' : '确认退款'}
+                  {orderActionLoading === refundConfirmId ? '提交中...' : '提交申请'}
                 </button>
               </div>
             </div>
@@ -871,7 +943,9 @@ function PricingDialog({ models, usageRecords, onLoadRecords, onClose }: Pricing
           <thead>
             <tr>
               <th>模型</th>
+              <th>提供商</th>
               <th>类型</th>
+              <th>计费方式</th>
               <th>单价</th>
             </tr>
           </thead>
@@ -879,13 +953,18 @@ function PricingDialog({ models, usageRecords, onLoadRecords, onClose }: Pricing
             {models.map(m => (
               <tr key={m.name}>
                 <td>{m.display_name || m.name}</td>
+                <td>{m.provider}</td>
                 <td>{m.model_type === 'image' ? '图片' : '对话'}</td>
+                <td>{m.billing_type === 'per_call' ? '按次计费' : '按量计费'}</td>
                 <td>
-                  {m.model_type === 'image'
-                    ? (m.price_per_image ? `$${m.price_per_image}/张` : '-')
-                    : (m.price_input_per_m
-                      ? `输入 $${m.price_input_per_m}/1M tokens`
-                      : '-')
+                  {m.billing_type === 'per_call'
+                    ? (m.price_per_call ? `$${m.price_per_call}/次` : '-')
+                    : <>
+                      {m.price_input && <div>输入 $${m.price_input}/1K tokens</div>}
+                      {m.price_output && <div>输出 $${m.price_output}/1K tokens</div>}
+                      {m.price_cached && <div>缓存 $${m.price_cached}/1K tokens</div>}
+                      {!m.price_input && !m.price_output && '-'}
+                    </>
                   }
                 </td>
               </tr>

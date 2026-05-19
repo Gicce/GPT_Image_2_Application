@@ -66,11 +66,13 @@ export interface UserOrder {
   out_trade_no: string;
   total_usd: number;
   total_cny: number;
-  status: 'pending' | 'paid' | 'allocated' | 'refunding' | 'refunded' | 'closed';
+  status: 'pending' | 'paid' | 'assigned' | 'allocated' | 'refunding' | 'refunded' | 'refund_change' | 'closed';
   items: { group: string; amount_usd: number }[];
   created_at: string;
   paid_at?: string;
   allocated_at?: string;
+  amount_cny?: number;
+  amount_usd?: number;
 }
 
 export interface UsageRecord {
@@ -88,15 +90,19 @@ export interface PackagesResponse {
 }
 
 export interface ServerModel {
+  id: string;
   name: string;
   display_name: string;
+  provider: string;
+  billing_type: 'per_call' | 'per_token';
   model_type: 'image' | 'chat';
   trial_allowed: boolean;
   group?: string | null;
-  price_per_image?: string;
-  price_input_per_m?: string;
-  price_output_per_m?: string;
-  price_cached_per_m?: string;
+  user_has_access: boolean;
+  price_input: string | null;
+  price_output: string | null;
+  price_cached: string | null;
+  price_per_call: string | null;
 }
 
 export interface ServerPrompt {
@@ -241,14 +247,14 @@ export const serverApi = {
     ),
 
   refundOrder: (out_trade_no: string) =>
-    request<{ status: string; out_refund_no: string }>(
+    request<{ status: string; out_trade_no: string; message: string }>(
       `/api/pay/refund_order/${out_trade_no}`,
       { method: 'POST' },
       true
     ),
 
   refundStatus: (out_trade_no: string) =>
-    request<{ status: string; out_refund_no: string; amount_cny: number }>(
+    request<{ status: string; out_refund_no: string | null; amount_cny: number }>(
       `/api/pay/refund_status/${out_trade_no}`,
       {},
       true
