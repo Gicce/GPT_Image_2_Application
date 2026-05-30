@@ -6,6 +6,7 @@ interface ImageState {
   images: ImageRecord[];
   loading: boolean;
   loadImages: () => Promise<void>;
+  rescanImages: () => Promise<void>;
   deleteImage: (imageId: string) => Promise<void>;
 }
 
@@ -17,6 +18,16 @@ export const useImageStore = create<ImageState>((set, get) => ({
     set({ loading: true });
     try {
       const images = await api.getImages();
+      set({ images, loading: false });
+    } catch {
+      set({ loading: false });
+    }
+  },
+
+  rescanImages: async () => {
+    set({ loading: true });
+    try {
+      const images = await api.rescanImageLibrary();
       set({ images, loading: false });
     } catch {
       set({ loading: false });

@@ -4,16 +4,17 @@ interface Props {
   convTitle: string;
   onConfirm: () => void;
   onCancel: () => void;
+  busy?: boolean;
 }
 
-export default function DeleteConvDialog({ convTitle, onConfirm, onCancel }: Props) {
+export default function DeleteConvDialog({ convTitle, onConfirm, onCancel, busy = false }: Props) {
   return (
-    <div className="dcd-overlay" onClick={onCancel}>
+    <div className="dcd-overlay" onClick={busy ? undefined : onCancel}>
       <div className="dcd-dialog" onClick={e => e.stopPropagation()}>
         <div className="dcd-icon-row">
           <div className="dcd-icon">
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
-              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z" fill="currentColor"/>
+              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z" fill="currentColor" />
             </svg>
           </div>
         </div>
@@ -23,8 +24,8 @@ export default function DeleteConvDialog({ convTitle, onConfirm, onCancel }: Pro
           <p className="dcd-conv-name">"{convTitle.length > 40 ? convTitle.slice(0, 40) + '...' : convTitle}"</p>
         </div>
         <div className="dcd-actions">
-          <button className="dcd-btn dcd-btn-cancel" onClick={onCancel}>取消</button>
-          <button className="dcd-btn dcd-btn-delete" onClick={onConfirm}>删除</button>
+          <button className="dcd-btn dcd-btn-cancel app-btn app-btn-secondary" onClick={onCancel} disabled={busy}>取消</button>
+          <button className="dcd-btn dcd-btn-delete app-btn app-btn-danger" onClick={onConfirm} disabled={busy}>{busy ? '删除中...' : '删除'}</button>
         </div>
       </div>
     </div>

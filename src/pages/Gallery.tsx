@@ -1,10 +1,10 @@
-import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useImageStore } from '../store/useImageStore';
 import { api } from '../services/api';
 import type { ImageRecord } from '../types';
 import './Gallery.css';
 
-const PAGE_SIZE = 20;
+const PAGE_SIZE = 24;
 
 export default function Gallery() {
   const { images, loadImages, deleteImage } = useImageStore();
@@ -13,29 +13,45 @@ export default function Gallery() {
   const [thumbUrls, setThumbUrls] = useState<Record<string, string>>({});
   const loadingRef = useRef<Set<string>>(new Set());
 
-  useEffect(() => { loadImages(); }, []);
+  useEffect(() => { void loadImages(); }, [loadImages]);
 
-  const sorted = useMemo(() =>
-    [...images].sort((a, b) =>
-      new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-    ), [images]);
-
+  const sorted = useMemo(
+    () => [...images].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()),
+    [images]
+  );
   const visibleImages = sorted.slice(0, visibleCount);
   const hasMore = visibleCount < sorted.length;
 
+  const grouped = useMemo(() => {
+    const visibleIds = new Set(visibleImages.map(image => image.id));
+    const local = visibleImages.filter(image => visibleIds.has(image.id) && image.source_kind === 'library_input');
+    const output = visibleImages.filter(image => visibleIds.has(image.id) && image.source_kind !== 'library_input');
+    return [
+      { key: 'library_input', title: '本地目录', items: local },
+      { key: 'output', title: '输出目录', items: output },
+    ].filter(group => group.items.length > 0);
+  }, [visibleImages]);
+
   const loadThumb = useCallback(async (img: ImageRecord) => {
+    if (img.missing) return;
     if (thumbUrls[img.id] || loadingRef.current.has(img.id)) return;
     loadingRef.current.add(img.id);
     try {
       const url = await api.readThumbnail(img.local_path);
       setThumbUrls(prev => ({ ...prev, [img.id]: url }));
-    } catch {}
+    } catch {
+      setThumbUrls(prev => {
+        const next = { ...prev };
+        delete next[img.id];
+        return next;
+      });
+    }
     loadingRef.current.delete(img.id);
   }, [thumbUrls]);
 
   useEffect(() => {
-    visibleImages.forEach(img => loadThumb(img));
-  }, [visibleImages]);
+    visibleImages.forEach(img => { void loadThumb(img); });
+  }, [visibleImages, loadThumb]);
 
   const handleScroll = useCallback(() => {
     if (!hasMore) return;
@@ -53,70 +69,88 @@ export default function Gallery() {
     return () => el.removeEventListener('scroll', handleScroll);
   }, [handleScroll]);
 
-  const handleDelete = async (img: ImageRecord) => {
-    if (confirm(`确定删除图片 ${img.file_name}？文件将从磁盘移除。`)) {
-      await deleteImage(img.id);
-    }
+  const removeMissingRecord = async (img: ImageRecord) => {
+    await deleteImage(img.id);
   };
 
   return (
     <div className="page">
       <div className="page-header">
         <h2>图片库</h2>
-        <p>查看所有已生成的图片（共 {sorted.length} 张）</p>
+        <p>查看和管理本地目录与输出目录中的图片（共 {sorted.length} 张）。</p>
       </div>
 
       {sorted.length === 0 ? (
         <div className="empty-state">
           <p>暂无图片</p>
-          <p className="empty-hint">创建批量任务来生成图片</p>
+          <p className="empty-hint">请先在设置中配置文件目录或输出目录。</p>
         </div>
       ) : (
         <>
-          <div className="gallery-grid">
-            {visibleImages.map(img => (
-              <div key={img.id} className="gallery-item">
-                <div className="gallery-thumb" onClick={() => setPreview(img)}>
-                  {thumbUrls[img.id] ? (
-                    <img src={thumbUrls[img.id]} alt={img.file_name} />
-                  ) : (
-                    <div className="gallery-loading">加载中...</div>
-                  )}
-                </div>
-                <div className="gallery-info">
-                  <p className="gallery-name" title={img.file_name}>{img.file_name}</p>
-                  <p className="gallery-time">{new Date(img.created_at).toLocaleString('zh-CN')}</p>
-                </div>
-                <div className="gallery-actions">
-                  <button onClick={() => api.openFile(img.local_path)}>打开</button>
-                  <button onClick={() => api.openFolder(img.local_path)}>目录</button>
-                  <button className="del-btn" onClick={() => handleDelete(img)}>删除</button>
-                </div>
+          {grouped.map(group => (
+            <section key={group.key} className="gallery-section">
+              <div className="gallery-section-header">
+                <h3>{group.title}</h3>
+                <span>{group.items.length} 张</span>
               </div>
-            ))}
-          </div>
+              <div className="gallery-grid">
+                {group.items.map(img => (
+                  <div key={img.id} className={`gallery-item ${img.missing ? 'missing' : ''}`}>
+                    <div className="gallery-thumb" onClick={() => !img.missing && setPreview(img)}>
+                      {img.missing ? (
+                        <div className="gallery-loading">文件已移动或不存在</div>
+                      ) : thumbUrls[img.id] ? (
+                        <img src={thumbUrls[img.id]} alt={img.file_name} />
+                      ) : (
+                        <div className="gallery-loading">加载中...</div>
+                      )}
+                    </div>
+                    <div className="gallery-info">
+                      <p className="gallery-name" title={img.file_name}>{img.file_name}</p>
+                      <p className="gallery-time">{new Date(img.created_at).toLocaleString('zh-CN')}</p>
+                      <p className="gallery-time">{img.missing ? '文件缺失' : (img.source_kind === 'library_input' ? '本地目录' : '输出目录')}</p>
+                    </div>
+                    <div className="gallery-actions">
+                      {!img.missing ? (
+                        <>
+                          <button onClick={() => api.openFile(img.local_path)}>打开</button>
+                          <button onClick={() => api.openFolder(img.local_path)}>目录</button>
+                        </>
+                      ) : (
+                        <button onClick={() => removeMissingRecord(img)}>移除记录</button>
+                      )}
+                      <button className="del-btn" onClick={() => deleteImage(img.id)}>删除</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          ))}
           {hasMore && (
             <div className="load-more">
               <button onClick={() => setVisibleCount(prev => prev + PAGE_SIZE)}>
-                加载更多（还有 {sorted.length - visibleCount} 张）
+                加载更多（还剩 {sorted.length - visibleCount} 张）
               </button>
             </div>
           )}
         </>
       )}
 
-      {preview && (
-        <PreviewModal preview={preview} onClose={() => setPreview(null)} />
-      )}
+      {preview && <PreviewModal preview={preview} onClose={() => setPreview(null)} />}
     </div>
   );
 }
 
 function PreviewModal({ preview, onClose }: { preview: ImageRecord; onClose: () => void }) {
   const [url, setUrl] = useState<string>('');
+  const [error, setError] = useState('');
 
   useEffect(() => {
-    api.readImageData(preview.local_path).then(setUrl);
+    let cancelled = false;
+    api.readImageData(preview.local_path)
+      .then(value => { if (!cancelled) setUrl(value); })
+      .catch(err => { if (!cancelled) setError(String(err)); });
+    return () => { cancelled = true; };
   }, [preview.local_path]);
 
   return (
@@ -124,10 +158,12 @@ function PreviewModal({ preview, onClose }: { preview: ImageRecord; onClose: () 
       <div className="preview-modal" onClick={e => e.stopPropagation()}>
         <div className="preview-header">
           <span>{preview.file_name}</span>
-          <button onClick={onClose}>✕</button>
+          <button onClick={onClose}>×</button>
         </div>
         <div className="preview-body">
-          {url ? (
+          {error ? (
+            <div className="gallery-loading">{error}</div>
+          ) : url ? (
             <img src={url} alt={preview.file_name} />
           ) : (
             <div className="gallery-loading">加载原图中...</div>

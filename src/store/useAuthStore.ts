@@ -4,8 +4,8 @@ import { serverApi } from '../services/serverApi';
 import { useSettingsStore } from './useSettingsStore';
 
 // 全局缓存：group → model_type 的映射，由首次成功的 getModels 调用填充
-let groupTypeMap: Record<string, 'image' | 'chat'> = {};
-export function setGroupTypeMap(map: Record<string, 'image' | 'chat'>) {
+let groupTypeMap: Record<string, 'image' | 'agent' | 'postprocess' | 'chat'> = {};
+export function setGroupTypeMap(map: Record<string, 'image' | 'agent' | 'postprocess' | 'chat'>) {
   groupTypeMap = { ...groupTypeMap, ...map };
   // 立刻同步一次
   const u = useAuthStore.getState().user;
@@ -28,6 +28,13 @@ export function isImageGroup(group: string): boolean {
   return /sora|gpt-?image/i.test(group);
 }
 
+export function displayGroupType(group: string): 'image' | 'agent' | 'postprocess' {
+  const mapped = groupTypeMap[group];
+  if (mapped === 'image') return 'image';
+  if (mapped === 'postprocess') return 'postprocess';
+  return 'agent';
+}
+
 // 把后端下发的 token 自动同步到本地 settings，让 Rust 端能读
 function syncTokensToSettings(user: UserInfo | null) {
   if (!user) return;
@@ -39,9 +46,10 @@ function syncTokensToSettings(user: UserInfo | null) {
   const partial: any = {};
   // 直接用 groupTypeMap 做精确匹配，不再依赖 isImageGroup()
   const imageToken = user.tokens.find(t => groupTypeMap[t.group] === 'image')?.api_token ?? '';
-  const chatToken = user.tokens.find(t => groupTypeMap[t.group] === 'chat')?.api_token ?? '';
+  const agentToken = user.tokens.find(t => groupTypeMap[t.group] === 'agent' || groupTypeMap[t.group] === 'chat')?.api_token ?? '';
   if (settings.token !== imageToken) partial.token = imageToken;
-  if (settings.chat_token !== chatToken) partial.chat_token = chatToken;
+  if (settings.agent_token !== agentToken) partial.agent_token = agentToken;
+  if (settings.chat_token !== agentToken) partial.chat_token = agentToken;
   if (Object.keys(partial).length > 0) {
     useSettingsStore.getState().saveSettings(partial);
   }

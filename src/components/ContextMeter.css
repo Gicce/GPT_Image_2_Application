@@ -1,0 +1,39 @@
+.context-meter {
+  position: relative;
+  width: 38px;
+  height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-chat-muted);
+  font-size: 10px;
+  flex: 0 0 auto;
+}
+
+.context-meter svg {
+  position: absolute;
+  inset: 0;
+  transform: rotate(-90deg);
+}
+
+.context-meter path {
+  fill: none;
+  stroke-width: 3;
+}
+
+.context-meter .track {
+  stroke: var(--border-default);
+}
+
+.context-meter .bar {
+  stroke: var(--accent-success);
+  stroke-linecap: round;
+}
+
+.context-meter.warn .bar {
+  stroke: var(--accent-orange);
+}
+
+.context-meter.danger .bar {
+  stroke: var(--accent-danger);
+}

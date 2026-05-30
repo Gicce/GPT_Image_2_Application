@@ -1,4 +1,7 @@
-const SERVER_BASE = 'https://www.zjcypc.com';
+import { useSettingsStore } from '../store/useSettingsStore';
+
+const DEFAULT_SERVER_BASE = 'https://www.zjcypc.com';
+const DIRECT_SERVER_BASE = 'http://124.221.205.221';
 
 export interface UserToken {
   group: string;
@@ -95,7 +98,7 @@ export interface ServerModel {
   display_name: string;
   provider: string;
   billing_type: 'per_call' | 'per_token';
-  model_type: 'image' | 'chat';
+  model_type: 'image' | 'agent' | 'postprocess' | 'chat';
   trial_allowed: boolean;
   group?: string | null;
   user_has_access: boolean;
@@ -103,6 +106,9 @@ export interface ServerModel {
   price_output: string | null;
   price_cached: string | null;
   price_per_call: string | null;
+  context_window?: number | null;
+  supports_tools?: boolean | null;
+  supports_vision?: boolean | null;
 }
 
 export interface ServerPrompt {
@@ -112,8 +118,59 @@ export interface ServerPrompt {
   content: string;
 }
 
-function getBase(): string {
-  return SERVER_BASE;
+export interface UsageEstimateItem {
+  type: 'agent' | 'image' | 'postprocess' | 'chat';
+  model?: string;
+  tool?: string;
+  quantity?: number;
+  input_tokens?: number;
+  output_tokens?: number;
+  cached_tokens?: number;
+}
+
+export interface UsageEstimateGroup {
+  group: string;
+  required_usd: number;
+  balance_usd: number;
+  enough: boolean;
+}
+
+export interface UsageEstimate {
+  can_run: boolean;
+  total_cost_usd: number;
+  groups: UsageEstimateGroup[];
+  message?: string;
+}
+
+function normalizeBaseUrl(value?: string | null): string {
+  const trimmed = (value || '').trim();
+  if (!trimmed) return DEFAULT_SERVER_BASE;
+  return trimmed.replace(/\/+$/, '');
+}
+
+function getBaseCandidates(): string[] {
+  const configured = normalizeBaseUrl(useSettingsStore.getState().settings.server_url);
+  const candidates = [configured];
+
+  try {
+    const parsed = new URL(configured);
+    if (parsed.hostname === 'www.zjcypc.com') {
+      candidates.push(`${parsed.protocol}//zjcypc.com`);
+      candidates.push(DIRECT_SERVER_BASE);
+    } else if (parsed.hostname === 'zjcypc.com') {
+      candidates.push(`${parsed.protocol}//www.zjcypc.com`);
+      candidates.push(DIRECT_SERVER_BASE);
+    } else if (parsed.hostname === '124.221.205.221') {
+      candidates.push(DEFAULT_SERVER_BASE);
+      candidates.push('https://zjcypc.com');
+    }
+  } catch {
+    candidates.push(DEFAULT_SERVER_BASE);
+    candidates.push('https://zjcypc.com');
+    candidates.push(DIRECT_SERVER_BASE);
+  }
+
+  return [...new Set(candidates.map(normalizeBaseUrl).filter(Boolean))];
 }
 
 function getToken(): string | null {
@@ -129,8 +186,8 @@ async function request<T>(
   options: RequestInit = {},
   auth = false
 ): Promise<T> {
-  const base = getBase();
-  if (!base) throw new Error('未配置服务器地址');
+  const bases = getBaseCandidates();
+  if (bases.length === 0) throw new Error('Server base URL is not configured');
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -141,18 +198,34 @@ async function request<T>(
     if (token) headers['Authorization'] = `Bearer ${token}`;
   }
 
-  const res = await fetch(`${base}${path}`, { ...options, headers });
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    const err: any = new Error(body.detail || `HTTP ${res.status}`);
-    err.status = res.status;
-    throw err;
+  let lastError: any = null;
+
+  for (const base of bases) {
+    try {
+      const res = await fetch(`${base}${path}`, { ...options, headers });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        const err: any = new Error(body.detail || `HTTP ${res.status}`);
+        err.status = res.status;
+        throw err;
+      }
+      return res.json();
+    } catch (err: any) {
+      lastError = err;
+      const isNetworkError =
+        err?.name === 'TypeError' ||
+        /Failed to fetch|NetworkError|Load failed|network|fetch/i.test(err?.message || '');
+      if (!isNetworkError || base === bases[bases.length - 1]) {
+        throw err;
+      }
+    }
   }
-  return res.json();
+
+  throw lastError || new Error('Request failed');
 }
 
-// 把后端返回的 user 原始结构标准化为客户端 UserInfo
-// 兼容两种字段命名：balance_usd / image_balance_usd
+// ?????? user ??????????? UserInfo
+// ?????????balance_usd / image_balance_usd
 function normalizeUser(raw: any): UserInfo {
   const tokens: UserToken[] = Array.isArray(raw.tokens)
     ? raw.tokens.map((t: any) => ({
@@ -227,6 +300,27 @@ export const serverApi = {
     request<{ cost_usd: number; balance_usd: number; group?: string; account_type?: 'trial' | 'normal' | 'paid' }>(
       '/api/usage/report/chat',
       { method: 'POST', body: JSON.stringify({ model, input_tokens, output_tokens, cached_tokens }) },
+      true
+    ),
+
+  estimateUsage: (items: UsageEstimateItem[]) =>
+    request<UsageEstimate>(
+      '/api/usage/estimate',
+      { method: 'POST', body: JSON.stringify({ items }) },
+      true
+    ),
+
+  reportAgent: (model: string, input_tokens: number, output_tokens: number, cached_tokens: number, request_id?: string) =>
+    request<{ cost_usd: number; balance_usd: number; group?: string; account_type?: 'trial' | 'normal' | 'paid' }>(
+      '/api/usage/report/agent',
+      { method: 'POST', body: JSON.stringify({ model, input_tokens, output_tokens, cached_tokens, request_id }) },
+      true
+    ),
+
+  reportTool: (tool: string, quantity: number, tool_call_id: string) =>
+    request<{ cost_usd: number; balance_usd: number; group?: string; account_type?: 'trial' | 'normal' | 'paid' }>(
+      '/api/usage/report/tool',
+      { method: 'POST', body: JSON.stringify({ tool, quantity, tool_call_id }) },
       true
     ),
 

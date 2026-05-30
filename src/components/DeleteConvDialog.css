@@ -80,13 +80,19 @@
   font-family: inherit;
 }
 
+.dcd-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+  filter: none;
+}
+
 .dcd-btn-cancel {
   background: var(--bg-subtle);
   color: var(--text-secondary);
   margin-right: 10px;
 }
 
-.dcd-btn-cancel:hover {
+.dcd-btn-cancel:hover:not(:disabled) {
   background: var(--bg-hover);
 }
 
@@ -95,7 +101,7 @@
   color: var(--text-on-accent);
 }
 
-.dcd-btn-delete:hover {
+.dcd-btn-delete:hover:not(:disabled) {
   filter: brightness(0.85);
 }
 

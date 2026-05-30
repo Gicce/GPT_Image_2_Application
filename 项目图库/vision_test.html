@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OpenAI Vision API 测试工具</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f0f2f5; padding: 20px; color: #333; }
+  .container { max-width: 720px; margin: 0 auto; }
+  h1 { text-align: center; margin-bottom: 24px; font-size: 22px; }
+  .card { background: #fff; border-radius: 10px; padding: 20px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+  .card h2 { font-size: 15px; color: #666; margin-bottom: 12px; }
+  label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 4px; color: #555; }
+  input, textarea, select { width: 100%; padding: 8px 10px; border: 1px solid #d0d5dd; border-radius: 6px; font-size: 14px; margin-bottom: 12px; outline: none; transition: border .2s; }
+  input:focus, textarea:focus { border-color: #4f46e5; }
+  textarea { resize: vertical; min-height: 60px; font-family: inherit; }
+  .hint { font-size: 12px; color: #999; margin-top: -8px; margin-bottom: 10px; }
+  .mode-toggle { display: flex; gap: 8px; margin-bottom: 12px; }
+  .mode-toggle button { flex: 1; padding: 6px; border: 1px solid #d0d5dd; background: #f9fafb; border-radius: 6px; cursor: pointer; font-size: 13px; }
+  .mode-toggle button.active { background: #4f46e5; color: #fff; border-color: #4f46e5; }
+  #fileInput { display: none; }
+  .file-btn { display: inline-block; padding: 8px 14px; background: #f9fafb; border: 1px solid #d0d5dd; border-radius: 6px; cursor: pointer; font-size: 13px; }
+  .preview { margin-top: 8px; max-width: 200px; max-height: 150px; border-radius: 6px; display: none; }
+  .btn-send { width: 100%; padding: 10px; background: #4f46e5; color: #fff; border: none; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer; transition: background .2s; }
+  .btn-send:hover { background: #4338ca; }
+  .btn-send:disabled { background: #a5a5a5; cursor: not-allowed; }
+  .result { white-space: pre-wrap; font-size: 14px; line-height: 1.6; min-height: 40px; }
+  .status { font-size: 13px; margin-bottom: 8px; }
+  .status.ok { color: #16a34a; }
+  .status.err { color: #dc2626; }
+  .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #4f46e5; border-top-color: transparent; border-radius: 50%; animation: spin .6s linear infinite; vertical-align: middle; margin-right: 6px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .raw-toggle { font-size: 12px; color: #4f46e5; cursor: pointer; margin-top: 8px; display: inline-block; }
+  .raw-response { font-size: 12px; background: #f5f5f5; padding: 10px; border-radius: 6px; margin-top: 8px; max-height: 300px; overflow: auto; white-space: pre-wrap; word-break: break-all; display: none; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>OpenAI Vision API 测试工具</h1>
+
+  <!-- API 配置 -->
+  <div class="card">
+    <h2>API 配置</h2>
+    <label>API 格式</label>
+    <div class="mode-toggle">
+      <button class="active" onclick="switchApi('responses')">Responses API（推荐）</button>
+      <button onclick="switchApi('chat')">Chat Completions</button>
+    </div>
+    <label for="baseURL">Base URL（需包含 /v1）</label>
+    <input id="baseURL" type="text" placeholder="https://api.openai.com/v1" value="https://www.packyapi.com/v1">
+    <div class="hint">第三方代理示例：https://www.packyapi.com/v1</div>
+    <label for="apiKey">API Key</label>
+    <input id="apiKey" type="password" placeholder="sk-..." value="">
+    <label for="model">模型</label>
+    <input id="model" type="text" placeholder="gpt-4o / gpt-5.4" value="gpt-5.4">
+  </div>
+
+  <!-- 图片输入 -->
+  <div class="card">
+    <h2>图片</h2>
+    <div class="mode-toggle">
+      <button class="active" onclick="switchImg('url')">图片 URL</button>
+      <button onclick="switchImg('file')">上传文件</button>
+    </div>
+    <div id="urlMode">
+      <label for="imageUrl">图片 URL</label>
+      <input id="imageUrl" type="text" placeholder="https://example.com/photo.jpg">
+    </div>
+    <div id="fileMode" style="display:none">
+      <label class="file-btn" for="fileInput">选择图片文件</label>
+      <input id="fileInput" type="file" accept="image/*">
+      <img id="preview" class="preview" alt="preview">
+    </div>
+  </div>
+
+  <!-- 提示词 -->
+  <div class="card">
+    <h2>提示词</h2>
+    <textarea id="prompt" rows="2" placeholder="请描述这张图片的内容">请描述这张图片的内容</textarea>
+  </div>
+
+  <!-- 发送 -->
+  <button class="btn-send" id="sendBtn" onclick="send()">发送请求</button>
+
+  <!-- 结果 -->
+  <div class="card" id="resultCard" style="display:none; margin-top:16px;">
+    <h2>识别结果</h2>
+    <div id="status" class="status"></div>
+    <div id="result" class="result"></div>
+    <span class="raw-toggle" onclick="toggleRaw()">查看原始响应</span>
+    <div id="rawResponse" class="raw-response"></div>
+  </div>
+</div>
+
+<script>
+let apiFormat = 'responses';  // 'responses' | 'chat'
+let imgMode   = 'url';        // 'url' | 'file'
+let base64Img = null;
+
+function switchApi(fmt) {
+  apiFormat = fmt;
+  document.querySelectorAll('.mode-toggle')[0].querySelectorAll('button').forEach((b, i) => {
+    b.classList.toggle('active', (i === 0 ? 'responses' : 'chat') === fmt);
+  });
+}
+
+function switchImg(mode) {
+  imgMode = mode;
+  document.querySelectorAll('.mode-toggle')[1].querySelectorAll('button').forEach((b, i) => {
+    b.classList.toggle('active', (i === 0 ? 'url' : 'file') === mode);
+  });
+  document.getElementById('urlMode').style.display = mode === 'url' ? '' : 'none';
+  document.getElementById('fileMode').style.display = mode === 'file' ? '' : 'none';
+}
+
+document.getElementById('fileInput').addEventListener('change', function(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function(ev) {
+    base64Img = ev.target.result;
+    const p = document.getElementById('preview');
+    p.src = base64Img;
+    p.style.display = 'block';
+  };
+  reader.readAsDataURL(file);
+});
+
+function toggleRaw() {
+  const el = document.getElementById('rawResponse');
+  el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+
+function resolveBaseURL() {
+  let u = document.getElementById('baseURL').value.replace(/\/+$/, '');
+  if (!u.endsWith('/v1')) u += '/v1';
+  return u;
+}
+
+function getImageSource() {
+  return imgMode === 'url'
+    ? document.getElementById('imageUrl').value.trim()
+    : base64Img;
+}
+
+// ---------- Responses API (streaming) ----------
+async function sendResponses(baseURL, apiKey, model, prompt, imgSrc) {
+  const content = [{ type: 'input_text', text: prompt }];
+  if (imgSrc) content.push({ type: 'input_image', image_url: imgSrc });
+
+  const body = {
+    model,
+    stream: true,
+    input: [{ role: 'user', content }]
+  };
+
+  const resp = await fetch(baseURL + '/responses', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey },
+    body: JSON.stringify(body)
+  });
+
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({}));
+    throw new Error('HTTP ' + resp.status + ': ' + (err.error?.message || resp.statusText));
+  }
+
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let text = '';
+  let buffer = '';
+  const rawLines = [];
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop();
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue;
+      const payload = line.slice(6).trim();
+      if (payload === '[DONE]') continue;
+      rawLines.push(payload);
+      try {
+        const evt = JSON.parse(payload);
+        if (evt.type === 'response.output_text.delta') {
+          text += evt.delta || '';
+          document.getElementById('result').textContent = text;
+        }
+      } catch {}
+    }
+  }
+  document.getElementById('rawResponse').textContent = rawLines.map(l => {
+    try { return JSON.stringify(JSON.parse(l), null, 2); } catch { return l; }
+  }).join('\n\n');
+  return text;
+}
+
+// ---------- Chat Completions API ----------
+async function sendChat(baseURL, apiKey, model, prompt, imgSrc) {
+  const content = [{ type: 'text', text: prompt }];
+  if (imgSrc) content.push({ type: 'image_url', image_url: { url: imgSrc } });
+
+  const body = {
+    model,
+    messages: [{ role: 'user', content }],
+    max_tokens: 1024
+  };
+
+  const resp = await fetch(baseURL + '/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey },
+    body: JSON.stringify(body)
+  });
+
+  const data = await resp.json();
+  document.getElementById('rawResponse').textContent = JSON.stringify(data, null, 2);
+
+  if (!resp.ok) {
+    throw new Error('HTTP ' + resp.status + ': ' + (data.error?.message || resp.statusText));
+  }
+
+  const text = data.choices?.[0]?.message?.content;
+  if (!text) throw new Error('响应中没有找到内容，请查看原始响应');
+  return text;
+}
+
+async function send() {
+  const baseURL = resolveBaseURL();
+  const apiKey  = document.getElementById('apiKey').value.trim();
+  const model   = document.getElementById('model').value.trim();
+  const prompt  = document.getElementById('prompt').value.trim();
+  const imgSrc  = getImageSource();
+
+  if (!apiKey) { alert('请填写 API Key'); return; }
+  if (!prompt) { alert('请填写提示词'); return; }
+  if (!imgSrc) { alert('请提供图片'); return; }
+
+  const statusEl = document.getElementById('status');
+  const resultEl = document.getElementById('result');
+  const rawEl    = document.getElementById('rawResponse');
+  const card     = document.getElementById('resultCard');
+  const btn      = document.getElementById('sendBtn');
+
+  card.style.display = 'block';
+  statusEl.className = 'status';
+  statusEl.innerHTML = '<span class="spinner"></span>请求中...';
+  resultEl.textContent = '';
+  rawEl.textContent = '';
+  rawEl.style.display = 'none';
+  btn.disabled = true;
+
+  try {
+    const text = apiFormat === 'responses'
+      ? await sendResponses(baseURL, apiKey, model, prompt, imgSrc)
+      : await sendChat(baseURL, apiKey, model, prompt, imgSrc);
+
+    statusEl.className = 'status ok';
+    statusEl.textContent = '请求成功 (' + apiFormat + ' | 模型: ' + model + ')';
+    resultEl.textContent = text;
+  } catch (err) {
+    statusEl.className = 'status err';
+    statusEl.textContent = '请求失败';
+    resultEl.textContent = err.message;
+  } finally {
+    btn.disabled = false;
+  }
+}
+</script>
+</body>
+</html>

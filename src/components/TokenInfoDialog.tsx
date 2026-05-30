@@ -13,7 +13,7 @@ export default function TokenInfoDialog({ tokens, onClose }: Props) {
       <div className="ti-dialog" onClick={e => e.stopPropagation()}>
         <div className="ti-header">
           <h3 className="ti-title">Token 信息</h3>
-          <button className="ti-close" onClick={onClose}>✕</button>
+          <button className="ti-close" onClick={onClose}>×</button>
         </div>
         <div className="ti-body">
           {tokens.length === 0 ? (
@@ -38,7 +38,7 @@ export default function TokenInfoDialog({ tokens, onClose }: Props) {
           )}
         </div>
         <div className="ti-footer">
-          <button className="ti-btn ti-btn-ok" onClick={onClose}>确定</button>
+          <button className="ti-btn ti-btn-ok app-btn app-btn-primary" onClick={onClose}>确定</button>
         </div>
       </div>
     </div>

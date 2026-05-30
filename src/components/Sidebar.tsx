@@ -3,7 +3,7 @@ import { getVersion } from '@tauri-apps/api/app';
 import type { PageType } from '../types';
 import VersionModal from './VersionModal';
 import { useUpdateStore } from '../store/useUpdateStore';
-import { useAuthStore, isImageGroup } from '../store/useAuthStore';
+import { useAuthStore, displayGroupType } from '../store/useAuthStore';
 import './Sidebar.css';
 
 interface SidebarProps {
@@ -12,15 +12,13 @@ interface SidebarProps {
 }
 
 const menuItems: { id: PageType; label: string; icon: string }[] = [
-  { id: 'create', label: '文生图', icon: '✦' },
-  { id: 'edit', label: '图生图', icon: '✎' },
-  { id: 'chat', label: '智能对话', icon: '💬' },
-  { id: 'queue', label: '任务队列', icon: '☰' },
+  { id: 'agent', label: 'AI 智能体', icon: '◎' },
+  { id: 'queue', label: '任务队列', icon: '▣' },
   { id: 'gallery', label: '图片库', icon: '▦' },
-  { id: 'history', label: '历史记录', icon: '🕐' },
-  { id: 'account', label: '我的账户', icon: '👤' },
+  { id: 'history', label: '历史记录', icon: '◷' },
+  { id: 'account', label: '我的账户', icon: '◉' },
   { id: 'settings', label: '设置', icon: '⚙' },
-  { id: 'about', label: '关于我们', icon: '◉' },
+  { id: 'about', label: '关于我们', icon: 'ⓘ' },
 ];
 
 export default function Sidebar({ currentPage, onNavigate }: SidebarProps) {
@@ -41,7 +39,7 @@ export default function Sidebar({ currentPage, onNavigate }: SidebarProps) {
       <div className="sidebar-header">
         <img src="/logo.png" alt="Logo" className="sidebar-logo" />
         <h1 className="sidebar-title">CyImagePro</h1>
-        <p className="sidebar-subtitle">AI 图片批量生成工具</p>
+        <p className="sidebar-subtitle">AI 图片生产智能体</p>
       </div>
       <nav className="sidebar-nav">
         {menuItems.map(item => (
@@ -55,7 +53,7 @@ export default function Sidebar({ currentPage, onNavigate }: SidebarProps) {
             {item.id === 'account' && isLoggedIn && user && user.tokens && user.tokens.length > 0 && (
               <div className="sidebar-balance-group">
                 {user.tokens.map(t => (
-                  <span key={t.group} className={`sidebar-balance ${isImageGroup(t.group) ? 'img' : 'chat'}`}>
+                  <span key={t.group} className={`sidebar-balance ${displayGroupType(t.group) === 'image' ? 'img' : 'chat'}`}>
                     ${Number(t.balance_usd).toFixed(2)}
                   </span>
                 ))}
@@ -68,10 +66,10 @@ export default function Sidebar({ currentPage, onNavigate }: SidebarProps) {
         <button
           className={`version-button${hasUpdate ? ' version-button--update' : ''}`}
           onClick={() => setShowVersionModal(true)}
-          title={hasUpdate ? `发现新版本 v${status.updateInfo?.version}，点击查看` : '点击查看版本信息'}
+          title={hasUpdate ? `发现新版本 v${status.updateInfo?.version}` : '查看版本信息'}
         >
           {appVersion || '...'}
-          {hasUpdate && <span className="version-update-dot">★</span>}
+          {hasUpdate && <span className="version-update-dot">●</span>}
         </button>
       </div>
       {showVersionModal && (

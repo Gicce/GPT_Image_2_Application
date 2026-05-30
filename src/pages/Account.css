@@ -14,6 +14,69 @@
   flex-wrap: wrap;
 }
 
+.account-avatar-panel {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-right: 28px;
+}
+
+.account-avatar {
+  width: 58px;
+  height: 58px;
+  border-radius: 50%;
+  overflow: hidden;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent-primary);
+  color: var(--text-on-accent);
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.account-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.account-avatar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  max-width: 180px;
+}
+
+.account-avatar-btn {
+  padding: 6px 10px;
+  border: none;
+  border-radius: 7px;
+  background: var(--accent-primary);
+  color: var(--text-on-accent);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.account-avatar-btn.secondary {
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-light);
+}
+
+.account-avatar-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.account-avatar-hint {
+  width: 100%;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
 .account-info-row {
   display: flex;
   gap: 32px;
@@ -202,6 +265,11 @@
   transition: border-color 0.2s;
 }
 
+.recharge-card.highlight {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 3px var(--accent-primary-light);
+}
+
 .recharge-card:hover {
   border-color: var(--accent-primary);
 }
@@ -298,6 +366,35 @@
   display: block;
 }
 
+.recharge-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0;
+}
+
+.recharge-preset-btn {
+  padding: 6px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 7px;
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.recharge-preset-btn:hover {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary-text);
+}
+
+.recharge-preset-btn.active {
+  background: var(--accent-primary);
+  border-color: var(--accent-primary);
+  color: var(--text-on-accent);
+}
+
 .recharge-card-input {
   display: flex;
   align-items: center;
@@ -357,6 +454,26 @@
   border-radius: 10px;
   padding: 14px 16px;
   margin-top: 16px;
+}
+
+.recharge-summary-items {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.recharge-summary-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.recharge-summary-item strong {
+  color: var(--text-primary);
 }
 
 .recharge-summary-row {

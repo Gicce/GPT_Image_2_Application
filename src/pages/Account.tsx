@@ -1,15 +1,11 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { lazy, Suspense, useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useAuthStore, setGroupTypeMap, isImageGroup, getGroupTypeMap } from '../store/useAuthStore';
+import { useSettingsStore } from '../store/useSettingsStore';
 import { serverApi, type ServerModel, type UserToken, type PayLimits, type UserOrder, type UsageRecord } from '../services/serverApi';
+import { api } from '../services/api';
 import TokenField from '../components/TokenField';
 import TokenInfoDialog from '../components/TokenInfoDialog';
 import { explainError } from '../utils/errors';
-import QRCode from 'qrcode';
-import {
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  PieChart, Pie, Cell, Legend,
-  BarChart, Bar,
-} from 'recharts';
 import './Account.css';
 
 interface PendingOrder {
@@ -21,9 +17,32 @@ interface PendingOrder {
 }
 
 type AllocStatus = 'pending' | 'paid' | 'allocated' | 'closed' | 'unknown';
+type UsageChartTab = 'line' | 'pie' | 'bar';
+
+const AccountUsageCharts = lazy(() => import('../components/AccountUsageCharts'));
+
+let qrCodeModulePromise: Promise<typeof import('qrcode')> | null = null;
+
+async function generatePaymentQrCode(codeUrl: string) {
+  if (!qrCodeModulePromise) {
+    qrCodeModulePromise = import('qrcode');
+  }
+  const QRCode = await qrCodeModulePromise;
+  return QRCode.toDataURL(codeUrl, { width: 200, margin: 2 });
+}
+
+function getInitials(name?: string | null): string {
+  const value = (name || '').trim();
+  if (!value) return 'U';
+  if (/[\u4e00-\u9fa5]/.test(value)) return value.match(/[\u4e00-\u9fa5]/)?.[0] || 'U';
+  const parts = value.split(/[\s._-]+/).filter(Boolean);
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+  return value.slice(0, 2).toUpperCase();
+}
 
 export default function Account() {
   const { user, isLoggedIn, refreshUser, logout, upgradeTrial, showAuthPrompt } = useAuthStore();
+  const { settings, saveSettings } = useSettingsStore();
   const [trialLoading, setTrialLoading] = useState(false);
   const [usage, setUsage] = useState<UsageRecord[]>([]);
   const [models, setModels] = useState<ServerModel[]>([]);
@@ -37,7 +56,7 @@ export default function Account() {
   const [polling, setPolling] = useState(false);
   const [statusMsg, setStatusMsg] = useState('');
   const [loadingUsage, setLoadingUsage] = useState(false);
-  const [usageChartTab, setUsageChartTab] = useState<'line' | 'pie' | 'bar'>('line');
+  const [usageChartTab, setUsageChartTab] = useState<UsageChartTab>('line');
   const [qrCodeUrl, setQrCodeUrl] = useState<string>('');
   const [qrCodeLink, setQrCodeLink] = useState<string>('');
   const [showTokenDialog, setShowTokenDialog] = useState(false);
@@ -49,6 +68,7 @@ export default function Account() {
   const [refundConfirmId, setRefundConfirmId] = useState<string | null>(null);
   const [refundPollingId, setRefundPollingId] = useState<string | null>(null);
   const [refundStatusMsg, setRefundStatusMsg] = useState('');
+  const [rechargeFocus, setRechargeFocus] = useState<string | null>(null);
   const allocTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const refundTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -64,6 +84,17 @@ export default function Account() {
   useEffect(() => () => {
     if (allocTimerRef.current) clearInterval(allocTimerRef.current);
     if (refundTimerRef.current) clearInterval(refundTimerRef.current);
+  }, []);
+
+  useEffect(() => {
+    const focus = localStorage.getItem('cy_recharge_focus');
+    if (!focus) return;
+    localStorage.removeItem('cy_recharge_focus');
+    setRechargeFocus(focus);
+    setTimeout(() => {
+      document.querySelector('.recharge-card.highlight')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 100);
+    setTimeout(() => setRechargeFocus(null), 8000);
   }, []);
 
   async function loadOrders() {
@@ -169,7 +200,7 @@ export default function Account() {
       const list = await serverApi.getModels();
       console.log('[loadModels] 获取到模型列表:', list.length, list.map(m => `${m.name}(${m.model_type},group=${m.group})`));
       setModels(list);
-      const map: Record<string, 'image' | 'chat'> = {};
+      const map: Record<string, 'image' | 'agent' | 'postprocess' | 'chat'> = {};
       for (const m of list) if (m.group) map[m.group] = m.model_type;
       setGroupTypeMap(map);
     } catch (e) {
@@ -203,34 +234,39 @@ export default function Account() {
   }
 
   // 按 model_type 分类的模型清单（去重 group）
-  const groupsByType: { image: { name: string }[]; chat: { name: string }[] } = (() => {
+  const groupsByType: { image: { name: string }[]; agent: { name: string }[]; postprocess: { name: string }[]; chat: { name: string }[] } = (() => {
     const seenImg = new Set<string>();
-    const seenChat = new Set<string>();
+    const seenAgent = new Set<string>();
+    const seenPost = new Set<string>();
     const img: { name: string }[] = [];
-    const chat: { name: string }[] = [];
+    const agent: { name: string }[] = [];
+    const postprocess: { name: string }[] = [];
     for (const m of models) {
       if (!m.group) continue;
       if (m.model_type === 'image' && !seenImg.has(m.group)) {
         seenImg.add(m.group);
         img.push({ name: m.group });
-      } else if (m.model_type === 'chat' && !seenChat.has(m.group)) {
-        seenChat.add(m.group);
-        chat.push({ name: m.group });
+      } else if ((m.model_type === 'agent' || m.model_type === 'chat') && !seenAgent.has(m.group)) {
+        seenAgent.add(m.group);
+        agent.push({ name: m.group });
+      } else if (m.model_type === 'postprocess' && !seenPost.has(m.group)) {
+        seenPost.add(m.group);
+        postprocess.push({ name: m.group });
       }
     }
-    // 防御：models API 未返回 chat 分组，但用户已有 chat token
+    // 防御：models API 未返回 agent 分组，但用户已有旧版 chat token
     const gMap = getGroupTypeMap();
-    if (chat.length === 0) {
+    if (agent.length === 0) {
       for (const t of (user?.tokens ?? [])) {
-        if (seenChat.has(t.group)) continue;
+        if (seenAgent.has(t.group)) continue;
         if (gMap[t.group]) {
-          if (gMap[t.group] === 'chat') {
-            seenChat.add(t.group);
-            chat.push({ name: t.group });
+          if (gMap[t.group] === 'agent' || gMap[t.group] === 'chat') {
+            seenAgent.add(t.group);
+            agent.push({ name: t.group });
           }
         } else if (!isImageGroup(t.group)) {
-          seenChat.add(t.group);
-          chat.push({ name: t.group });
+          seenAgent.add(t.group);
+          agent.push({ name: t.group });
         }
       }
     }
@@ -248,11 +284,13 @@ export default function Account() {
         }
       }
     }
-    return { image: img, chat };
+    return { image: img, agent, postprocess, chat: agent };
   })();
 
   const imageModels = models.filter(m => m.model_type === 'image');
-  const chatModels = models.filter(m => m.model_type === 'chat');
+  const agentModels = models.filter(m => m.model_type === 'agent' || m.model_type === 'chat');
+  const chatModels = agentModels;
+  const postprocessModels = models.filter(m => m.model_type === 'postprocess');
 
   const totalUsd = Object.values(groupAmounts).reduce((s, v) => s + (parseFloat(v) || 0), 0);
   const totalCny = exchangeRate ? totalUsd * exchangeRate : 0;
@@ -264,6 +302,14 @@ export default function Account() {
     if (!/^\d{0,4}(\.\d{0,2})?$/.test(value) && value !== '') return;
     setGroupAmounts(prev => ({ ...prev, [group]: value }));
   }
+
+  function setPresetAmount(group: string, amount: number) {
+    setGroupAmounts(prev => ({ ...prev, [group]: amount.toFixed(2) }));
+  }
+
+  const selectedItems = Object.entries(groupAmounts)
+    .map(([group, v]) => ({ group, amount_usd: parseFloat(v) || 0 }))
+    .filter(i => i.amount_usd > 0);
 
   async function handleBuy() {
     const items = Object.entries(groupAmounts)
@@ -297,7 +343,7 @@ export default function Account() {
       setAllocMap({ [r.out_trade_no]: 'pending' });
 
       if (r.code_url) {
-        const qrDataUrl = await QRCode.toDataURL(r.code_url, { width: 200, margin: 2 });
+        const qrDataUrl = await generatePaymentQrCode(r.code_url);
         setQrCodeUrl(qrDataUrl);
         setQrCodeLink(r.code_url);
         setStatusMsg('请使用微信扫描二维码支付');
@@ -422,6 +468,13 @@ export default function Account() {
       setTrialLoading(false);
     }
   }
+
+  async function handleSelectUserAvatar() {
+    const path = await api.selectImageFile();
+    if (!path) return;
+    const dataUrl = await api.readImageData(path);
+    await saveSettings({ user_avatar_data_url: dataUrl });
+  }
   const trialExpired = user?.trial_expired;
   const userTokens: UserToken[] = user?.tokens ?? [];
   const tokenByGroup = (g: string) => userTokens.find(t => t.group === g);
@@ -439,10 +492,12 @@ export default function Account() {
 
   const typeCost = useMemo(() => {
     const img = usage.filter(u => u.type === 'image').reduce((s: number, u) => s + Number(u.cost_usd), 0);
-    const chat = usage.filter(u => u.type === 'chat').reduce((s: number, u) => s + Number(u.cost_usd), 0);
+    const chat = usage.filter(u => u.type === 'chat' || u.type === 'agent').reduce((s: number, u) => s + Number(u.cost_usd), 0);
+    const postprocess = usage.filter(u => u.type === 'postprocess').reduce((s: number, u) => s + Number(u.cost_usd), 0);
     return [
       { name: '图片生成', value: parseFloat(img.toFixed(4)), fill: 'var(--accent-primary)' },
-      { name: '智能对话', value: parseFloat(chat.toFixed(4)), fill: 'var(--accent-success)' },
+      { name: 'AI 智能体', value: parseFloat(chat.toFixed(4)), fill: 'var(--accent-success)' },
+      { name: '后处理', value: parseFloat(postprocess.toFixed(4)), fill: 'var(--accent-warning)' },
     ].filter(d => d.value > 0);
   }, [usage]);
 
@@ -473,7 +528,7 @@ export default function Account() {
     );
   }
 
-  const hasGroups = groupsByType.image.length + groupsByType.chat.length > 0;
+  const hasGroups = groupsByType.image.length + groupsByType.agent.length + groupsByType.postprocess.length > 0;
 
   const statusMap: Record<string, { label: string; cls: string }> = {
     pending:       { label: '待支付',   cls: 'pending' },
@@ -501,6 +556,16 @@ export default function Account() {
 
       {/* 用户信息卡 */}
       <div className="account-card">
+        <div className="account-avatar-panel">
+          <div className="account-avatar">
+            {settings.user_avatar_data_url ? <img src={settings.user_avatar_data_url} alt="我的头像" /> : getInitials(user.username)}
+          </div>
+          <div className="account-avatar-actions">
+            <button className="account-avatar-btn" onClick={handleSelectUserAvatar}>更换头像</button>
+            <button className="account-avatar-btn secondary" onClick={() => saveSettings({ user_avatar_data_url: '' })} disabled={!settings.user_avatar_data_url}>清除</button>
+            <span className="account-avatar-hint">头像仅保存在本机</span>
+          </div>
+        </div>
         <div className="account-info-row">
           <div className="account-info-item">
             <span className="info-label">用户名</span>
@@ -541,40 +606,71 @@ export default function Account() {
               <RechargeSection
                 icon="🎨"
                 title="图片生成"
-                description="输入文字，AI帮你画图"
+                description="用于文生图、图生图等图片生成任务。"
                 modelChips={imageModels.map(m => m.display_name || m.name)}
                 groups={groupsByType.image}
                 groupDescs={groupDescs}
                 tokenByGroup={tokenByGroup}
                 groupAmounts={groupAmounts}
                 onAmountChange={setAmount}
+                onPresetClick={setPresetAmount}
                 onInfoClick={() => setShowPricingDialog(true)}
               />
             )}
 
-            {/* 对话模型 */}
+            {/* 智能体模型 */}
             {groupsByType.chat.length > 0 && (
               <RechargeSection
-                icon="💬"
-                title="AI 对话"
-                description="和AI聊天、问问题、写文章"
+                icon="🤖"
+                title="AI 智能体"
+                description="用于 Agent 对话、任务规划、图库理解、工具调度。"
                 modelChips={chatModels.map(m => m.display_name || m.name)}
                 groups={groupsByType.chat}
                 groupDescs={groupDescs}
                 tokenByGroup={tokenByGroup}
                 groupAmounts={groupAmounts}
                 onAmountChange={setAmount}
+                onPresetClick={setPresetAmount}
+                highlight={rechargeFocus === 'agent'}
+                onInfoClick={() => setShowPricingDialog(true)}
+              />
+            )}
+
+            {groupsByType.postprocess.length > 0 && (
+              <RechargeSection
+                icon="✂"
+                title="图片后处理"
+                description="用于透明背景、高清放大等第三方处理工具。"
+                modelChips={postprocessModels.map(m => m.display_name || m.name)}
+                groups={groupsByType.postprocess}
+                groupDescs={groupDescs}
+                tokenByGroup={tokenByGroup}
+                groupAmounts={groupAmounts}
+                onAmountChange={setAmount}
+                onPresetClick={setPresetAmount}
                 onInfoClick={() => setShowPricingDialog(true)}
               />
             )}
 
             <div className="recharge-summary">
+              {selectedItems.length > 0 && (
+                <div className="recharge-summary-items">
+                  {selectedItems.map(item => (
+                    <div className="recharge-summary-item" key={item.group}>
+                      <span>{item.group}</span>
+                      <strong>${item.amount_usd.toFixed(2)}</strong>
+                    </div>
+                  ))}
+                </div>
+              )}
               <div className="recharge-summary-row">
                 <span className="recharge-summary-total">合计 <strong>${totalUsd.toFixed(2)}</strong>{exchangeRate > 0 && <> ≈ ¥{totalCny.toFixed(2)}</>}</span>
                 {exchangeRate > 0 && <span className="recharge-summary-rate">汇率 {exchangeRate.toFixed(2)}</span>}
               </div>
               <div className="recharge-summary-hint">
-                最低充值 ${minUsdTotal.toFixed(2)} · 每组 ${minUsdPerGroup.toFixed(2)}~${maxUsdTotal.toFixed(0)}
+                {totalUsd > 0 && totalUsd < minUsdTotal
+                  ? `还差 $${(minUsdTotal - totalUsd).toFixed(2)} 可发起支付`
+                  : `最低充值 ${minUsdTotal.toFixed(2)} · 单项 ${minUsdPerGroup.toFixed(2)}~${maxUsdTotal.toFixed(0)}`}
               </div>
               <div className="recharge-summary-actions">
                 <span className="recharge-pay-label">仅支持微信支付</span>
@@ -644,62 +740,15 @@ export default function Account() {
           <p className="usage-empty">暂无用量记录</p>
         ) : (
           <>
-            <div className="usage-charts">
-              <div className="usage-chart-tabs">
-                <button className={`usage-tab ${usageChartTab === 'line' ? 'active' : ''}`} onClick={() => setUsageChartTab('line')} title="每日费用趋势">
-                  📈
-                </button>
-                <button className={`usage-tab ${usageChartTab === 'pie' ? 'active' : ''}`} onClick={() => setUsageChartTab('pie')} title="图片 vs 对话占比">
-                  🥧
-                </button>
-                <button className={`usage-tab ${usageChartTab === 'bar' ? 'active' : ''}`} onClick={() => setUsageChartTab('bar')} title="模型调用次数">
-                  📊
-                </button>
-              </div>
-              <div className="usage-chart-card">
-                {usageChartTab === 'line' && (
-                  <>
-                    <div className="usage-chart-title">每日费用趋势</div>
-                    <ResponsiveContainer width="100%" height={200}>
-                      <LineChart data={dailyCost} margin={{ top: 4, right: 8, left: -16, bottom: 0 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="var(--border-light)" />
-                        <XAxis dataKey="date" tick={{ fontSize: 10 }} />
-                        <YAxis tick={{ fontSize: 10 }} />
-                        <Tooltip formatter={(v) => [`$${v}`, '费用']} />
-                        <Line type="monotone" dataKey="cost" stroke="var(--accent-primary)" strokeWidth={2} dot={false} />
-                      </LineChart>
-                    </ResponsiveContainer>
-                  </>
-                )}
-                {usageChartTab === 'pie' && typeCost.length > 0 && (
-                  <>
-                    <div className="usage-chart-title">图片 vs 对话占比</div>
-                    <ResponsiveContainer width="100%" height={200}>
-                      <PieChart>
-                        <Pie data={typeCost} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={70} label={({ name, percent }) => `${name} ${((percent ?? 0) * 100).toFixed(0)}%`} labelLine={false}>
-                          {typeCost.map((entry, i) => <Cell key={i} fill={entry.fill} />)}
-                        </Pie>
-                        <Legend iconSize={10} wrapperStyle={{ fontSize: 11 }} />
-                      </PieChart>
-                    </ResponsiveContainer>
-                  </>
-                )}
-                {usageChartTab === 'bar' && modelCount.length > 0 && (
-                  <>
-                    <div className="usage-chart-title">模型调用次数</div>
-                    <ResponsiveContainer width="100%" height={200}>
-                      <BarChart data={modelCount} margin={{ top: 4, right: 8, left: -16, bottom: 0 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="var(--border-light)" />
-                        <XAxis dataKey="model" tick={{ fontSize: 9 }} />
-                        <YAxis tick={{ fontSize: 10 }} allowDecimals={false} />
-                        <Tooltip />
-                        <Bar dataKey="count" fill="var(--accent-orange)" radius={[3, 3, 0, 0]} />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </>
-                )}
-              </div>
-            </div>
+            <Suspense fallback={<p className="usage-loading">加载图表中...</p>}>
+              <AccountUsageCharts
+                dailyCost={dailyCost}
+                modelCount={modelCount}
+                typeCost={typeCost}
+                usageChartTab={usageChartTab}
+                onTabChange={setUsageChartTab}
+              />
+            </Suspense>
             <table className="usage-table">
               <thead>
                 <tr>
@@ -839,15 +888,18 @@ interface RechargeSectionProps {
   tokenByGroup: (name: string) => UserToken | undefined;
   groupAmounts: Record<string, string>;
   onAmountChange: (group: string, val: string) => void;
+  onPresetClick: (group: string, amount: number) => void;
+  highlight?: boolean;
   onInfoClick?: () => void;
 }
 
 function RechargeSection({
   icon, title, description, modelChips, groups, groupDescs,
-  tokenByGroup, groupAmounts, onAmountChange, onInfoClick,
+  tokenByGroup, groupAmounts, onAmountChange, onPresetClick, highlight, onInfoClick,
 }: RechargeSectionProps) {
+  const presets = [5, 10, 20, 50];
   return (
-    <div className="recharge-card">
+    <div className={`recharge-card ${highlight ? 'highlight' : ''}`}>
       <div className="recharge-card-header">
         <span className="recharge-card-icon">{icon}</span>
         <span className="recharge-card-title">{title}</span>
@@ -870,19 +922,31 @@ function RechargeSection({
         {groups.map(g => {
           const cur = tokenByGroup(g.name);
           const desc = groupDescs[g.name];
+          const selected = parseFloat(groupAmounts[g.name] || '0') || 0;
           return (
             <div key={g.name} className="recharge-card-row">
               <div className="recharge-card-balance">
                 <span className="recharge-card-balance-icon">💰</span>
-                <span className="recharge-card-balance-label">余额</span>
+                <span className="recharge-card-balance-label">当前额度</span>
                 <span className="recharge-card-balance-amount">
                   ${cur ? Number(cur.balance_usd).toFixed(2) : '0.00'}
                 </span>
                 {cur?.is_trial && <span className="balance-trial-tag">试用</span>}
               </div>
               {desc && <span className="recharge-card-group-hint">{desc}</span>}
+              <div className="recharge-presets">
+                {presets.map(amount => (
+                  <button
+                    key={amount}
+                    className={`recharge-preset-btn ${selected === amount ? 'active' : ''}`}
+                    onClick={() => onPresetClick(g.name, amount)}
+                  >
+                    ${amount}
+                  </button>
+                ))}
+              </div>
               <div className="recharge-card-input">
-                <span className="recharge-card-input-label">充值</span>
+                <span className="recharge-card-input-label">自定义</span>
                 <div className="recharge-input-wrap">
                   <span className="recharge-currency">$</span>
                   <input

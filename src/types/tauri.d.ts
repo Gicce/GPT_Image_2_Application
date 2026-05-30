@@ -7,6 +7,7 @@ export interface TauriAPI {
   createTask: (params: CreateTaskParams) => Promise<Task>;
   cancelTask: (taskId: string) => Promise<void>;
   getImages: () => Promise<ImageRecord[]>;
+  rescanImageLibrary: () => Promise<ImageRecord[]>;
   deleteImage: (imageId: string) => Promise<void>;
   openFile: (path: string) => Promise<void>;
   openFolder: (path: string) => Promise<void>;

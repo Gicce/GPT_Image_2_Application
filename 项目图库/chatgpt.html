@@ -1,0 +1,1615 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GPT Chat</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.1/marked.min.js"></script>
+<style>
+:root {
+  --sidebar-w: 260px;
+  --bg-primary: #212121;
+  --bg-secondary: #171717;
+  --bg-sidebar: #171717;
+  --bg-input: #2f2f2f;
+  --bg-hover: #2f2f2f;
+  --bg-msg-user: #2f2f2f;
+  --bg-msg-assistant: transparent;
+  --text-primary: #ececec;
+  --text-secondary: #b4b4b4;
+  --text-muted: #8e8ea0;
+  --border: #3e3e3e;
+  --accent: #10a37f;
+  --accent-hover: #0d8c6d;
+  --danger: #ef4444;
+  --code-bg: #1e1e1e;
+  --reasoning-bg: #1a2e1a;
+  --reasoning-border: #2d5a2d;
+  --reasoning-text: #8fcf8f;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; overflow: hidden; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  display: flex;
+}
+
+/* ===== Sidebar ===== */
+.sidebar {
+  width: var(--sidebar-w);
+  min-width: var(--sidebar-w);
+  background: var(--bg-sidebar);
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+  transition: margin-left .25s ease;
+}
+.sidebar.collapsed { margin-left: calc(-1 * var(--sidebar-w)); }
+.sidebar-header { padding: 12px; }
+.btn-new-chat {
+  width: 100%; padding: 10px 14px; border: 1px solid var(--border); border-radius: 8px;
+  background: transparent; color: var(--text-primary); font-size: 14px; cursor: pointer;
+  display: flex; align-items: center; gap: 8px; transition: background .15s;
+}
+.btn-new-chat:hover { background: var(--bg-hover); }
+.conv-list { flex: 1; overflow-y: auto; padding: 4px 8px; }
+.conv-list::-webkit-scrollbar { width: 4px; }
+.conv-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+.conv-item {
+  padding: 10px 12px; border-radius: 8px; cursor: pointer; font-size: 13px;
+  color: var(--text-secondary); display: flex; align-items: center; justify-content: space-between;
+  transition: background .15s; margin-bottom: 2px; white-space: nowrap; overflow: hidden;
+}
+.conv-item:hover { background: var(--bg-hover); }
+.conv-item.active { background: var(--bg-hover); color: var(--text-primary); }
+.conv-item span { overflow: hidden; text-overflow: ellipsis; flex: 1; }
+.conv-item .del-btn {
+  opacity: 0; border: none; background: none; color: var(--text-muted); cursor: pointer;
+  font-size: 14px; padding: 2px 4px; border-radius: 4px;
+}
+.conv-item:hover .del-btn { opacity: 1; }
+.conv-item .del-btn:hover { color: var(--danger); }
+.sidebar-footer { padding: 12px; border-top: 1px solid var(--border); }
+.btn-settings {
+  width: 100%; padding: 8px 12px; border: none; border-radius: 8px;
+  background: transparent; color: var(--text-secondary); font-size: 13px; cursor: pointer;
+  display: flex; align-items: center; gap: 8px; transition: background .15s;
+}
+.btn-settings:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+/* ===== Main ===== */
+.main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.main-header {
+  padding: 12px 16px; display: flex; align-items: center; gap: 10px;
+  border-bottom: 1px solid transparent;
+}
+.btn-toggle-sidebar {
+  background: none; border: none; color: var(--text-secondary); cursor: pointer;
+  padding: 6px; border-radius: 6px; font-size: 18px; display: flex;
+}
+.btn-toggle-sidebar:hover { background: var(--bg-hover); color: var(--text-primary); }
+.main-header .model-label { font-size: 14px; font-weight: 600; color: var(--text-primary); }
+
+/* ===== Chat Area ===== */
+.chat-area { flex: 1; overflow-y: auto; scroll-behavior: smooth; }
+.chat-area::-webkit-scrollbar { width: 6px; }
+.chat-area::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+.chat-inner { max-width: 768px; margin: 0 auto; padding: 16px 24px; }
+
+/* Welcome */
+.welcome { text-align: center; padding: 80px 20px 40px; }
+.welcome h2 { font-size: 28px; font-weight: 700; margin-bottom: 8px; }
+.welcome p { color: var(--text-muted); font-size: 15px; }
+
+/* Message */
+.msg { display: flex; gap: 16px; padding: 20px 0; }
+.msg + .msg { border-top: 1px solid rgba(255,255,255,.06); }
+.msg-avatar {
+  width: 32px; height: 32px; border-radius: 50%; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center; font-size: 14px;
+  font-weight: 700;
+}
+.msg.user .msg-avatar { background: #5b5fc7; color: #fff; }
+.msg.assistant .msg-avatar { background: var(--accent); color: #fff; }
+.msg-body { flex: 1; min-width: 0; }
+.msg-role { font-size: 12px; font-weight: 600; color: var(--text-muted); margin-bottom: 6px; text-transform: uppercase; letter-spacing: .5px; }
+.msg-content { font-size: 15px; line-height: 1.7; word-break: break-word; }
+.msg-content img.msg-thumb { max-width: 200px; max-height: 150px; border-radius: 8px; margin-top: 8px; cursor: pointer; }
+.msg-content p { margin-bottom: 10px; }
+.msg-content p:last-child { margin-bottom: 0; }
+.msg-content ul, .msg-content ol { margin: 8px 0; padding-left: 24px; }
+.msg-content li { margin-bottom: 4px; }
+.msg-content blockquote { border-left: 3px solid var(--accent); padding-left: 12px; color: var(--text-secondary); margin: 8px 0; }
+.msg-content a { color: var(--accent); text-decoration: none; }
+.msg-content a:hover { text-decoration: underline; }
+.msg-content table { border-collapse: collapse; margin: 8px 0; width: 100%; }
+.msg-content th, .msg-content td { border: 1px solid var(--border); padding: 6px 10px; font-size: 14px; }
+.msg-content th { background: var(--bg-hover); }
+.msg-content code { background: var(--code-bg); padding: 2px 6px; border-radius: 4px; font-size: 13px; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+.msg-content pre { background: var(--code-bg); border-radius: 8px; margin: 10px 0; overflow: hidden; position: relative; }
+.msg-content pre code { display: block; padding: 14px 16px; overflow-x: auto; background: none; font-size: 13px; line-height: 1.5; }
+.msg-content pre .copy-btn {
+  position: absolute; top: 6px; right: 6px; padding: 4px 8px; border-radius: 4px;
+  border: 1px solid var(--border); background: rgba(255,255,255,.06); color: var(--text-muted);
+  font-size: 11px; cursor: pointer; opacity: 0; transition: opacity .2s, background .15s;
+  display: flex; align-items: center; gap: 4px; z-index: 2;
+}
+.msg-content pre:hover .copy-btn { opacity: 1; }
+.msg-content pre .copy-btn:hover { background: rgba(255,255,255,.12); color: var(--text-primary); }
+.msg-content pre .copy-btn.copied { color: var(--accent); border-color: var(--accent); }
+
+/* ===== Reasoning / Deep Thinking ===== */
+.reasoning-block {
+  margin-bottom: 12px; border-radius: 10px; overflow: hidden;
+  border: 1px solid var(--reasoning-border); background: var(--reasoning-bg);
+}
+.reasoning-header {
+  display: flex; align-items: center; gap: 8px; padding: 10px 14px;
+  cursor: pointer; user-select: none; font-size: 13px; font-weight: 600;
+  color: var(--reasoning-text); transition: background .15s;
+}
+.reasoning-header:hover { background: rgba(255,255,255,.04); }
+.reasoning-header svg { flex-shrink: 0; transition: transform .2s; }
+.reasoning-header.open svg { transform: rotate(90deg); }
+.reasoning-header .thinking-label { flex: 1; }
+.reasoning-duration { font-weight: 400; opacity: .7; font-size: 12px; }
+.reasoning-body {
+  display: none; padding: 0 14px 12px; font-size: 14px; line-height: 1.7;
+  color: var(--reasoning-text); border-top: 1px solid var(--reasoning-border);
+}
+.reasoning-body.open { display: block; }
+.reasoning-body p { margin-bottom: 8px; }
+.reasoning-body p:last-child { margin-bottom: 0; }
+
+/* thinking animation */
+.thinking-dots::after {
+  content: ''; display: inline-block; width: 4px; height: 4px; border-radius: 50%;
+  background: var(--reasoning-text); margin-left: 4px; vertical-align: middle;
+  animation: dot-pulse 1.2s infinite;
+}
+@keyframes dot-pulse {
+  0%, 100% { opacity: .3; }
+  50% { opacity: 1; }
+}
+
+/* Streaming cursor */
+.streaming .msg-content::after {
+  content: ''; display: inline-block; width: 2px; height: 16px;
+  background: var(--text-primary); margin-left: 2px; vertical-align: text-bottom;
+  animation: blink .8s step-end infinite;
+}
+@keyframes blink { 50% { opacity: 0; } }
+
+/* Stop button */
+.stop-row { text-align: center; padding: 8px 0; }
+.btn-stop {
+  padding: 8px 20px; border: 1px solid var(--border); border-radius: 20px;
+  background: var(--bg-primary); color: var(--text-primary); cursor: pointer;
+  font-size: 13px; display: inline-flex; align-items: center; gap: 6px;
+}
+.btn-stop:hover { background: var(--bg-hover); }
+
+/* ===== Input Area ===== */
+.input-area { padding: 0 24px 20px; }
+.input-wrapper { max-width: 768px; margin: 0 auto; }
+.input-box {
+  background: var(--bg-input); border-radius: 16px; border: 1px solid transparent;
+  transition: border-color .2s; padding: 12px 16px; position: relative;
+}
+.input-box:focus-within { border-color: var(--border); }
+.input-box.dragover { border-color: var(--accent); background: rgba(16,163,127,.05); }
+.input-box textarea {
+  width: 100%; background: none; border: none; outline: none; color: var(--text-primary);
+  font-size: 15px; line-height: 1.5; resize: none; max-height: 200px; font-family: inherit;
+  min-height: 24px;
+}
+.input-box textarea::placeholder { color: var(--text-muted); }
+.input-bottom { display: flex; align-items: center; justify-content: space-between; margin-top: 8px; }
+.input-left { display: flex; align-items: center; gap: 4px; }
+.input-right { display: flex; align-items: center; gap: 6px; }
+.input-btn {
+  width: 32px; height: 32px; border-radius: 8px; border: none; background: none;
+  color: var(--text-secondary); cursor: pointer; display: flex; align-items: center;
+  justify-content: center; font-size: 16px; transition: background .15s, color .15s;
+}
+.input-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.input-btn.recording { color: #ef4444; animation: pulse-red 1.5s ease-in-out infinite; }
+@keyframes pulse-red { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
+.btn-send {
+  width: 32px; height: 32px; border-radius: 8px; border: none;
+  background: var(--text-primary); color: var(--bg-primary); cursor: pointer;
+  display: flex; align-items: center; justify-content: center; font-size: 16px;
+  transition: opacity .15s;
+}
+.btn-send:disabled { opacity: .3; cursor: default; }
+.img-preview-bar { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+.img-thumb-wrap { position: relative; display: inline-block; }
+.img-thumb-wrap img { width: 60px; height: 60px; object-fit: cover; border-radius: 8px; }
+.img-thumb-wrap .remove-img {
+  position: absolute; top: -6px; right: -6px; width: 20px; height: 20px;
+  border-radius: 50%; background: var(--danger); color: #fff; border: none;
+  font-size: 12px; cursor: pointer; display: flex; align-items: center; justify-content: center;
+}
+.disclaimer { text-align: center; font-size: 11px; color: var(--text-muted); margin-top: 8px; }
+
+/* Deep Thinking Toggle */
+.thinking-toggle {
+  display: flex; align-items: center; gap: 6px; padding: 0 4px;
+  cursor: pointer; user-select: none; font-size: 12px; color: var(--text-muted);
+  transition: color .15s;
+}
+.thinking-toggle:hover { color: var(--text-primary); }
+.thinking-toggle.active { color: var(--accent); }
+.thinking-toggle .toggle-track {
+  width: 28px; height: 16px; border-radius: 8px; background: var(--border);
+  position: relative; transition: background .2s;
+}
+.thinking-toggle.active .toggle-track { background: var(--accent); }
+.thinking-toggle .toggle-thumb {
+  position: absolute; top: 2px; left: 2px; width: 12px; height: 12px;
+  border-radius: 50%; background: #fff; transition: transform .2s;
+}
+.thinking-toggle.active .toggle-thumb { transform: translateX(12px); }
+
+/* Image Gen Toggle */
+.imggen-toggle {
+  display: flex; align-items: center; gap: 6px; padding: 0 4px;
+  cursor: pointer; user-select: none; font-size: 12px; color: var(--text-muted);
+  transition: color .15s;
+}
+.imggen-toggle:hover { color: var(--text-primary); }
+.imggen-toggle.active { color: #e8913a; }
+.imggen-toggle .toggle-track {
+  width: 28px; height: 16px; border-radius: 8px; background: var(--border);
+  position: relative; transition: background .2s;
+}
+.imggen-toggle.active .toggle-track { background: #e8913a; }
+.imggen-toggle .toggle-thumb {
+  position: absolute; top: 2px; left: 2px; width: 12px; height: 12px;
+  border-radius: 50%; background: #fff; transition: transform .2s;
+}
+.imggen-toggle.active .toggle-thumb { transform: translateX(12px); }
+
+/* Generated Image */
+.generated-img-container { margin: 8px 0; position: relative; display: inline-block; border-radius: 12px; overflow: hidden; }
+.generated-img-container img { max-width: 100%; max-height: 512px; border-radius: 12px; display: block; cursor: pointer; }
+.generated-img-container .img-loading-overlay {
+  position: absolute; inset: 0; background: rgba(0,0,0,.5); display: flex;
+  align-items: center; justify-content: center; border-radius: 12px;
+}
+.img-progress-ring { width: 40px; height: 40px; border: 3px solid rgba(255,255,255,.2); border-top-color: #e8913a; border-radius: 50%; animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.img-toolbar { display: flex; gap: 8px; margin-top: 8px; }
+.img-toolbar button {
+  padding: 6px 12px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--bg-hover); color: var(--text-secondary); font-size: 12px;
+  cursor: pointer; display: flex; align-items: center; gap: 4px;
+}
+.img-toolbar button:hover { color: var(--text-primary); background: var(--bg-input); }
+
+/* Edit image bar */
+.edit-img-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; padding: 8px 12px; background: rgba(232,145,58,.08); border-radius: 10px; border: 1px solid rgba(232,145,58,.2); }
+.edit-img-bar img { width: 56px; height: 56px; object-fit: cover; border-radius: 8px; cursor: pointer; }
+.edit-img-bar .edit-info { flex: 1; }
+.edit-img-bar .edit-label { font-size: 12px; font-weight: 600; color: #e8913a; }
+.edit-img-bar .edit-hint { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+.edit-img-bar .edit-remove { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 16px; padding: 4px; }
+.edit-img-bar .edit-remove:hover { color: var(--danger); }
+
+/* ===== Settings Modal ===== */
+.modal-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 100;
+  display: none; align-items: center; justify-content: center;
+}
+.modal-overlay.show { display: flex; }
+.modal {
+  background: var(--bg-primary); border-radius: 14px; padding: 28px;
+  width: 460px; max-width: 90vw; max-height: 85vh; overflow-y: auto;
+  border: 1px solid var(--border);
+}
+.modal h3 { font-size: 18px; margin-bottom: 20px; }
+.modal label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 4px; color: var(--text-secondary); }
+.modal input, .modal select {
+  width: 100%; padding: 9px 12px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg-input); color: var(--text-primary); font-size: 14px;
+  margin-bottom: 14px; outline: none;
+}
+.modal input:focus { border-color: var(--accent); }
+.modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 6px; }
+.modal-actions button {
+  padding: 8px 18px; border-radius: 8px; border: none; font-size: 14px; cursor: pointer;
+}
+.btn-cancel { background: var(--bg-hover); color: var(--text-primary); }
+.btn-save { background: var(--accent); color: #fff; }
+.btn-save:hover { background: var(--accent-hover); }
+
+/* ===== File Browser Panel ===== */
+.sidebar-tabs { display: flex; border-bottom: 1px solid var(--border); }
+.sidebar-tab {
+  flex: 1; padding: 8px; border: none; background: none; color: var(--text-muted);
+  font-size: 12px; font-weight: 600; cursor: pointer; transition: color .15s, border-color .15s;
+  border-bottom: 2px solid transparent;
+}
+.sidebar-tab.active { color: var(--text-primary); border-bottom-color: var(--accent); }
+.sidebar-tab:hover { color: var(--text-primary); }
+.file-panel { display: none; flex: 1; flex-direction: column; overflow: hidden; }
+.file-panel.active { display: flex; }
+.file-path-bar {
+  display: flex; gap: 4px; padding: 8px; border-bottom: 1px solid var(--border);
+}
+.file-path-bar input {
+  flex: 1; background: var(--bg-input); border: 1px solid var(--border); border-radius: 4px;
+  color: var(--text-primary); font-size: 12px; padding: 4px 8px; outline: none;
+}
+.file-path-bar input:focus { border-color: var(--accent); }
+.file-path-bar button {
+  background: none; border: 1px solid var(--border); border-radius: 4px;
+  color: var(--text-secondary); cursor: pointer; font-size: 12px; padding: 4px 8px;
+}
+.file-path-bar button:hover { background: var(--bg-hover); color: var(--text-primary); }
+.file-list { flex: 1; overflow-y: auto; padding: 4px 8px; }
+.file-list::-webkit-scrollbar { width: 4px; }
+.file-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+.file-item {
+  display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px;
+  cursor: pointer; font-size: 12px; color: var(--text-secondary); transition: background .1s;
+}
+.file-item:hover { background: var(--bg-hover); }
+.file-item .fi-icon { font-size: 14px; flex-shrink: 0; width: 16px; text-align: center; }
+.file-item .fi-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-item .fi-size { font-size: 10px; color: var(--text-muted); flex-shrink: 0; }
+.file-item .fi-send {
+  opacity: 0; border: none; background: none; color: var(--accent); cursor: pointer;
+  font-size: 11px; padding: 2px 6px; border-radius: 4px; flex-shrink: 0;
+}
+.file-item:hover .fi-send { opacity: 1; }
+.file-item .fi-send:hover { background: rgba(16,163,127,.15); }
+.file-status { text-align: center; font-size: 11px; color: var(--text-muted); padding: 16px; }
+
+/* ===== Responsive ===== */
+@media (max-width: 768px) {
+  .sidebar { position: fixed; z-index: 50; height: 100%; }
+  .sidebar.collapsed { margin-left: calc(-1 * var(--sidebar-w)); }
+}
+</style>
+</head>
+<body>
+
+<!-- Sidebar -->
+<aside class="sidebar" id="sidebar">
+  <div class="sidebar-header">
+    <button class="btn-new-chat" onclick="newConversation()">
+      <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="2" x2="8" y2="14"/><line x1="2" y1="8" x2="14" y2="8"/></svg>
+      新对话
+    </button>
+  </div>
+  <div class="sidebar-tabs">
+    <button class="sidebar-tab active" onclick="switchSidebarTab('chat')">对话</button>
+    <button class="sidebar-tab" onclick="switchSidebarTab('files')">文件</button>
+  </div>
+  <div class="conv-list file-panel active" id="convList"></div>
+  <div class="file-panel" id="filePanel">
+    <div class="file-path-bar">
+      <button onclick="browseParent()" title="上级">..</button>
+      <input id="filePathInput" placeholder="输入路径..." onkeydown="if(event.key==='Enter')browsePath(this.value)">
+      <button onclick="browsePath(document.getElementById('filePathInput').value)">Go</button>
+    </div>
+    <div class="file-path-bar" style="border-bottom:none;padding-top:0">
+      <button onclick="readEntireProject()" id="btnReadProject" style="flex:1;background:var(--accent);color:#fff;border:none;border-radius:6px;padding:5px 0;font-size:12px;font-weight:600;cursor:pointer">读取项目结构</button>
+    </div>
+    <div class="file-list" id="fileList">
+      <div class="file-status">启动 mcp_server.py 后可浏览文件</div>
+    </div>
+  </div>
+  <div class="sidebar-footer">
+    <button class="btn-settings" onclick="openSettings()">
+      <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12.22 2h-.44a2 2 0 00-2 2v.18a2 2 0 01-1 1.73l-.43.25a2 2 0 01-2 0l-.15-.08a2 2 0 00-2.73.73l-.22.38a2 2 0 00.73 2.73l.15.1a2 2 0 011 1.72v.51a2 2 0 01-1 1.74l-.15.09a2 2 0 00-.73 2.73l.22.38a2 2 0 002.73.73l.15-.08a2 2 0 012 0l.43.25a2 2 0 011 1.73V20a2 2 0 002 2h.44a2 2 0 002-2v-.18a2 2 0 011-1.73l.43-.25a2 2 0 012 0l.15.08a2 2 0 002.73-.73l.22-.39a2 2 0 00-.73-2.73l-.15-.08a2 2 0 01-1-1.74v-.5a2 2 0 011-1.74l.15-.09a2 2 0 00.73-2.73l-.22-.38a2 2 0 00-2.73-.73l-.15.08a2 2 0 01-2 0l-.43-.25a2 2 0 01-1-1.73V4a2 2 0 00-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+      设置
+    </button>
+  </div>
+</aside>
+
+<!-- Main -->
+<div class="main">
+  <div class="main-header">
+    <button class="btn-toggle-sidebar" onclick="toggleSidebar()">
+      <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+    </button>
+    <span class="model-label" id="modelLabel">GPT-5.4</span>
+  </div>
+
+  <div class="chat-area" id="chatArea">
+    <div class="chat-inner" id="chatInner"></div>
+  </div>
+
+  <div class="input-area">
+    <div class="input-wrapper">
+      <div class="input-box" id="inputBox" ondragover="event.preventDefault();this.classList.add('dragover')" ondragleave="this.classList.remove('dragover')" ondrop="handleDrop(event)">
+        <div class="edit-img-bar" id="editImgBar" style="display:none">
+          <img id="editImgPreview" src="" onclick="window.open(this.src)">
+          <div class="edit-info">
+            <div class="edit-label">图片编辑模式</div>
+            <div class="edit-hint">输入修改指令，如「把背景换成海滩」「去掉水印」</div>
+          </div>
+          <button class="edit-remove" onclick="clearEditImage()" title="移除">&times;</button>
+        </div>
+        <div class="img-preview-bar" id="imgPreviewBar"></div>
+        <textarea id="msgInput" rows="1" placeholder="给 GPT 发送消息" onkeydown="handleKey(event)" oninput="autoResize(this)" onfocus="updatePlaceholder()" onpaste="handlePaste(event)"></textarea>
+        <div class="input-bottom">
+          <div class="input-left">
+            <button class="input-btn" onclick="pickImage()" title="上传文件 / 图片">
+              <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
+            </button>
+            <input type="file" id="imgPicker" style="display:none" onchange="handleImage(event)" multiple>
+            <button class="input-btn" onclick="pickEditImage()" title="图生图 / 编辑图片" id="editImgBtn">
+              <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M15 3h4a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="10 14 15 3"/><polyline points="17 3 15 3 17 5"/></svg>
+            </button>
+            <input type="file" id="editImgPicker" accept="image/*" style="display:none" onchange="handleEditImage(event)">
+            <button class="input-btn" id="voiceBtn" onclick="toggleVoice()" title="语音输入">
+              <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z"/><path d="M19 10v2a7 7 0 01-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+            </button>
+          </div>
+          <div class="input-right">
+            <div class="thinking-toggle" id="thinkingToggle" onclick="toggleThinking()" title="深度思考">
+              <span>深度思考</span>
+              <div class="toggle-track"><div class="toggle-thumb"></div></div>
+            </div>
+            <div class="imggen-toggle" id="imggenToggle" onclick="toggleImgGen()" title="文生图模式">
+              <span>文生图</span>
+              <div class="toggle-track"><div class="toggle-thumb"></div></div>
+            </div>
+            <button class="btn-send" id="sendBtn" onclick="handleSend()" title="发送">
+              <svg width="16" height="16" fill="currentColor" viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+      <div class="disclaimer">GPT 可能会产生错误信息，请核实重要内容。 <kbd style="background:var(--bg-hover);padding:1px 5px;border-radius:3px;font-size:10px;color:var(--text-muted)">Ctrl+K</kbd> 清除当前对话</div>
+    </div>
+  </div>
+</div>
+
+<!-- Settings Modal -->
+<div class="modal-overlay" id="settingsModal">
+  <div class="modal">
+    <h3>API 设置</h3>
+    <label>API 格式</label>
+    <select id="cfgApiFormat">
+      <option value="responses">Responses API（gpt-5.x / o 系列推荐）</option>
+      <option value="chat">Chat Completions（gpt-4o 等经典模型）</option>
+    </select>
+    <label>Base URL（需包含 /v1）</label>
+    <input id="cfgBaseURL" type="text" placeholder="https://api.openai.com/v1">
+    <label>API Key</label>
+    <input id="cfgApiKey" type="password" placeholder="sk-...">
+    <label>模型</label>
+    <input id="cfgModel" type="text" placeholder="gpt-5.4">
+    <label>System Prompt（可选）</label>
+    <input id="cfgSystem" type="text" placeholder="You are a helpful assistant.">
+    <label>MCP 文件服务地址（可选）</label>
+    <input id="cfgMcpUrl" type="text" placeholder="http://localhost:8765">
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="closeSettings()">取消</button>
+      <button class="btn-save" onclick="saveSettings()">保存</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ===== Config =====
+const CFG_KEY = 'gpt_chat_cfg';
+const CONV_KEY = 'gpt_chat_convs';
+
+let cfg = loadCfg();
+let convs = loadConvs();
+let activeId = null;
+let streaming = false;
+let abortCtrl = null;
+let pendingImages = [];     // [{dataUrl, name}]
+let pendingTextFiles = [];  // [{name, ext, content}]
+let pendingMcpFiles = [];  // [{name, ext, content}] — from MCP file browser
+let pendingProjectTree = null; // { root, text } — project structure attachment
+let deepThinking = false;
+let imageGenMode = false;
+let editImage = null;  // { dataUrl } for image-to-image
+
+function loadCfg() {
+  try { return JSON.parse(localStorage.getItem(CFG_KEY)) || {}; } catch { return {}; }
+}
+function saveCfgLS() { localStorage.setItem(CFG_KEY, JSON.stringify(cfg)); }
+function loadConvs() {
+  try { return JSON.parse(localStorage.getItem(CONV_KEY)) || []; } catch { return []; }
+}
+function saveConvsLS() {
+  // Strip large base64 images from history to avoid localStorage overflow
+  const safe = convs.map(c => ({
+    ...c,
+    messages: c.messages.map(m => ({
+      ...m,
+      generatedImage: m.generatedImage ? '[image_saved]' : undefined
+    }))
+  }));
+  localStorage.setItem(CONV_KEY, JSON.stringify(safe));
+}
+
+if (!cfg.baseURL) cfg.baseURL = 'https://www.packyapi.com/v1';
+if (!cfg.model) cfg.model = 'gpt-5.4';
+if (!cfg.format) cfg.format = 'responses';
+if (!cfg.system) cfg.system = '';
+if (!cfg.mcpUrl) cfg.mcpUrl = 'http://localhost:8765';
+
+// ===== Markdown =====
+marked.setOptions({
+  highlight: (code, lang) => {
+    if (lang && hljs.getLanguage(lang)) return hljs.highlight(code, { language: lang }).value;
+    return hljs.highlightAuto(code).value;
+  },
+  breaks: true
+});
+
+// ===== Init =====
+document.getElementById('modelLabel').textContent = cfg.model;
+
+if (convs.length > 0) {
+  activeId = convs[0].id;
+  renderConvList();
+  renderMessages();
+} else {
+  renderConvList();
+  showWelcome();
+}
+
+// ===== Deep Thinking Toggle =====
+function toggleThinking() {
+  deepThinking = !deepThinking;
+  document.getElementById('thinkingToggle').classList.toggle('active', deepThinking);
+}
+
+// ===== Image Gen Toggle =====
+function toggleImgGen() {
+  imageGenMode = !imageGenMode;
+  document.getElementById('imggenToggle').classList.toggle('active', imageGenMode);
+  updatePlaceholder();
+}
+
+function updatePlaceholder() {
+  const el = document.getElementById('msgInput');
+  if (editImage) {
+    el.placeholder = '输入修改指令，如「把背景换成海滩」「加上太阳镜」...';
+  } else if (imageGenMode) {
+    el.placeholder = '描述你想生成的图片...';
+  } else {
+    el.placeholder = '给 GPT 发送消息';
+  }
+}
+
+// ===== Edit Image (图生图) =====
+function pickEditImage() { document.getElementById('editImgPicker').click(); }
+
+function handleEditImage(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    editImage = { dataUrl: ev.target.result };
+    document.getElementById('editImgPreview').src = editImage.dataUrl;
+    document.getElementById('editImgBar').style.display = 'flex';
+    updatePlaceholder();
+  };
+  reader.readAsDataURL(file);
+  e.target.value = '';
+}
+
+function clearEditImage() {
+  editImage = null;
+  document.getElementById('editImgBar').style.display = 'none';
+  updatePlaceholder();
+}
+
+// ===== Voice Input =====
+let voiceRecognition = null;
+let isRecording = false;
+
+function toggleVoice() {
+  if (isRecording) {
+    stopVoice();
+    return;
+  }
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) {
+    alert('当前浏览器不支持语音识别，请使用 Chrome / Edge');
+    return;
+  }
+  voiceRecognition = new SpeechRecognition();
+  voiceRecognition.lang = 'zh-CN';
+  voiceRecognition.interimResults = true;
+  voiceRecognition.continuous = true;
+
+  const input = document.getElementById('msgInput');
+  const snapshot = input.value;
+  let inserted = false;
+
+  voiceRecognition.onresult = function(e) {
+    let transcript = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      transcript += e.results[i][0].transcript;
+    }
+    if (!inserted) {
+      input.value = snapshot + (snapshot && !snapshot.endsWith(' ') ? ' ' : '') + transcript;
+    } else {
+      input.value = snapshot + ' ' + transcript;
+    }
+    autoResize(input);
+  };
+
+  voiceRecognition.onerror = function(e) {
+    console.warn('语音识别错误:', e.error);
+    stopVoice();
+  };
+
+  voiceRecognition.onend = function() {
+    stopVoice();
+  };
+
+  voiceRecognition.start();
+  isRecording = true;
+  document.getElementById('voiceBtn').classList.add('recording');
+}
+
+function stopVoice() {
+  if (voiceRecognition) {
+    voiceRecognition.stop();
+    voiceRecognition = null;
+  }
+  isRecording = false;
+  document.getElementById('voiceBtn').classList.remove('recording');
+}
+
+// ===== Ctrl+K: Clear Context =====
+document.addEventListener('keydown', function(e) {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+    e.preventDefault();
+    if (!activeId) return;
+    const conv = getActive();
+    if (conv) {
+      conv.messages = [];
+      saveConvsLS();
+      renderMessages();
+      showClearToast();
+    }
+  }
+});
+
+function showClearToast() {
+  const existing = document.getElementById('clearToast');
+  if (existing) existing.remove();
+  const toast = document.createElement('div');
+  toast.id = 'clearToast';
+  toast.style.cssText = 'position:fixed;top:20px;left:50%;transform:translateX(-50%);background:var(--accent);color:#fff;padding:8px 20px;border-radius:8px;font-size:13px;z-index:200;opacity:0;transition:opacity .3s';
+  toast.textContent = '已清除当前对话上下文';
+  document.body.appendChild(toast);
+  requestAnimationFrame(() => { toast.style.opacity = '1'; });
+  setTimeout(() => {
+    toast.style.opacity = '0';
+    setTimeout(() => toast.remove(), 300);
+  }, 2000);
+}
+
+// ===== Sidebar =====
+function toggleSidebar() {
+  document.getElementById('sidebar').classList.toggle('collapsed');
+}
+
+function switchSidebarTab(tab) {
+  document.querySelectorAll('.sidebar-tab').forEach((b, i) => {
+    b.classList.toggle('active', (i === 0 ? 'chat' : 'files') === tab);
+  });
+  document.getElementById('convList').classList.toggle('active', tab === 'chat');
+  document.getElementById('filePanel').classList.toggle('active', tab === 'files');
+  if (tab === 'files' && !fileBrowserLoaded) {
+    fileBrowserLoaded = true;
+    browsePath('');
+  }
+}
+
+// ===== MCP File Browser =====
+let currentBrowsePath = '';
+let fileBrowserLoaded = false;
+let cachedFileItems = [];
+
+// Event delegation: one listener handles all file clicks
+document.addEventListener('click', function(e) {
+  const sendBtn = e.target.closest('.fi-send');
+  if (sendBtn) {
+    e.stopPropagation();
+    const path = sendBtn.closest('.file-item')?.dataset.path;
+    if (path) sendFileToChat(path);
+    return;
+  }
+  const item = e.target.closest('.file-item');
+  if (item) {
+    const path = item.dataset.path;
+    const type = item.dataset.type;
+    if ((type === 'directory' || type === 'drive') && path) browsePath(path);
+    else if (type === 'file' && path) sendFileToChat(path);
+  }
+});
+
+async function browsePath(path) {
+  const mcpUrl = cfg.mcpUrl;
+  if (!mcpUrl) { alert('请先在设置中配置 MCP 服务地址'); return; }
+  const el = document.getElementById('fileList');
+  el.innerHTML = '<div class="file-status">加载中...</div>';
+  try {
+    const resp = await fetch(mcpUrl + '/api/files?path=' + encodeURIComponent(path || ''));
+    const data = await resp.json();
+    if (data.error) { el.innerHTML = '<div class="file-status">' + escHtml(data.error) + '</div>'; return; }
+    currentBrowsePath = data.path || '';
+    document.getElementById('filePathInput').value = currentBrowsePath;
+    cachedFileItems = data.items || [];
+    renderFileList(cachedFileItems);
+  } catch (e) {
+    el.innerHTML = '<div class="file-status">无法连接 MCP 服务<br>请先运行: python mcp_server.py</div>';
+  }
+}
+
+function browseParent() {
+  if (!currentBrowsePath) return;
+  const sep = currentBrowsePath.includes('/') ? '/' : '\\';
+  const parts = currentBrowsePath.split(sep).filter(Boolean);
+  parts.pop();
+  const parent = parts.length ? parts.join(sep) : '';
+  browsePath(parent);
+}
+
+function renderFileList(items) {
+  const el = document.getElementById('fileList');
+  if (!items.length) {
+    el.innerHTML = '<div class="file-status">空目录</div>';
+    return;
+  }
+  el.innerHTML = '';
+  items.forEach(item => {
+    const div = document.createElement('div');
+    div.className = 'file-item';
+    div.dataset.path = item.path;
+    div.dataset.type = item.type;
+    const isDir = item.type === 'directory' || item.type === 'drive';
+    const icon = isDir ? '📁' : getFileIcon(item.name);
+    const size = item.type === 'file' ? formatSize(item.size) : '';
+    div.innerHTML = `
+      <span class="fi-icon">${icon}</span>
+      <span class="fi-name">${escHtml(item.name)}</span>
+      ${size ? `<span class="fi-size">${size}</span>` : ''}
+      ${item.type === 'file' ? '<button class="fi-send" title="发送给 GPT">发送</button>' : ''}
+    `;
+    el.appendChild(div);
+  });
+}
+
+function getFileIcon(name) {
+  const ext = name.split('.').pop().toLowerCase();
+  const map = {
+    py:'🐍',js:'🟨',ts:'🔷',jsx:'🟨',tsx:'🔷',html:'🌐',css:'🎨',json:'📋',
+    md:'📝',txt:'📄',csv:'📊',sql:'🗃️',go:'🔵',rs:'🦀',java:'☕',c:'⚙️',
+    cpp:'⚙️',rb:'💎',php:'🐘',swift:'🦅',vue:'💚',svelte:'🔥',sh:'🖥️',
+    bat:'🖥️',yml:'📋',yaml:'📋',toml:'📋',xml:'📋',png:'🖼️',jpg:'🖼️',
+    jpeg:'🖼️',gif:'🖼️',svg:'🖼️',webp:'🖼️',bmp:'🖼️',ico:'🖼️',
+  };
+  return map[ext] || '📄';
+}
+
+function formatSize(bytes) {
+  if (bytes < 1024) return bytes + 'B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + 'K';
+  return (bytes / 1024 / 1024).toFixed(1) + 'M';
+}
+
+async function sendFileToChat(path) {
+  const mcpUrl = cfg.mcpUrl;
+  if (!mcpUrl) return;
+
+  const ext = path.split('.').pop().toLowerCase();
+  const imgExts = ['png','jpg','jpeg','gif','svg','webp','bmp','ico'];
+  const name = path.split(/[\\/]/).pop();
+
+  // Deduplicate
+  if (pendingMcpFiles.some(f => f.name === name) || pendingImages.some(f => f.name === name)) {
+    alert('文件 ' + name + ' 已在附件中');
+    return;
+  }
+
+  if (imgExts.includes(ext)) {
+    // Image: fetch binary → base64, add to pendingImages
+    try {
+      const binResp = await fetch(mcpUrl + '/api/file/bin?path=' + encodeURIComponent(path));
+      if (!binResp.ok) throw new Error('HTTP ' + binResp.status);
+      const blob = await binResp.blob();
+      const reader = new FileReader();
+      reader.onload = ev => {
+        pendingImages.push({ dataUrl: ev.target.result, name });
+        renderImagePreviews();
+        switchSidebarTab('chat');
+        document.getElementById('msgInput').focus();
+      };
+      reader.readAsDataURL(blob);
+    } catch (e) {
+      alert('读取图片失败: ' + e.message);
+    }
+    return;
+  }
+
+  // Text/code files: read content, store as attachment
+  try {
+    const resp = await fetch(mcpUrl + '/api/file/read?path=' + encodeURIComponent(path));
+    const data = await resp.json();
+    if (data.error) { alert(data.error); return; }
+    pendingMcpFiles.push({ name, ext, content: data.content });
+    renderImagePreviews();
+    switchSidebarTab('chat');
+    document.getElementById('msgInput').focus();
+  } catch (e) {
+    alert('读取文件失败: ' + e.message);
+  }
+}
+
+async function readEntireProject() {
+  const mcpUrl = cfg.mcpUrl;
+  if (!mcpUrl) { alert('请先在设置中配置 MCP 服务地址'); return; }
+  if (!currentBrowsePath) { alert('请先选择一个项目目录'); return; }
+
+  const btn = document.getElementById('btnReadProject');
+  btn.disabled = true;
+  btn.textContent = '读取中...';
+
+  try {
+    const resp = await fetch(mcpUrl + '/api/project?path=' + encodeURIComponent(currentBrowsePath));
+    const data = await resp.json();
+    if (data.error) { alert(data.error); return; }
+
+    const tree = data.tree || [];
+    const fileCount = data.fileCount || 0;
+    const dirCount = data.dirCount || 0;
+
+    let treeText = '';
+    treeText += '项目根目录: ' + data.root + '\n\n';
+    treeText += '目录结构:\n```\n';
+    const allPaths = tree.map(t => t);
+    allPaths.sort((a, b) => a.path.localeCompare(b.path, undefined, { numeric: true }));
+    allPaths.forEach(t => {
+      const depth = t.path.split('/').length - 1;
+      const indent = '  '.repeat(depth);
+      const prefix = t.type === 'directory' ? '📁 ' : '  ';
+      const sizeStr = t.type === 'file' ? '  (' + formatSize(t.size) + ')' : '';
+      const skipTag = t.skipped ? '  (已跳过)' : '';
+      treeText += indent + prefix + t.name + sizeStr + skipTag + '\n';
+    });
+    treeText += '```\n';
+    treeText += `共 ${dirCount} 个目录, ${fileCount} 个文件`;
+
+    pendingProjectTree = { root: data.root, text: treeText };
+    renderImagePreviews();
+    switchSidebarTab('chat');
+    document.getElementById('msgInput').focus();
+
+  } catch (e) {
+    alert('读取项目结构失败: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '读取项目结构';
+  }
+}
+
+function renderConvList() {
+  const el = document.getElementById('convList');
+  el.innerHTML = convs.map(c => `
+    <div class="conv-item ${c.id === activeId ? 'active' : ''}" onclick="switchConv('${c.id}')">
+      <span onclick="event.stopPropagation()" ondblclick="renameConv('${c.id}',this)">${escHtml(c.title || '新对话')}</span>
+      <button class="del-btn" onclick="event.stopPropagation();deleteConv('${c.id}')" title="删除">&times;</button>
+    </div>
+  `).join('');
+}
+
+function renameConv(id, spanEl) {
+  const conv = convs.find(c => c.id === id);
+  if (!conv) return;
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.value = conv.title || '';
+  input.style.cssText = 'width:100%;background:var(--bg-input);border:1px solid var(--accent);border-radius:4px;color:var(--text-primary);font-size:13px;padding:2px 6px;outline:none;';
+  spanEl.replaceWith(input);
+  input.focus();
+  input.select();
+
+  const finish = () => {
+    const val = input.value.trim();
+    if (val) conv.title = val;
+    saveConvsLS();
+    renderConvList();
+  };
+  input.onblur = finish;
+  input.onkeydown = function(e) {
+    if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+    if (e.key === 'Escape') { input.value = conv.title; input.blur(); }
+  };
+}
+
+function newConversation() {
+  const conv = { id: 'c' + Date.now(), title: '', messages: [] };
+  convs.unshift(conv);
+  activeId = conv.id;
+  saveConvsLS();
+  renderConvList();
+  renderMessages();
+}
+
+function switchConv(id) {
+  activeId = id;
+  renderConvList();
+  renderMessages();
+}
+
+function deleteConv(id) {
+  convs = convs.filter(c => c.id !== id);
+  if (activeId === id) activeId = convs.length ? convs[0].id : null;
+  saveConvsLS();
+  renderConvList();
+  activeId ? renderMessages() : showWelcome();
+}
+
+function getActive() { return convs.find(c => c.id === activeId); }
+
+function showWelcome() {
+  document.getElementById('chatInner').innerHTML =
+    '<div class="welcome"><h2>GPT Chat</h2><p>开始一段新对话</p></div>';
+}
+
+function renderMessages() {
+  const conv = getActive();
+  if (!conv) { showWelcome(); return; }
+  const inner = document.getElementById('chatInner');
+  if (conv.messages.length === 0) {
+    inner.innerHTML = '<div class="welcome"><h2>GPT Chat</h2><p>开始一段新对话</p></div>';
+    return;
+  }
+  inner.innerHTML = conv.messages.map((m, i) => buildMsgHtml(m, i)).join('');
+  scrollToBottom();
+  document.querySelectorAll('.msg-content pre code').forEach(el => {
+    hljs.highlightElement(el);
+    injectCopyBtn(el);
+  });
+}
+
+function injectCopyBtn(codeEl) {
+  const pre = codeEl.parentElement;
+  if (pre.querySelector('.copy-btn')) return;
+  const btn = document.createElement('button');
+  btn.className = 'copy-btn';
+  btn.innerHTML = `<svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>复制`;
+  btn.onclick = function() {
+    navigator.clipboard.writeText(codeEl.textContent).then(() => {
+      btn.innerHTML = `<svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>已复制`;
+      btn.classList.add('copied');
+      setTimeout(() => {
+        btn.innerHTML = `<svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>复制`;
+        btn.classList.remove('copied');
+      }, 2000);
+    });
+  };
+  pre.appendChild(btn);
+}
+
+function buildMsgHtml(m, idx) {
+  const isUser = m.role === 'user';
+  const avatar = isUser ? 'U' : 'G';
+  const label = isUser ? '你' : 'GPT';
+  let contentHtml = '';
+
+  if (isUser && m.images && m.images.length) {
+    contentHtml = md(m.content) + m.images.map(img =>
+      `<img class="msg-thumb" src="${img}" onclick="window.open(this.src)">`
+    ).join('');
+  } else {
+    contentHtml = md(m.content);
+  }
+
+  // Reasoning block for assistant
+  let reasoningHtml = '';
+  if (m.role === 'assistant' && m.reasoning) {
+    const dur = m.reasoningDuration ? ` (${m.reasoningDuration})` : '';
+    reasoningHtml = `
+      <div class="reasoning-block">
+        <div class="reasoning-header open" onclick="toggleReasoning(this)">
+          <svg width="14" height="14" fill="currentColor" viewBox="0 0 16 16"><path d="M6 12l4-4-4-4" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+          <span class="thinking-label">思考过程</span>
+          <span class="reasoning-duration">${dur}</span>
+        </div>
+        <div class="reasoning-body open">${md(m.reasoning)}</div>
+      </div>`;
+  }
+
+  // Generated image
+  let genImageHtml = '';
+  if (m.role === 'assistant' && m.generatedImage) {
+    genImageHtml = `
+      <div class="generated-img-container">
+        <img src="data:image/png;base64,${m.generatedImage}" onclick="downloadGenImage(this)" style="cursor:pointer">
+      </div>
+      <div class="img-toolbar">
+        <button onclick="downloadGenImageData('${m.id || ''}')">
+          <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+          下载图片
+        </button>
+      </div>`;
+  }
+
+  return `<div class="msg ${m.role}" data-idx="${idx}">
+    <div class="msg-avatar">${avatar}</div>
+    <div class="msg-body">
+      <div class="msg-role">${label}</div>
+      ${reasoningHtml}
+      ${genImageHtml}
+      <div class="msg-content">${contentHtml}</div>
+    </div>
+  </div>`;
+}
+
+function toggleReasoning(header) {
+  header.classList.toggle('open');
+  header.nextElementSibling.classList.toggle('open');
+}
+
+function md(text) { return marked.parse(text || ''); }
+function escHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+function scrollToBottom() {
+  const area = document.getElementById('chatArea');
+  requestAnimationFrame(() => { area.scrollTop = area.scrollHeight; });
+}
+
+// ===== Input =====
+function autoResize(el) {
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, 200) + 'px';
+}
+
+function handleKey(e) {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
+}
+
+function pickImage() { document.getElementById('imgPicker').click(); }
+
+function handleImage(e) {
+  Array.from(e.target.files).forEach(file => processFile(file));
+  e.target.value = '';
+}
+
+function handleDrop(e) {
+  e.preventDefault();
+  document.getElementById('inputBox').classList.remove('dragover');
+  const files = e.dataTransfer?.files;
+  if (files) Array.from(files).forEach(file => processFile(file));
+}
+
+const TEXT_EXTS = ['txt','md','py','js','ts','jsx','tsx','json','csv','html','css','scss','xml','yaml','yml','toml','ini','cfg','conf','sh','bash','zsh','bat','ps1','sql','go','rs','java','c','cpp','h','hpp','rb','php','swift','kt','lua','r','pl','ex','exs','erl','vue','svelte','astro','graphql','gql','dockerfile','makefile','gitignore','env','log','ini','cfg','conf','properties'];
+
+function processFile(file) {
+  const ext = file.name.split('.').pop().toLowerCase();
+  if (file.type.startsWith('image/')) {
+    // Image: base64
+    const reader = new FileReader();
+    reader.onload = ev => {
+      pendingImages.push({ dataUrl: ev.target.result, name: file.name });
+      renderImagePreviews();
+    };
+    reader.readAsDataURL(file);
+  } else if (file.type === 'application/pdf') {
+    alert('PDF 文件暂不支持直接解析，请复制内容后粘贴发送');
+  } else if (file.type.startsWith('text/') || TEXT_EXTS.includes(ext) || file.type === 'application/json' || file.type === 'application/xml') {
+    // Text file: read content
+    if (file.size > 512 * 1024) {
+      alert('文件 ' + file.name + ' 过大（' + (file.size / 1024).toFixed(0) + 'KB），建议只发送小于 512KB 的文本文件');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = ev => {
+      pendingTextFiles.push({ name: file.name, ext, content: ev.target.result });
+      renderImagePreviews();
+    };
+    reader.readAsText(file);
+  } else {
+    alert('不支持的文件类型: ' + file.name + '\n支持: 图片 / 文本文件 / 代码文件');
+  }
+}
+
+function renderImagePreviews() {
+  const bar = document.getElementById('imgPreviewBar');
+  let html = '';
+  // Project tree card
+  if (pendingProjectTree) {
+    const rootName = pendingProjectTree.root.split(/[\\/]/).filter(Boolean).pop() || pendingProjectTree.root;
+    html += `<div class="img-thumb-wrap" style="background:var(--bg-hover);display:flex;align-items:center;gap:6px;width:auto;min-width:100px;max-width:220px;height:36px;padding:0 10px;border-radius:8px;position:relative">
+      <span style="font-size:14px">📂</span>
+      <span style="font-size:11px;color:var(--accent);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600">${escHtml(rootName)}</span>
+      <button class="remove-img" onclick="removeProjectTree()">&times;</button>
+    </div>`;
+  }
+  pendingImages.forEach((img, i) => {
+    html += `<div class="img-thumb-wrap">
+      <img src="${img.dataUrl}">
+      <button class="remove-img" onclick="removePendingImage(${i})">&times;</button>
+    </div>`;
+  });
+  const allFiles = [...pendingTextFiles.map((f, i) => ({...f, idx: i, src: 'text'})), ...pendingMcpFiles.map((f, i) => ({...f, idx: i, src: 'mcp'}))];
+  allFiles.forEach(f => {
+    const icon = getFileIcon(f.name);
+    html += `<div class="img-thumb-wrap" style="background:var(--bg-hover);display:flex;align-items:center;justify-content:center;flex-direction:column;width:60px;height:60px;border-radius:8px;position:relative">
+      <span style="font-size:14px">${icon}</span>
+      <span style="font-size:9px;color:var(--text-muted);max-width:54px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(f.name)}</span>
+      <button class="remove-img" onclick="removeFileAttachment('${f.src}',${f.idx})">&times;</button>
+    </div>`;
+  });
+  bar.innerHTML = html;
+}
+
+function removePendingImage(i) {
+  pendingImages.splice(i, 1);
+  renderImagePreviews();
+}
+
+function removeFileAttachment(src, i) {
+  if (src === 'mcp') pendingMcpFiles.splice(i, 1);
+  else pendingTextFiles.splice(i, 1);
+  renderImagePreviews();
+}
+
+function removeProjectTree() {
+  pendingProjectTree = null;
+  renderImagePreviews();
+}
+
+function removePendingTextFile(i) {
+  pendingTextFiles.splice(i, 1);
+  renderImagePreviews();
+}
+
+function handlePaste(e) {
+  const items = e.clipboardData?.items;
+  if (!items) return;
+  let hasImage = false;
+  for (const item of items) {
+    if (item.type.startsWith('image/')) {
+      e.preventDefault();
+      hasImage = true;
+      const blob = item.getAsFile();
+      const reader = new FileReader();
+      reader.onload = ev => {
+        pendingImages.push({ dataUrl: ev.target.result, name: 'clipboard.png' });
+        renderImagePreviews();
+      };
+      reader.readAsDataURL(blob);
+    }
+  }
+}
+
+// ===== Send =====
+async function handleSend() {
+  if (streaming) { stopStream(); return; }
+  const input = document.getElementById('msgInput');
+  const text = input.value.trim();
+  if (!text && !pendingImages.length && !pendingTextFiles.length && !pendingMcpFiles.length && !pendingProjectTree && !editImage) return;
+
+  if (!cfg.apiKey) { openSettings(); return; }
+  if (!activeId) newConversation();
+  const conv = getActive();
+
+  const userImages = pendingImages.map(p => p.dataUrl);
+  const isEditImageMode = !!editImage;
+  if (editImage) userImages.push(editImage.dataUrl);
+
+  // Build text content with file attachments
+  let fullText = text;
+  if (pendingProjectTree) {
+    fullText = pendingProjectTree.text + (fullText ? '\n\n' + fullText : '');
+  }
+  const allTextFiles = [...pendingTextFiles, ...pendingMcpFiles];
+  if (allTextFiles.length) {
+    const fileBlocks = allTextFiles.map(f => {
+      return `\n[文件: ${f.name}]\n\`\`\`${f.ext}\n${f.content}\n\`\`\``;
+    }).join('\n');
+    fullText = fullText ? fullText + '\n' + fileBlocks : fileBlocks.trim();
+  }
+
+  const userMsg = { role: 'user', content: fullText || text, images: userImages.length ? userImages : undefined };
+  conv.messages.push(userMsg);
+
+  if (!conv.title && text) conv.title = text.slice(0, 30);
+  saveConvsLS();
+  renderConvList();
+
+  input.value = '';
+  input.style.height = 'auto';
+  pendingImages = [];
+  pendingTextFiles = [];
+  pendingMcpFiles = [];
+  // pendingProjectTree persists until user manually removes it
+  renderImagePreviews();
+  const wasEditImage = isEditImageMode;
+  editImage = null;
+  document.getElementById('editImgBar').style.display = 'none';
+  renderMessages();
+
+  await streamReply(conv, wasEditImage);
+}
+
+async function streamReply(conv, wasEditImage) {
+  streaming = true;
+  abortCtrl = new AbortController();
+  updateSendBtn();
+
+  const asstMsg = { role: 'assistant', content: '', reasoning: '', reasoningDuration: '', generatedImage: '', id: 'm' + Date.now() };
+  conv.messages.push(asstMsg);
+
+  const needImgGen = imageGenMode || wasEditImage;
+  const inner = document.getElementById('chatInner');
+  inner.insertAdjacentHTML('beforeend', buildStreamingHtml(deepThinking, needImgGen));
+  scrollToBottom();
+
+  const reasoningBody = document.getElementById('streamReasoning');
+  const reasoningHeader = document.getElementById('streamReasoningHeader');
+  const contentEl = document.querySelector('.msg.streaming .msg-content');
+  const imgContainer = document.getElementById('streamImgContainer');
+
+  let baseURL = cfg.baseURL.replace(/\/+$/, '');
+  if (!baseURL.endsWith('/v1')) baseURL += '/v1';
+
+  const thinkingEnabled = deepThinking;
+  const thinkingStart = Date.now();
+
+  try {
+    if (cfg.format === 'responses') {
+      await streamResponses(baseURL, conv, contentEl, reasoningBody, thinkingEnabled, wasEditImage);
+    } else {
+      await streamChat(baseURL, conv, contentEl);
+    }
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      asstMsg.content += '\n\n*[已停止]*';
+    } else {
+      asstMsg.content = '请求失败: ' + err.message;
+    }
+  }
+
+  // Save reasoning info
+  if (thinkingEnabled && asstMsg.reasoning) {
+    const elapsed = ((Date.now() - thinkingStart) / 1000).toFixed(1);
+    asstMsg.reasoningDuration = elapsed + 's';
+  }
+
+  streaming = false;
+  abortCtrl = null;
+  updateSendBtn();
+  saveConvsLS();
+  renderMessages();
+}
+
+function buildStreamingHtml(withThinking, withImgGen) {
+  const reasoningBlock = withThinking ? `
+    <div class="reasoning-block" id="streamReasoningBlock">
+      <div class="reasoning-header open" id="streamReasoningHeader" onclick="toggleReasoning(this)">
+        <svg width="14" height="14" fill="currentColor" viewBox="0 0 16 16"><path d="M6 12l4-4-4-4" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+        <span class="thinking-label">思考中<span class="thinking-dots"></span></span>
+      </div>
+      <div class="reasoning-body open" id="streamReasoning"></div>
+    </div>` : '';
+
+  const imgBlock = withImgGen ? `
+    <div id="streamImgContainer" class="generated-img-container" style="display:none">
+      <img id="streamGenImg" src="" style="display:none">
+      <div class="img-loading-overlay" id="streamImgOverlay"><div class="img-progress-ring"></div></div>
+    </div>` : '';
+
+  return `<div class="msg assistant streaming">
+    <div class="msg-avatar">G</div>
+    <div class="msg-body">
+      <div class="msg-role">GPT</div>
+      ${reasoningBlock}
+      ${imgBlock}
+      <div class="msg-content"></div>
+    </div>
+  </div>
+  <div class="stop-row"><button class="btn-stop" onclick="stopStream()">&#9632; 停止生成</button></div>`;
+}
+
+function stopStream() { if (abortCtrl) abortCtrl.abort(); }
+
+function updateSendBtn() {
+  const btn = document.getElementById('sendBtn');
+  if (streaming) {
+    btn.innerHTML = '<svg width="14" height="14" fill="currentColor" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12"/></svg>';
+    btn.title = '停止';
+  } else {
+    btn.innerHTML = '<svg width="16" height="16" fill="currentColor" viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>';
+    btn.title = '发送';
+  }
+}
+
+// ===== Responses API (streaming + function calling) =====
+async function readFileFromMCP(projectRoot, relativePath) {
+  const mcpUrl = cfg.mcpUrl;
+  if (!mcpUrl) throw new Error('MCP 服务未配置');
+  const fullPath = projectRoot.replace(/\\/g, '/') + '/' + relativePath;
+  const resp = await fetch(mcpUrl + '/api/file/read?path=' + encodeURIComponent(fullPath));
+  const data = await resp.json();
+  if (data.error) throw new Error(data.error);
+  return data.content;
+}
+
+async function streamResponses(baseURL, conv, contentEl, reasoningEl, thinkingEnabled, wasEditImage) {
+  let input = buildResponsesInput(conv);
+  const projectRoot = pendingProjectTree ? pendingProjectTree.root : null;
+
+  while (true) {
+    const body = { model: cfg.model, stream: true, input };
+
+    // Instructions
+    let instructions = cfg.system || '';
+    if (projectRoot) {
+      instructions += (instructions ? '\n\n' : '') + '用户提供了项目结构信息。你可以使用 read_project_file 函数读取项目中任意文件的完整内容。需要分析代码时请直接调用，不要让用户手动发文件。';
+    }
+    if (instructions) body.instructions = instructions;
+
+    // Deep thinking
+    if (thinkingEnabled) body.reasoning = { effort: 'high', summary: 'auto' };
+
+    // Tools
+    const tools = [];
+    if (imageGenMode || wasEditImage) tools.push({ type: 'image_generation' });
+    if (projectRoot) {
+      tools.push({
+        type: 'function',
+        name: 'read_project_file',
+        description: '读取项目中指定文件的完整内容。path 为文件相对于项目根目录的路径。',
+        parameters: {
+          type: 'object',
+          properties: { path: { type: 'string', description: '相对于项目根目录的文件路径' } },
+          required: ['path']
+        }
+      });
+    }
+    if (tools.length) body.tools = tools;
+
+    const resp = await fetch(baseURL + '/responses', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + cfg.apiKey },
+      body: JSON.stringify(body),
+      signal: abortCtrl.signal
+    });
+
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      throw new Error('HTTP ' + resp.status + ': ' + (err.error?.message || resp.statusText));
+    }
+
+    const asstMsg = conv.messages[conv.messages.length - 1];
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let fullText = asstMsg.content || '';
+    let reasoningText = asstMsg.reasoning || '';
+    let functionCalls = [];
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const payload = line.slice(6).trim();
+        if (payload === '[DONE]') continue;
+        try {
+          const evt = JSON.parse(payload);
+
+          if (evt.type === 'response.reasoning_summary_text.delta' && reasoningEl) {
+            reasoningText += evt.delta || '';
+            reasoningEl.innerHTML = md(reasoningText);
+            asstMsg.reasoning = reasoningText;
+            scrollToBottom();
+          }
+          if (evt.type === 'response.reasoning_summary_part.done') {
+            const header = document.getElementById('streamReasoningHeader');
+            if (header) header.querySelector('.thinking-label').innerHTML = '思考过程';
+          }
+          if (evt.type === 'response.image_generation_call.in_progress') {
+            const c = document.getElementById('streamImgContainer');
+            if (c) c.style.display = 'inline-block';
+          }
+          if (evt.type === 'response.image_generation_call.partial_image') {
+            const b64 = evt.partial_image_b64;
+            if (b64) {
+              const imgEl = document.getElementById('streamGenImg');
+              const overlay = document.getElementById('streamImgOverlay');
+              if (imgEl) { imgEl.src = 'data:image/png;base64,' + b64; imgEl.style.display = 'block'; }
+              if (overlay) overlay.style.display = 'none';
+              asstMsg.generatedImage = b64;
+              scrollToBottom();
+            }
+          }
+          if (evt.type === 'response.output_text.delta') {
+            fullText += evt.delta || '';
+            contentEl.innerHTML = md(fullText);
+            asstMsg.content = fullText;
+            scrollToBottom();
+          }
+
+          // Function calling events
+          if (evt.type === 'response.output_item.added' && evt.item?.type === 'function_call') {
+            functionCalls.push({ id: evt.item.id, call_id: evt.item.call_id, name: evt.item.name, arguments: '' });
+          }
+          if (evt.type === 'response.function_call_arguments.delta') {
+            const fc = functionCalls.length ? functionCalls[functionCalls.length - 1] : null;
+            if (fc) fc.arguments += evt.delta || '';
+          }
+          if (evt.type === 'response.function_call_arguments.done') {
+            const fc = functionCalls.length ? functionCalls[functionCalls.length - 1] : null;
+            if (fc) fc.arguments = evt.arguments || fc.arguments;
+          }
+        } catch {}
+      }
+    }
+
+    // No function calls — done
+    if (!functionCalls.length) break;
+
+    // Execute function calls: read files from MCP server
+    for (const fc of functionCalls) {
+      let result = '';
+      try {
+        const args = JSON.parse(fc.arguments);
+        const filePath = args.path || '';
+        // Show reading status in chat
+        contentEl.innerHTML = md(fullText) + '<div style="color:var(--accent);font-size:13px;margin-top:8px;padding:6px 10px;background:rgba(16,163,127,.08);border-radius:6px">读取 ' + escHtml(filePath) + ' ...</div>';
+        scrollToBottom();
+        result = await readFileFromMCP(projectRoot, filePath);
+      } catch (e) {
+        result = '读取失败: ' + e.message;
+      }
+      input.push({ type: 'function_call', id: fc.id, call_id: fc.call_id, name: fc.name, arguments: fc.arguments });
+      input.push({ type: 'function_call_output', call_id: fc.call_id, output: result });
+    }
+    // Loop back — GPT will continue with the file contents
+  }
+}
+
+function buildResponsesInput(conv) {
+  return conv.messages.filter(m => m.role === 'user' || m.role === 'assistant').map(m => {
+    if (m.role === 'user') {
+      const content = [{ type: 'input_text', text: m.content || '' }];
+      if (m.images) m.images.forEach(url => content.push({ type: 'input_image', image_url: url }));
+      return { role: 'user', content };
+    }
+    return { role: 'assistant', content: [{ type: 'output_text', text: m.content || '' }] };
+  });
+}
+
+// ===== Chat Completions API (streaming) =====
+async function streamChat(baseURL, conv, contentEl) {
+  const messages = [];
+  if (cfg.system) messages.push({ role: 'system', content: cfg.system });
+
+  conv.messages.forEach(m => {
+    if (m.role === 'user') {
+      if (m.images && m.images.length) {
+        const content = [{ type: 'text', text: m.content || '' }];
+        m.images.forEach(url => content.push({ type: 'image_url', image_url: { url } }));
+        messages.push({ role: 'user', content });
+      } else {
+        messages.push({ role: 'user', content: m.content });
+      }
+    } else {
+      messages.push({ role: 'assistant', content: m.content });
+    }
+  });
+
+  const body = { model: cfg.model, stream: true, messages, max_tokens: 4096 };
+
+  const resp = await fetch(baseURL + '/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + cfg.apiKey },
+    body: JSON.stringify(body),
+    signal: abortCtrl.signal
+  });
+
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({}));
+    throw new Error('HTTP ' + resp.status + ': ' + (err.error?.message || resp.statusText));
+  }
+
+  const asstMsg = conv.messages[conv.messages.length - 1];
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let fullText = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop();
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue;
+      const payload = line.slice(6).trim();
+      if (payload === '[DONE]') continue;
+      try {
+        const evt = JSON.parse(payload);
+        const delta = evt.choices?.[0]?.delta?.content;
+        if (delta) {
+          fullText += delta;
+          contentEl.innerHTML = md(fullText);
+          asstMsg.content = fullText;
+          scrollToBottom();
+        }
+      } catch {}
+    }
+  }
+}
+
+// ===== Image Download =====
+function downloadGenImage(imgEl) {
+  const a = document.createElement('a');
+  a.href = imgEl.src;
+  a.download = 'gpt-image-' + Date.now() + '.png';
+  a.click();
+}
+
+function downloadGenImageData(msgId) {
+  const conv = getActive();
+  if (!conv) return;
+  const msg = conv.messages.find(m => m.id === msgId);
+  if (!msg || !msg.generatedImage) return;
+  const a = document.createElement('a');
+  a.href = 'data:image/png;base64,' + msg.generatedImage;
+  a.download = 'gpt-image-' + (msgId || Date.now()) + '.png';
+  a.click();
+}
+
+// ===== Settings =====
+function openSettings() {
+  document.getElementById('cfgApiFormat').value = cfg.format || 'responses';
+  document.getElementById('cfgBaseURL').value = cfg.baseURL || '';
+  document.getElementById('cfgApiKey').value = cfg.apiKey || '';
+  document.getElementById('cfgModel').value = cfg.model || '';
+  document.getElementById('cfgSystem').value = cfg.system || '';
+  document.getElementById('cfgMcpUrl').value = cfg.mcpUrl || 'http://localhost:8765';
+  document.getElementById('settingsModal').classList.add('show');
+}
+
+function closeSettings() {
+  document.getElementById('settingsModal').classList.remove('show');
+}
+
+function saveSettings() {
+  cfg.format = document.getElementById('cfgApiFormat').value;
+  cfg.baseURL = document.getElementById('cfgBaseURL').value.trim().replace(/\/+$/, '');
+  cfg.apiKey = document.getElementById('cfgApiKey').value.trim();
+  cfg.model = document.getElementById('cfgModel').value.trim();
+  cfg.system = document.getElementById('cfgSystem').value.trim();
+  cfg.mcpUrl = document.getElementById('cfgMcpUrl').value.trim().replace(/\/+$/, '');
+  saveCfgLS();
+  document.getElementById('modelLabel').textContent = cfg.model;
+  closeSettings();
+}
+
+document.getElementById('settingsModal').addEventListener('click', function(e) {
+  if (e.target === this) closeSettings();
+});
+</script>
+</body>
+</html>
