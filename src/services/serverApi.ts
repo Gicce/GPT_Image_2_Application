@@ -1,7 +1,6 @@
 import { useSettingsStore } from '../store/useSettingsStore';
 
-const DEFAULT_SERVER_BASE = 'https://www.zjcypc.com';
-const DIRECT_SERVER_BASE = 'http://124.221.205.221';
+const DEFAULT_SERVER_BASE = 'http://localhost:4001';
 
 export interface UserToken {
   group: string;
@@ -19,6 +18,21 @@ export interface UserInfo {
   trial_expires_at: string | null;
   trial_expired: boolean;
   tokens: UserToken[];
+}
+
+export interface RuntimeGroupConfig {
+  enabled: boolean;
+  base_url: string;
+  token: string;
+  expires_in: number;
+  model?: string;
+  provider?: string | null;
+}
+
+export interface RuntimeConfig {
+  image: RuntimeGroupConfig;
+  agent: RuntimeGroupConfig;
+  postprocess: RuntimeGroupConfig;
 }
 
 export interface AuthResponse {
@@ -67,23 +81,67 @@ export interface PayLimits {
 
 export interface UserOrder {
   out_trade_no: string;
-  total_usd: number;
-  total_cny: number;
+  group: string;
+  amount_usd: number;
+  amount_cny: number;
+  total_usd?: number;
+  total_cny?: number;
+  exchange_rate: number | null;
   status: 'pending' | 'paid' | 'assigned' | 'allocated' | 'refunding' | 'refunded' | 'refund_change' | 'closed';
+  pay_type: string;
   items: { group: string; amount_usd: number }[];
   created_at: string;
-  paid_at?: string;
-  allocated_at?: string;
-  amount_cny?: number;
-  amount_usd?: number;
+  paid_at: string | null;
+  allocated_at?: string | null;
 }
 
 export interface UsageRecord {
+  id: string;
   model: string;
-  type: string;
-  quantity: number;
-  cost_usd: number;
-  created_at: string;
+  usage_type: string;
+  type?: string;
+  image_count: number | null;
+  quantity?: number;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cached_tokens: number | null;
+  /** 报告时点的每次单价（后端写入；历史记录可能为 null） */
+  unit_price?: string | null;
+  cost_usd: string;
+  created_at: string | null;
+}
+
+export interface UsageRecordsResponse {
+  total: number;
+  page: number;
+  page_size: number;
+  records: UsageRecord[];
+}
+
+export type UsageTrendMetric = 'image_count' | 'request_count' | 'cost';
+
+export interface UsageSummary {
+  period_spent: string;
+  total_spent: string;
+  request_count: number;
+  image_count: number;
+  start_time: string;
+  end_time: string;
+}
+
+export interface UsageTrendResponse {
+  metric: UsageTrendMetric;
+  points: { date: string; value: number }[];
+}
+
+export interface UsageModelStat {
+  model: string;
+  usage_type: string;
+  request_count: number;
+  image_count: number;
+  input_tokens: number;
+  output_tokens: number;
+  cost_usd: string;
 }
 
 export interface PackagesResponse {
@@ -109,13 +167,19 @@ export interface ServerModel {
   context_window?: number | null;
   supports_tools?: boolean | null;
   supports_vision?: boolean | null;
+  /** 该分组是否仍可充值（false = 已停止新购，如 AI 智能体） */
+  rechargeable?: boolean;
 }
 
 export interface ServerPrompt {
   id: string;
-  category: string;
   title: string;
   content: string;
+}
+
+export interface PromptsResponse {
+  categories: string[];
+  prompts: Record<string, ServerPrompt[]>;
 }
 
 export interface UsageEstimateItem {
@@ -123,6 +187,7 @@ export interface UsageEstimateItem {
   model?: string;
   tool?: string;
   quantity?: number;
+  image_count?: number;
   input_tokens?: number;
   output_tokens?: number;
   cached_tokens?: number;
@@ -142,35 +207,120 @@ export interface UsageEstimate {
   message?: string;
 }
 
-function normalizeBaseUrl(value?: string | null): string {
-  const trimmed = (value || '').trim();
-  if (!trimmed) return DEFAULT_SERVER_BASE;
-  return trimmed.replace(/\/+$/, '');
+// Server returns cost_usd/balance_usd as strings — normalize to numbers
+export interface UsageReportResult {
+  cost_usd: number;
+  balance_usd: number;
+  group: string;
+  account_type: 'trial' | 'normal' | 'paid';
 }
 
-function getBaseCandidates(): string[] {
-  const configured = normalizeBaseUrl(useSettingsStore.getState().settings.server_url);
-  const candidates = [configured];
+/**
+ * 获取用户配置的服务器地址，如果为空则返回默认地址
+ */
+export function getConfiguredServerUrl(): string {
+  const configured = useSettingsStore.getState().settings.server_url;
+  const trimmed = (configured || '').trim();
+  const result = trimmed ? trimmed.replace(/\/+$/, '') : DEFAULT_SERVER_BASE;
+  // 调试日志：打印实际使用的服务器地址
+  console.log(`[serverApi] getConfiguredServerUrl: settings.server_url="${configured}", result="${result}"`);
+  return result;
+}
 
-  try {
-    const parsed = new URL(configured);
-    if (parsed.hostname === 'www.zjcypc.com') {
-      candidates.push(`${parsed.protocol}//zjcypc.com`);
-      candidates.push(DIRECT_SERVER_BASE);
-    } else if (parsed.hostname === 'zjcypc.com') {
-      candidates.push(`${parsed.protocol}//www.zjcypc.com`);
-      candidates.push(DIRECT_SERVER_BASE);
-    } else if (parsed.hostname === '124.221.205.221') {
-      candidates.push(DEFAULT_SERVER_BASE);
-      candidates.push('https://zjcypc.com');
-    }
-  } catch {
-    candidates.push(DEFAULT_SERVER_BASE);
-    candidates.push('https://zjcypc.com');
-    candidates.push(DIRECT_SERVER_BASE);
+/**
+ * 检查返回的 health 数据是否是 CyImagePro 后端
+ */
+function isCyImageProHealthResponse(data: unknown): boolean {
+  if (!data || typeof data !== 'object') return false;
+  const obj = data as Record<string, unknown>;
+  // 检查是否包含关键标识字段
+  const hasOk = 'ok' in obj && obj.ok === true;
+  const hasService = 'service' in obj && typeof obj.service === 'string' && obj.service.includes('cyimagepro');
+  const hasStatus = 'status' in obj && obj.status === 'ok';
+  return hasOk || hasService || hasStatus;
+}
+
+/**
+ * 测试连接 - 严格检测指定的服务器地址
+ * 不使用 fallback，只检测传入的 url
+ * 返回连接状态和详细信息
+ */
+export async function testServerConnection(url: string): Promise<{
+  ok: boolean;
+  message: string;
+  host: string;
+  service?: string;
+  version?: string;
+}> {
+  const baseUrl = url.trim().replace(/\/+$/, '');
+
+  if (!baseUrl) {
+    return { ok: false, message: '请输入服务器地址', host: '' };
   }
 
-  return [...new Set(candidates.map(normalizeBaseUrl).filter(Boolean))];
+  // 提取主机名用于显示
+  let host = baseUrl;
+  try {
+    const parsed = new URL(baseUrl);
+    host = parsed.host;
+  } catch {
+    host = baseUrl.replace(/^https?:\/\//, '').split('/')[0];
+  }
+
+  // 尝试两个 health 接口路径
+  const healthPaths = ['/api/health', '/health'];
+
+  for (const path of healthPaths) {
+    const fullUrl = `${baseUrl}${path}`;
+
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+      console.log(`[testServerConnection] 正在测试: ${fullUrl}`);
+
+      const response = await fetch(fullUrl, {
+        method: 'GET',
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        console.log(`[testServerConnection] HTTP ${response.status} - ${fullUrl}`);
+        continue; // 尝试下一个路径
+      }
+
+      const data = await response.json();
+
+      // 验证返回内容是否是 CyImagePro 后端
+      if (!isCyImageProHealthResponse(data)) {
+        console.log(`[testServerConnection] 响应不是 CyImagePro 服务:`, data);
+        continue; // 尝试下一个路径
+      }
+
+      console.log(`[testServerConnection] 连接成功:`, data);
+
+      return {
+        ok: true,
+        message: '连接成功',
+        host,
+        service: (data as Record<string, unknown>).service as string | undefined,
+        version: (data as Record<string, unknown>).version as string | undefined,
+      };
+
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      console.log(`[testServerConnection] 请求失败 ${fullUrl}:`, errorMessage);
+      // 继续尝试下一个路径
+    }
+  }
+
+  return {
+    ok: false,
+    message: '无法连接服务器，请检查地址是否正确',
+    host,
+  };
 }
 
 function getToken(): string | null {
@@ -181,13 +331,41 @@ function getToken(): string | null {
   }
 }
 
+/**
+ * 核心请求函数 - 只使用用户配置的服务器地址
+ * 不再 fallback 到其他地址
+ */
 async function request<T>(
   path: string,
   options: RequestInit = {},
   auth = false
 ): Promise<T> {
-  const bases = getBaseCandidates();
-  if (bases.length === 0) throw new Error('Server base URL is not configured');
+  const baseUrl = getConfiguredServerUrl();
+
+  // [临时诊断] 打印请求详情
+  if (typeof import.meta !== 'undefined' && import.meta.env?.DEV) {
+    const settingsUrl = useSettingsStore.getState().settings.server_url;
+    const bodyStr = options.body as string | undefined;
+    let bodyInfo = 'no body';
+    if (bodyStr) {
+      try {
+        const parsed = JSON.parse(bodyStr);
+        bodyInfo = JSON.stringify({
+          ...parsed,
+          password: parsed.password ? `[length:${parsed.password.length}]` : undefined,
+        });
+      } catch {
+        bodyInfo = bodyStr.substring(0, 100);
+      }
+    }
+    console.log('[serverApi] ===== REQUEST START =====');
+    console.log('[serverApi] baseUrl from settings:', settingsUrl);
+    console.log('[serverApi] resolved baseUrl:', baseUrl);
+    console.log('[serverApi] path:', path);
+    console.log('[serverApi] final url:', `${baseUrl}${path}`);
+    console.log('[serverApi] method:', options.method || 'GET');
+    console.log('[serverApi] body:', bodyInfo);
+  }
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -198,34 +376,70 @@ async function request<T>(
     if (token) headers['Authorization'] = `Bearer ${token}`;
   }
 
-  let lastError: any = null;
+  const fullUrl = `${baseUrl}${path}`;
 
-  for (const base of bases) {
-    try {
-      const res = await fetch(`${base}${path}`, { ...options, headers });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        const err: any = new Error(body.detail || `HTTP ${res.status}`);
-        err.status = res.status;
-        throw err;
-      }
-      return res.json();
-    } catch (err: any) {
-      lastError = err;
-      const isNetworkError =
-        err?.name === 'TypeError' ||
-        /Failed to fetch|NetworkError|Load failed|network|fetch/i.test(err?.message || '');
-      if (!isNetworkError || base === bases[bases.length - 1]) {
-        throw err;
-      }
-    }
+  // 开发环境输出请求 URL
+  if (typeof import.meta !== 'undefined' && import.meta.env?.DEV) {
+    console.log(`[serverApi] 请求: ${options.method || 'GET'} ${fullUrl}`);
   }
 
-  throw lastError || new Error('Request failed');
+  try {
+    const res = await fetch(fullUrl, { ...options, headers });
+
+    // [临时诊断] 打印响应状态
+    if (typeof import.meta !== 'undefined' && import.meta.env?.DEV) {
+      console.log('[serverApi] response status:', res.status);
+      console.log('[serverApi] response ok:', res.ok);
+    }
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      const err: any = new Error(body.detail || `HTTP ${res.status}`);
+      err.status = res.status;
+      err.url = fullUrl;
+      console.error(`[serverApi] 业务错误 ${fullUrl}:`, body.detail || `HTTP ${res.status}`);
+      console.log('[serverApi] ===== REQUEST END (ERROR) =====');
+      throw err;
+    }
+
+    const data = await res.json();
+
+    // [临时诊断] 打印响应内容
+    if (typeof import.meta !== 'undefined' && import.meta.env?.DEV) {
+      console.log('[serverApi] response body:', JSON.stringify(data));
+      console.log('[serverApi] ===== REQUEST END (SUCCESS) =====');
+    }
+
+    return data;
+  } catch (err: any) {
+    // 如果是我们构造的业务错误，直接抛出
+    if (err.status) {
+      throw err;
+    }
+
+    // 网络错误，附加当前服务器地址信息
+    const isNetworkError =
+      err?.name === 'TypeError' ||
+      /Failed to fetch|NetworkError|Load failed|abort/i.test(err?.message || '');
+
+    if (isNetworkError) {
+      console.error(`[serverApi] 网络错误 ${fullUrl}:`, err.message);
+      console.error('[serverApi] error name:', err?.name);
+      console.error('[serverApi] error type:', typeof err);
+      console.log('[serverApi] ===== REQUEST END (NETWORK ERROR) =====');
+      const networkErr: any = new Error(`无法连接服务器（${baseUrl}）`);
+      networkErr.isNetworkError = true;
+      networkErr.serverUrl = baseUrl;
+      throw networkErr;
+    }
+
+    console.error('[serverApi] unknown error:', err);
+    console.log('[serverApi] ===== REQUEST END (UNKNOWN ERROR) =====');
+    throw err;
+  }
 }
 
-// ?????? user ??????????? UserInfo
-// ?????????balance_usd / image_balance_usd
+// Normalize raw user response into consistent UserInfo shape
 function normalizeUser(raw: any): UserInfo {
   const tokens: UserToken[] = Array.isArray(raw.tokens)
     ? raw.tokens.map((t: any) => ({
@@ -252,6 +466,35 @@ function normalizeAuthResponse(raw: any): AuthResponse {
     token_type: raw.token_type,
     user: normalizeUser(raw.user),
   };
+}
+
+function normalizeUsageReport(raw: any): UsageReportResult {
+  return {
+    cost_usd: Number(raw.cost_usd ?? 0),
+    balance_usd: Number(raw.balance_usd ?? 0),
+    group: raw.group ?? '',
+    account_type: raw.account_type ?? 'normal',
+  };
+}
+
+function normalizeEstimate(raw: any): UsageEstimate {
+  return {
+    can_run: raw.can_run ?? false,
+    total_cost_usd: Number(raw.total_cost_usd ?? 0),
+    groups: (raw.groups ?? []).map((g: any) => ({
+      group: g.group,
+      required_usd: Number(g.required_usd ?? 0),
+      balance_usd: Number(g.balance_usd ?? 0),
+      enough: g.enough ?? false,
+    })),
+    message: raw.message,
+  };
+}
+
+export interface AccountEntitlements {
+  balances: Record<string, number>;  // { "image": 3.0, "agent": 3.0, "postprocess": 0.0 }
+  enabled_features: Record<string, boolean>;  // { "image": true, "agent": true, "postprocess": false }
+  enabled_models: Record<string, string[]>;  // { "image": ["gpt-image-2"], "agent": ["gpt-4o"] }
 }
 
 export const serverApi = {
@@ -286,50 +529,38 @@ export const serverApi = {
   getMe: () =>
     request<any>('/api/users/me', {}, true).then(normalizeUser),
 
+  getAccountEntitlements: () =>
+    request<AccountEntitlements>('/api/users/me/entitlements', {}, true),
+
+  getRuntimeConfig: () =>
+    request<RuntimeConfig>('/api/users/me/runtime-config', {}, true),
+
   getUsage: () =>
     request<any[]>('/api/users/me/usage', {}, true),
 
   reportImage: (model: string, image_count: number) =>
-    request<{ cost_usd: number; balance_usd: number; group?: string; account_type?: 'trial' | 'normal' | 'paid' }>(
+    request<any>(
       '/api/usage/report/image',
       { method: 'POST', body: JSON.stringify({ model, image_count }) },
       true
-    ),
+    ).then(normalizeUsageReport),
 
-  reportChat: (model: string, input_tokens: number, output_tokens: number, cached_tokens: number) =>
-    request<{ cost_usd: number; balance_usd: number; group?: string; account_type?: 'trial' | 'normal' | 'paid' }>(
-      '/api/usage/report/chat',
-      { method: 'POST', body: JSON.stringify({ model, input_tokens, output_tokens, cached_tokens }) },
-      true
-    ),
+  // V3.0.6：Agent 对话全面 BYOK，服务器 Agent/Chat/Tool 用量上报端点已移除；
+  // 仅图片生成（CyImagePro 图片服务）保留 estimate + report 闭环。
 
   estimateUsage: (items: UsageEstimateItem[]) =>
-    request<UsageEstimate>(
+    request<any>(
       '/api/usage/estimate',
       { method: 'POST', body: JSON.stringify({ items }) },
       true
-    ),
-
-  reportAgent: (model: string, input_tokens: number, output_tokens: number, cached_tokens: number, request_id?: string) =>
-    request<{ cost_usd: number; balance_usd: number; group?: string; account_type?: 'trial' | 'normal' | 'paid' }>(
-      '/api/usage/report/agent',
-      { method: 'POST', body: JSON.stringify({ model, input_tokens, output_tokens, cached_tokens, request_id }) },
-      true
-    ),
-
-  reportTool: (tool: string, quantity: number, tool_call_id: string) =>
-    request<{ cost_usd: number; balance_usd: number; group?: string; account_type?: 'trial' | 'normal' | 'paid' }>(
-      '/api/usage/report/tool',
-      { method: 'POST', body: JSON.stringify({ tool, quantity, tool_call_id }) },
-      true
-    ),
+    ).then(normalizeEstimate),
 
   getPackages: () => request<PackagesResponse>('/api/pay/packages'),
 
-  createOrder: (items: OrderItem[], pay_type: string = 'wxpay') =>
+  createOrder: (items: OrderItem[]) =>
     request<OrderResult>(
       '/api/pay/create_order',
-      { method: 'POST', body: JSON.stringify({ items, pay_type }) },
+      { method: 'POST', body: JSON.stringify({ items }) },
       true
     ),
 
@@ -360,8 +591,38 @@ export const serverApi = {
   getOrders: () =>
     request<UserOrder[]>('/api/pay/orders', {}, true),
 
-  getUsageRecords: () =>
-    request<UsageRecord[]>('/api/usage/records', {}, true),
+  getUsageRecords: (
+    page: number = 1,
+    page_size: number = 20,
+    model?: string,
+    usage_type?: string,
+    start_time?: string,
+    end_time?: string,
+    keyword?: string,
+  ) => {
+    const params = new URLSearchParams({ page: String(page), page_size: String(page_size) });
+    if (model) params.set('model', model);
+    if (usage_type) params.set('usage_type', usage_type);
+    if (start_time) params.set('start_time', start_time);
+    if (end_time) params.set('end_time', end_time);
+    if (keyword) params.set('keyword', keyword);
+    return request<UsageRecordsResponse>(`/api/usage/records?${params.toString()}`, {}, true);
+  },
+
+  getUsageSummary: (start_time: string, end_time: string) => {
+    const params = new URLSearchParams({ start_time, end_time });
+    return request<UsageSummary>(`/api/usage/summary?${params.toString()}`, {}, true);
+  },
+
+  getUsageTrend: (start_time: string, end_time: string, metric: UsageTrendMetric) => {
+    const params = new URLSearchParams({ start_time, end_time, metric });
+    return request<UsageTrendResponse>(`/api/usage/trend?${params.toString()}`, {}, true);
+  },
+
+  getUsageModels: (start_time: string, end_time: string) => {
+    const params = new URLSearchParams({ start_time, end_time });
+    return request<UsageModelStat[]>(`/api/usage/models?${params.toString()}`, {}, true);
+  },
 
   getNotice: () => request<{ content: string; is_active: boolean }>('/api/notice'),
 
@@ -370,7 +631,10 @@ export const serverApi = {
   getTrialStock: () =>
     request<{ remaining: number; available: boolean }>('/api/tokens/trial-stock'),
 
-  getPrompts: () => request<ServerPrompt[]>('/api/prompts'),
+  getPrompts: () => request<PromptsResponse>('/api/prompts'),
+
+  getStock: () =>
+    request<Record<string, number>>('/api/tokens/stock'),
 
   forgotPassword: (email: string) =>
     request<{ message: string }>('/api/auth/forgot-password/send-code', {

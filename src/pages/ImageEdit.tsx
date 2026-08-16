@@ -3,7 +3,9 @@ import { useSettingsStore } from '../store/useSettingsStore';
 import { useTaskStore } from '../store/useTaskStore';
 import { useImageStore } from '../store/useImageStore';
 import { useDraftStore } from '../store/useDraftStore';
+import { useAuthStore } from '../store/useAuthStore';
 import { api } from '../services/api';
+import { assertCanRunImageTask } from '../services/billingService';
 import { SIZES, QUALITIES, QUALITY_LABELS, FORMATS } from '../types';
 import SuccessDialog from '../components/SuccessDialog';
 import './ImageEdit.css';
@@ -176,10 +178,22 @@ export default function ImageEdit() {
 
   const handleSubmit = async () => {
     setError('');
-    if (!settings.token.trim()) { setError('请先在「设置」中填写 API Token'); return; }
+    if (!settings.token.trim()) { setError('请先在「设置与更新 → 服务连接」中确认服务器连接'); return; }
     if (sourceImages.length === 0) { setError('请至少选择一张源图片'); return; }
     if (!prompt.trim()) { setError('请输入提示词'); return; }
     if (!outputDir.trim()) { setError('请选择输出目录'); return; }
+
+    // Balance check for logged-in users (server billing mode)
+    const { isLoggedIn } = useAuthStore.getState();
+    if (isLoggedIn) {
+      try {
+        // TODO: 后续支持从模型配置动态选择 model 名称
+        await assertCanRunImageTask('gpt-image-2', count);
+      } catch (err: any) {
+        setError(err?.message || '余额不足，请先充值后再生成。');
+        return;
+      }
+    }
 
     setSubmitting(true);
     try {

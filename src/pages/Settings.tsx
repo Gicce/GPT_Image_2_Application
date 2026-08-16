@@ -1,8 +1,14 @@
-﻿import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../services/api';
-import { serverApi, type ServerModel } from '../services/serverApi';
+import { serverApi, type ServerModel, testServerConnection } from '../services/serverApi';
 import { useImageStore } from '../store/useImageStore';
 import { useSettingsStore } from '../store/useSettingsStore';
+import { useServerStatusStore, startHealthCheckLoop, startHeartbeatLoop } from '../store/useServerStatusStore';
+import { useAuthStore } from '../store/useAuthStore';
+import { useUpdateStore } from '../store/useUpdateStore';
+import { RELEASE_INFO } from '../config/release';
+import { useAIProviderStore } from '../features/aiProviders/store';
+import AgentProviderSettings from '../features/aiProviders/AgentProviderSettings';
 import type {
   AgentEndpointCheckResult,
   AgentStyleTemplate,
@@ -11,6 +17,8 @@ import type {
   AgentTemplateExportPayload,
   AgentTemplateImportPayload,
   AgentTemplateLog,
+  EnvCheckResult,
+  GenerateTestImageResult,
   Settings as SettingsType,
 } from '../types';
 import {
@@ -24,11 +32,31 @@ import {
   TASK_TEMPLATE_MATCH_MODES,
   TASK_TEMPLATE_SCENES,
 } from '../types';
-import { resolveAgentConfig } from '../utils/agentConfig';
 import './Settings.css';
 
 type TemplateTab = 'task' | 'style' | 'io' | 'logs';
-type SettingsSection = 'defaults' | 'agent' | 'postprocess' | 'appearance';
+type SettingsSection =
+  | 'general'
+  | 'server'
+  | 'agents'
+  | 'imagegen'
+  | 'files'
+  | 'postprocess'
+  | 'diagnostics'
+  | 'update';
+
+type EditableSection = Exclude<SettingsSection, 'agents' | 'diagnostics' | 'update'>;
+
+const SETTINGS_NAV: { key: SettingsSection; label: string; desc: string }[] = [
+  { key: 'general', label: '常规', desc: '主题外观与智能体模板入口。' },
+  { key: 'server', label: '服务连接', desc: 'CyImagePro Server 地址与心跳。' },
+  { key: 'agents', label: 'AI 智能体', desc: '管理 AI 模型服务（对话 / 任务规划 / 提示词优化）。' },
+  { key: 'imagegen', label: '图片生成', desc: '默认尺寸、质量与输出格式。' },
+  { key: 'files', label: '图片与文件', desc: '生成目录与图片库素材目录。' },
+  { key: 'postprocess', label: '后处理工具', desc: 'remove.bg 与 Topaz API Key。' },
+  { key: 'diagnostics', label: '诊断与工具', desc: '运行环境检查与诊断工具。' },
+  { key: 'update', label: '更新与关于', desc: '应用版本与软件更新。' },
+];
 
 const THEME_OPTIONS = [
   { value: 'light', label: '浅色' },
@@ -36,24 +64,13 @@ const THEME_OPTIONS = [
   { value: 'system', label: '跟随系统' },
 ] as const;
 
-const SETTINGS_SECTION_FIELDS: Record<SettingsSection, (keyof SettingsType)[]> = {
-  defaults: ['default_size', 'default_quality', 'default_format'],
-  agent: [
-    'ai_avatar_data_url',
-    'agent_name',
-    'agent_model',
-    'chat_model',
-    'agent_base_url',
-    'chat_base_url',
-    'agent_token',
-    'agent_context_window',
-    'chat_token',
-    'vision_model',
-    'agent_system_prompt',
-    'chat_system_prompt',
-  ],
+// 每个子页对应的可编辑字段（agents/diagnostics/update 独立管理，不进入统一保存）
+const SETTINGS_SECTION_FIELDS: Record<EditableSection, (keyof SettingsType)[]> = {
+  general: ['theme'],
+  server: ['server_url'],
+  imagegen: ['default_size', 'default_quality', 'default_format'],
+  files: ['default_output_dir', 'library_input_dir'],
   postprocess: ['removebg_api_key', 'topaz_api_key', 'upscale_provider'],
-  appearance: ['theme'],
 };
 
 function nowIso() {
@@ -159,31 +176,11 @@ function StatusBar({ text }: { text: string }) {
   return <div className="settings-status">{text}</div>;
 }
 
-function getAgentConfigWarning(settings: SettingsType) {
-  const resolved = resolveAgentConfig(settings);
-  if (!resolved.model) {
-    return '当前未配置聊天模型，普通聊天会直接失败。';
-  }
-  if (!resolved.baseUrl) {
-    return '当前未配置 Agent Base URL，普通聊天会直接失败。';
-  }
-  if (!resolved.token) {
-    return '当前未配置 Agent Token，普通聊天会直接失败。';
-  }
-  if (resolved.mismatch) {
-    return '检测到 agent/chat 配置不一致。聊天页会优先使用 Agent 配置，建议统一模型、Base URL 和 Token。';
-  }
-  if (!settings.agent_model.trim() && settings.chat_model.trim()) {
-    return `当前将回退使用 chat_model：${settings.chat_model.trim()}。建议显式保存到 Agent 模型，避免后续误判。`;
-  }
-  return '';
-}
-
-function hasSectionChanges(base: SettingsType, draft: SettingsType, section: SettingsSection) {
+function hasSectionChanges(base: SettingsType, draft: SettingsType, section: EditableSection) {
   return SETTINGS_SECTION_FIELDS[section].some(key => base[key] !== draft[key]);
 }
 
-function buildSectionPartial(base: SettingsType, draft: SettingsType, section: SettingsSection) {
+function buildSectionPartial(base: SettingsType, draft: SettingsType, section: EditableSection) {
   return SETTINGS_SECTION_FIELDS[section].reduce<Partial<SettingsType>>((acc, key) => {
     if (base[key] !== draft[key]) {
       (acc as Record<string, string | number | boolean | undefined>)[key] = draft[key] as string | number | boolean | undefined;
@@ -192,7 +189,7 @@ function buildSectionPartial(base: SettingsType, draft: SettingsType, section: S
   }, {});
 }
 
-function resetSectionDraft(base: SettingsType, draft: SettingsType, section: SettingsSection): SettingsType {
+function resetSectionDraft(base: SettingsType, draft: SettingsType, section: EditableSection): SettingsType {
   const next = { ...draft };
   for (const key of SETTINGS_SECTION_FIELDS[section]) {
     (next as Record<string, string | number | boolean | undefined>)[key] = base[key] as string | number | boolean | undefined;
@@ -203,9 +200,27 @@ function resetSectionDraft(base: SettingsType, draft: SettingsType, section: Set
 export default function Settings() {
   const { settings, loadSettings, saveSettings, saving, saveError } = useSettingsStore();
   const { rescanImages } = useImageStore();
+  const { connectionStatus, serverHost, checking, serverService, serverVersion, checkConnection, heartbeatStatus, lastHeartbeatAt, heartbeatError, sendHeartbeat } = useServerStatusStore();
+  const { isLoggedIn } = useAuthStore();
+  const [activeSection, setActiveSection] = useState<SettingsSection>('general');
+
+  // 外部页面（图片生成工作台 / Chat Empty State）的「前往设置」跳转指定栏目
+  useEffect(() => {
+    const handler = () => {
+      const section = localStorage.getItem('cy_settings_section') as SettingsSection | null;
+      if (section && SETTINGS_NAV.some(item => item.key === section)) {
+        setActiveSection(section);
+        localStorage.removeItem('cy_settings_section');
+      }
+    };
+    window.addEventListener('cy-settings-section', handler);
+    return () => window.removeEventListener('cy-settings-section', handler);
+  }, []);
   const [draftSettings, setDraftSettings] = useState<SettingsType>(settings);
   const [settingsStatus, setSettingsStatus] = useState('');
-  const [savingSection, setSavingSection] = useState<SettingsSection | null>(null);
+  const [savingSection, setSavingSection] = useState<EditableSection | null>(null);
+  const [testingServer, setTestingServer] = useState(false);
+  const [serverTestResult, setServerTestResult] = useState<{ ok: boolean; message: string; host: string } | null>(null);
 
   const [templateModalOpen, setTemplateModalOpen] = useState(false);
   const [templateTab, setTemplateTab] = useState<TemplateTab>('task');
@@ -222,44 +237,69 @@ export default function Settings() {
   const [exportTitle, setExportTitle] = useState('');
   const [templateStatus, setTemplateStatus] = useState('');
   const [templateBusy, setTemplateBusy] = useState(false);
-  const [endpointCheck, setEndpointCheck] = useState<AgentEndpointCheckResult | null>(null);
-  const [checkingEndpoints, setCheckingEndpoints] = useState(false);
-  const [agentStatus, setAgentStatus] = useState('');
+  const [envCheck, setEnvCheck] = useState<EnvCheckResult | null>(null);
+  const [envChecking, setEnvChecking] = useState(false);
+  const [envStatus, setEnvStatus] = useState('');
+  const [testImage, setTestImage] = useState<GenerateTestImageResult | null>(null);
+  const [testImageBusy, setTestImageBusy] = useState(false);
+  const [testImageStatus, setTestImageStatus] = useState('');
   const [visionModelOptions, setVisionModelOptions] = useState<ServerModel[]>([]);
   const [visionModelHint, setVisionModelHint] = useState('');
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsError, setModelsError] = useState('');
+
+  // 更新与关于
+  const { status: updateStatus, checkUpdate } = useUpdateStore();
+  const [appVersion, setAppVersion] = useState('');
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+
+  const hydrateProfiles = useAIProviderStore(state => state.hydrate);
 
   useEffect(() => {
     void loadSettings();
     void refreshTemplateCenter();
-  }, [loadSettings]);
+    hydrateProfiles();
+    startHealthCheckLoop();
+    startHeartbeatLoop();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     setDraftSettings(settings);
   }, [settings]);
 
   useEffect(() => {
-    serverApi.getModels()
-      .then(list => {
-        const visionOptions = list.filter(model =>
-          (model.model_type === 'agent' || model.model_type === 'chat') && model.supports_vision,
-        );
-        setVisionModelOptions(visionOptions);
-        if (visionOptions.length === 0) {
-          setVisionModelHint('当前账户下未发现明确标记 supports_vision 的对话模型，可手动填写图片理解模型。');
-          return;
-        }
-        setVisionModelHint(`已发现 ${visionOptions.length} 个支持视觉的对话模型，带图聊天会优先使用这里的模型做独立图片理解。`);
-        setDraftSettings(current => (
-          current.vision_model.trim()
-            ? current
-            : { ...current, vision_model: visionOptions[0].name }
-        ));
-      })
-      .catch(() => {
-        setVisionModelOptions([]);
-        setVisionModelHint('无法自动拉取支持视觉的模型列表，可手动填写图片理解模型。');
-      });
+    import('@tauri-apps/api/app').then(({ getVersion }) => getVersion().then(v => setAppVersion(v))).catch(() => setAppVersion(''));
   }, []);
+
+  // 视觉模型列表（图片理解模型已随 Profile 管理，这里仅保留服务器视觉模型供诊断参考）
+  useEffect(() => {
+    let cancelled = false;
+    async function loadVisionModels() {
+      setModelsLoading(true);
+      setModelsError('');
+      try {
+        const list = await serverApi.getModels();
+        if (cancelled) return;
+        const visionAccessible = list.filter(model => model.supports_vision === true && model.user_has_access !== false);
+        setVisionModelOptions(visionAccessible);
+        setVisionModelHint(visionAccessible.length === 0
+          ? '当前账户暂无可用视觉模型。'
+          : `已发现 ${visionAccessible.length} 个当前账户可用的视觉模型。`);
+      } catch (error) {
+        if (cancelled) return;
+        setVisionModelOptions([]);
+        setModelsError(error instanceof Error ? error.message : '服务器模型获取失败');
+        setVisionModelHint('');
+      } finally {
+        if (!cancelled) setModelsLoading(false);
+      }
+    }
+    void loadVisionModels();
+    return () => {
+      cancelled = true;
+    };
+  }, [settings.server_url, isLoggedIn]);
 
   useEffect(() => {
     if (!templateModalOpen) return undefined;
@@ -298,16 +338,22 @@ export default function Settings() {
     }
   }, [selectedStyle]);
 
-  const defaultsDirty = useMemo(() => hasSectionChanges(settings, draftSettings, 'defaults'), [settings, draftSettings]);
-  const agentDirty = useMemo(() => hasSectionChanges(settings, draftSettings, 'agent'), [settings, draftSettings]);
-  const postprocessDirty = useMemo(() => hasSectionChanges(settings, draftSettings, 'postprocess'), [settings, draftSettings]);
-  const appearanceDirty = useMemo(() => hasSectionChanges(settings, draftSettings, 'appearance'), [settings, draftSettings]);
+  const sectionDirty = useMemo(() => {
+    const editable: EditableSection[] = ['general', 'server', 'imagegen', 'files', 'postprocess'];
+    return Object.fromEntries(editable.map(section => [
+      section,
+      hasSectionChanges(settings, draftSettings, section),
+    ])) as Record<EditableSection, boolean>;
+  }, [settings, draftSettings]);
+
+  const currentSectionDirty = (['general', 'server', 'imagegen', 'files', 'postprocess'] as EditableSection[])
+    .includes(activeSection as EditableSection)
+    ? sectionDirty[activeSection as EditableSection]
+    : false;
 
   const settingsStatusText = saveError
     ? `保存失败：${saveError}`
     : settingsStatus || (savingSection && saving ? '设置保存中...' : '');
-  const resolvedAgentConfig = useMemo(() => resolveAgentConfig(draftSettings), [draftSettings]);
-  const agentConfigWarning = useMemo(() => getAgentConfigWarning(draftSettings), [draftSettings]);
 
   async function refreshTemplateCenter() {
     try {
@@ -330,58 +376,111 @@ export default function Settings() {
     setDraftSettings(current => ({ ...current, ...partial }));
   }
 
-  async function pickAiAvatar() {
-    const path = await api.selectImageFile();
-    if (!path) return;
-    const dataUrl = await api.readImageData(path);
-    updateDraft({ ai_avatar_data_url: dataUrl });
-  }
-
   async function refreshLibrary() {
     await rescanImages();
   }
 
-  function getAgentToken(source = draftSettings) {
-    return source.agent_token?.trim() || source.chat_token?.trim() || '';
-  }
-
-  async function runEndpointCheck() {
-    setCheckingEndpoints(true);
-    setAgentStatus('');
+  async function pickDirectory(field: 'default_output_dir' | 'library_input_dir') {
     try {
-      const resolved = resolveAgentConfig(draftSettings);
-      const result = await api.checkAgentEndpoints(
-        resolved.baseUrl,
-        resolved.model,
-        resolved.token,
-        draftSettings.token,
-        draftSettings.vision_model,
-      );
-      setEndpointCheck(result);
-      setAgentStatus('连接自检已完成');
+      const dir = await api.selectDirectory();
+      if (!dir) return;
+      updateDraft({ [field]: dir } as Partial<SettingsType>);
     } catch (error) {
-      setEndpointCheck(null);
-      setAgentStatus(error instanceof Error ? error.message : '连接自检失败');
-    } finally {
-      setCheckingEndpoints(false);
+      setSettingsStatus(error instanceof Error ? `选择目录失败：${error.message}` : '选择目录失败');
     }
   }
 
-  async function saveSection(section: SettingsSection, successText: string) {
-    const partial = buildSectionPartial(settings, draftSettings, section);
-    if (Object.keys(partial).length === 0) {
-      setSettingsStatus('当前区块没有需要保存的变更。');
+  async function openDirectory(path: string) {
+    const trimmed = path.trim();
+    if (!trimmed) {
+      setSettingsStatus('当前未配置目录，请先选择目录。');
       return;
     }
+    try {
+      await api.openFolder(trimmed);
+    } catch (error) {
+      setSettingsStatus(error instanceof Error
+        ? `打开目录失败：${error.message}。可能目录不存在，请重新选择。`
+        : '打开目录失败，可能目录不存在，请重新选择。');
+    }
+  }
 
+  async function runEnvironmentCheck() {
+    setEnvChecking(true);
+    setEnvStatus('正在检查运行环境...');
+    try {
+      const result = await api.checkEnvironment();
+      setEnvCheck(result);
+      const okCount = result.items.filter(i => i.status === 'ok').length;
+      const errCount = result.items.filter(i => i.status === 'error').length;
+      const warnCount = result.items.filter(i => i.status === 'warn').length;
+      setEnvStatus(`检查完成：${okCount} 正常 / ${warnCount} 提示 / ${errCount} 异常`);
+    } catch (error) {
+      setEnvStatus(error instanceof Error ? `自检失败：${error.message}` : '自检失败');
+    } finally {
+      setEnvChecking(false);
+    }
+  }
+
+  async function runTestImageGeneration() {
+    if (!window.confirm('这将实际调用一次 gpt-image-2（low quality），会产生一次真实图片生成费用。是否继续？')) {
+      return;
+    }
+    setTestImageBusy(true);
+    setTestImageStatus('正在生成测试图，预计 30~120 秒...');
+    setTestImage(null);
+    try {
+      const result = await api.generateTestImage();
+      setTestImage(result);
+      if (result.ok) {
+        setTestImageStatus(`生成成功，耗时 ${(result.latency_ms / 1000).toFixed(1)} 秒`);
+      } else {
+        setTestImageStatus(`生成失败：${result.error_kind || ''} ${result.error_message || ''}`);
+      }
+    } catch (error) {
+      setTestImageStatus(error instanceof Error ? `生成失败：${error.message}` : '生成失败');
+    } finally {
+      setTestImageBusy(false);
+    }
+  }
+
+  function copyDiagnosticInfo() {
+    if (!envCheck) return;
+    const text = envCheck.diagnostic_text || '';
+    if (navigator.clipboard?.writeText) {
+      void navigator.clipboard.writeText(text).then(
+        () => setEnvStatus('诊断信息已复制到剪贴板'),
+        () => setEnvStatus('复制失败，请手动选中下方文本'),
+      );
+    } else {
+      setEnvStatus('当前环境不支持自动复制，请手动选中下方文本');
+    }
+  }
+
+  async function saveCurrentSection() {
+    const section = activeSection as EditableSection;
+    const partial = buildSectionPartial(settings, draftSettings, section);
+    if (Object.keys(partial).length === 0) {
+      setSettingsStatus('当前页面没有需要保存的变更。');
+      return;
+    }
+    const labelMap: Record<EditableSection, string> = {
+      general: '常规设置',
+      server: '服务器地址',
+      imagegen: '图片生成参数',
+      files: '图片与文件设置',
+      postprocess: '后处理工具设置',
+    };
     setSavingSection(section);
-    setSettingsStatus(`正在保存${successText.replace('已保存', '')}...`);
+    setSettingsStatus(`正在保存${labelMap[section]}...`);
     try {
       await saveSettings(partial);
-      const warning = section === 'agent' ? getAgentConfigWarning({ ...settings, ...draftSettings, ...partial }) : '';
-      setSettingsStatus(warning ? `${successText} ${warning}` : successText);
-      if (section === 'defaults') {
+      setSettingsStatus(`${labelMap[section]}已保存`);
+      if (section === 'imagegen' || section === 'files') {
         await rescanImages();
+      }
+      if (section === 'server' && partial.server_url) {
+        await checkConnection();
       }
     } catch (error) {
       setSettingsStatus(error instanceof Error ? `保存失败：${error.message}` : '保存失败，请稍后重试。');
@@ -390,8 +489,8 @@ export default function Settings() {
     }
   }
 
-  function resetSection(section: SettingsSection) {
-    setDraftSettings(current => resetSectionDraft(settings, current, section));
+  function resetCurrentSection() {
+    setDraftSettings(current => resetSectionDraft(settings, current, activeSection as EditableSection));
     setSettingsStatus('已恢复到最近一次保存的设置。');
   }
 
@@ -519,23 +618,486 @@ export default function Settings() {
     setStyleDraft(createEmptyStyleTemplate());
   }
 
-  function renderEndpointStatus(label: string, status: AgentEndpointCheckResult[keyof AgentEndpointCheckResult]) {
+  async function handleCheckUpdate() {
+    setCheckingUpdate(true);
+    try {
+      await checkUpdate(true);
+    } finally {
+      setCheckingUpdate(false);
+    }
+  }
+
+  // ============ 子页渲染 ============
+
+  function renderGeneral() {
     return (
-      <div className={`endpoint-check-card ${status.ok ? 'ok' : 'fail'}`} key={label}>
-        <div className="endpoint-check-head">
-          <strong>{label}</strong>
-          <span>{status.ok ? '成功' : status.kind === 'not_configured' ? '未配置' : '失败'}</span>
-        </div>
-        <div className="endpoint-check-message">{status.message}</div>
-        {(status.kind || status.status) && (
-          <div className="endpoint-check-meta">
-            {status.kind && <span>{status.kind}</span>}
-            {typeof status.status === 'number' && <span>HTTP {status.status}</span>}
+      <section className="settings-card">
+        <h3 className="settings-section-title">外观</h3>
+        <div className="form-group">
+          <label>主题模式</label>
+          <div className="theme-picker">
+            {THEME_OPTIONS.map(option => (
+              <button
+                key={option.value}
+                className={`theme-picker-btn ${draftSettings.theme === option.value ? 'active' : ''}`}
+                onClick={() => updateDraft({ theme: option.value })}
+              >
+                {option.label}
+              </button>
+            ))}
           </div>
-        )}
-      </div>
+        </div>
+
+        <div className="template-entry-inner">
+          <h3 className="settings-section-title">高级 · 智能体模板</h3>
+          <p className="settings-section-desc">模板中心用于管理主任务模板、风格模板、导入导出和命中日志。</p>
+          <div className="template-entry-stats">
+            <span>{taskTemplates.length} 个主任务模板</span>
+            <span>{styleTemplates.length} 个风格模板</span>
+            <span>{templateLogs.length} 条命中日志</span>
+          </div>
+          <div className="template-entry-actions">
+            <button className="settings-btn settings-btn-primary" onClick={() => setTemplateModalOpen(true)}>打开模板中心</button>
+            <button className="settings-btn settings-btn-secondary" onClick={() => void refreshTemplateCenter()}>刷新数据</button>
+          </div>
+        </div>
+      </section>
     );
   }
+
+  function renderServer() {
+    const serverDirty = sectionDirty.server;
+    return (
+      <section className="settings-card server-connection-card">
+        <h3 className="settings-section-title">服务连接</h3>
+        <p className="settings-section-desc">CyImagePro Server，用于账户、支付、用量统计、设备心跳和在线状态。</p>
+
+        <div className="form-row">
+          <div className="form-group form-group-server-url">
+            <label>服务器地址</label>
+            <input
+              type="text"
+              value={draftSettings.server_url}
+              onChange={event => {
+                updateDraft({ server_url: event.target.value });
+                setServerTestResult(null);
+              }}
+              placeholder="http://localhost:4001"
+            />
+            {serverDirty && <p className="form-hint form-hint-warning">当前地址未保存</p>}
+          </div>
+        </div>
+
+        <div className="server-status-row-full">
+          <span className={`server-status-indicator ${serverTestResult ? (serverTestResult.ok ? 'connected' : 'disconnected') : connectionStatus}`} title={
+            serverTestResult
+              ? (serverTestResult.ok ? '测试连接成功' : serverTestResult.message)
+              : (connectionStatus === 'connected' ? '已连接' : connectionStatus === 'disconnected' ? '未连接' : '连接中')
+          }>
+            {serverTestResult
+              ? (serverTestResult.ok ? '🟢' : '🔴')
+              : (connectionStatus === 'connected' && '🟢')}
+            {connectionStatus === 'disconnected' && !serverTestResult && '🔴'}
+            {connectionStatus === 'connecting' && !serverTestResult && '🟡'}
+          </span>
+          <span className="server-status-text">
+            {serverTestResult
+              ? (serverTestResult.ok ? `已连接：${serverTestResult.host}` : serverTestResult.message)
+              : (connectionStatus === 'connected' && `已连接服务器：${serverHost}${serverService ? ` (${serverService})` : ''}`)}
+            {connectionStatus === 'disconnected' && !serverTestResult && '未连接服务器'}
+            {connectionStatus === 'connecting' && !serverTestResult && '正在检测中...'}
+          </span>
+          <button
+            className="settings-btn settings-btn-secondary settings-btn-sm"
+            disabled={testingServer || checking || !draftSettings.server_url.trim()}
+            onClick={async () => {
+              setTestingServer(true);
+              setServerTestResult(null);
+              const url = draftSettings.server_url.trim();
+              const result = await testServerConnection(url);
+              setServerTestResult(result);
+              setTestingServer(false);
+              if (result.ok) {
+                useServerStatusStore.setState({
+                  connectionStatus: 'connected',
+                  serverHost: result.host,
+                  serverService: result.service,
+                  serverVersion: result.version,
+                  lastCheckedAt: new Date().toISOString(),
+                });
+              }
+            }}
+          >
+            {testingServer ? '检测中...' : '测试连接'}
+          </button>
+        </div>
+
+        {isLoggedIn && (
+          <div className="heartbeat-status-row">
+            <span className={`form-hint ${
+              heartbeatStatus === 'success' ? 'form-hint-success' :
+              heartbeatStatus === 'failed' ? 'form-hint-error' :
+              heartbeatStatus === 'pending' ? 'form-hint-info' : 'form-hint-muted'
+            }`}>
+              {heartbeatStatus === 'success' && `已登录，心跳正常 (${lastHeartbeatAt ? new Date(lastHeartbeatAt).toLocaleTimeString() : ''})`}
+              {heartbeatStatus === 'failed' && `已登录，心跳失败 (${heartbeatError || '网络错误'})`}
+              {heartbeatStatus === 'pending' && '已登录，心跳发送中...'}
+              {heartbeatStatus === 'idle' && '已登录，心跳未上报'}
+            </span>
+            <button
+              className="settings-btn settings-btn-sm settings-btn-outline"
+              disabled={heartbeatStatus === 'pending'}
+              onClick={() => void sendHeartbeat()}
+            >
+              立即上报
+            </button>
+          </div>
+        )}
+
+        <div className="form-group">
+          <label>连接状态</label>
+          <p className="form-hint">
+            {`服务器版本：${serverVersion || '未知'} · Runtime：由登录账户下发 · 心跳：${heartbeatStatus === 'success' ? '正常' : heartbeatStatus || '未上报'}`}
+          </p>
+        </div>
+      </section>
+    );
+  }
+
+  function renderImageGen() {
+    return (
+      <section className="settings-card">
+        <h3 className="settings-section-title">默认图片生成参数</h3>
+        <p className="settings-section-desc">新任务的默认尺寸、质量与输出格式。图片生成模型与 AI 对话模型相互独立。</p>
+        <div className="form-row">
+          <div className="form-group">
+            <label>默认图片尺寸</label>
+            <select value={draftSettings.default_size} onChange={event => updateDraft({ default_size: event.target.value })}>
+              {SIZES.map(size => <option key={size} value={size}>{size}</option>)}
+            </select>
+          </div>
+          <div className="form-group">
+            <label>默认质量</label>
+            <select value={draftSettings.default_quality} onChange={event => updateDraft({ default_quality: event.target.value })}>
+              {QUALITIES.map(quality => (
+                <option key={quality} value={quality}>
+                  {QUALITY_LABELS[quality] || quality}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+        <div className="form-row">
+          <div className="form-group">
+            <label>默认输出格式</label>
+            <select value={draftSettings.default_format} onChange={event => updateDraft({ default_format: event.target.value })}>
+              {FORMATS.map(format => <option key={format} value={format}>{format.toUpperCase()}</option>)}
+            </select>
+          </div>
+          <div className="form-group" />
+        </div>
+      </section>
+    );
+  }
+
+  function renderFiles() {
+    return (
+      <section className="settings-card">
+        <h3 className="settings-section-title">图片与文件</h3>
+        <div className="form-group">
+          <div className="label-row">
+            <label>生成图片保存目录</label>
+          </div>
+          <div className="dir-input">
+            <input
+              type="text"
+              value={draftSettings.default_output_dir}
+              onChange={event => updateDraft({ default_output_dir: event.target.value })}
+              placeholder="留空将使用桌面作为默认目录"
+            />
+            <button className="settings-btn settings-btn-secondary" onClick={() => void pickDirectory('default_output_dir')}>选择目录</button>
+            <button
+              className="settings-btn settings-btn-secondary"
+              onClick={() => void openDirectory(draftSettings.default_output_dir)}
+              disabled={!draftSettings.default_output_dir.trim()}
+            >打开目录</button>
+          </div>
+          <p className="form-hint">生成、编辑和批量任务产生的图片默认保存到这里。留空时会回退到桌面。</p>
+        </div>
+        <div className="form-group">
+          <div className="label-row">
+            <label>图片库素材目录</label>
+          </div>
+          <div className="dir-input">
+            <input
+              type="text"
+              value={draftSettings.library_input_dir}
+              onChange={event => updateDraft({ library_input_dir: event.target.value })}
+              placeholder="可选，留空表示不扫描额外素材"
+            />
+            <button className="settings-btn settings-btn-secondary" onClick={() => void pickDirectory('library_input_dir')}>选择目录</button>
+            <button
+              className="settings-btn settings-btn-secondary"
+              onClick={() => void openDirectory(draftSettings.library_input_dir)}
+              disabled={!draftSettings.library_input_dir.trim()}
+            >打开目录</button>
+          </div>
+          <p className="form-hint">可选。设置后，图片库会额外扫描该目录中的本地图片。</p>
+        </div>
+        <div className="settings-actions-row">
+          <button className="settings-btn settings-btn-outline" onClick={() => void refreshLibrary()}>重新扫描图片库</button>
+        </div>
+      </section>
+    );
+  }
+
+  function renderPostprocess() {
+    return (
+      <section className="settings-card">
+        <h3 className="settings-section-title">后处理工具</h3>
+        <div className="form-row">
+          <div className="form-group">
+            <div className="label-row">
+              <label>remove.bg API Key</label>
+            </div>
+            <input type="password" value={draftSettings.removebg_api_key} onChange={event => updateDraft({ removebg_api_key: event.target.value })} placeholder="用于透明背景处理" />
+          </div>
+          <div className="form-group">
+            <div className="label-row">
+              <label>Topaz API Key（预留）</label>
+            </div>
+            <input type="password" value={draftSettings.topaz_api_key} onChange={event => updateDraft({ topaz_api_key: event.target.value, upscale_provider: event.target.value ? 'topaz' : 'disabled' })} placeholder="后续用于高清放大" />
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  function renderDiagnostics() {
+    // AI 智能体诊断动态化：展示当前选中 Profile + 模型
+    const active = useAIProviderStore.getState().getSelection('');
+    return (
+      <section className="settings-card env-check-card">
+        <h3 className="settings-section-title">运行环境诊断</h3>
+        <p className="settings-section-desc">
+          一键检查 CyImagePro Server、账户状态、Windows 网络与系统代理、Runtime Token、当前 AI 智能体、图片生成、图片目录与后处理。
+          Token 仅显示掩码；轻量自检不会调用真实图片生成，不会产生费用。
+        </p>
+
+        <div className="form-group">
+          <label>当前 AI 模型服务</label>
+          <p className="form-hint">
+            {active
+              ? `模型服务：${active.profile.name} · 模型：${active.model.display_name || active.model.model_id} · 状态：${active.model.test_status === 'available' ? '可用' : active.model.test_status === 'failed' ? '测试失败' : '未测试'}`
+              : '未选择用户模型服务，AI 对话与任务规划将不可用（请在上方「AI 智能体」中配置）。'}
+          </p>
+        </div>
+
+        <div className="settings-actions-row">
+          <button
+            className="settings-btn settings-btn-primary"
+            disabled={envChecking}
+            onClick={() => void runEnvironmentCheck()}
+          >
+            {envChecking ? '检查中...' : '一键检查运行环境'}
+          </button>
+          <button
+            className="settings-btn settings-btn-secondary"
+            disabled={!envCheck}
+            onClick={() => copyDiagnosticInfo()}
+          >
+            复制诊断信息
+          </button>
+          <button
+            className="settings-btn settings-btn-outline"
+            disabled={testImageBusy}
+            onClick={() => void runTestImageGeneration()}
+            title="将调用一次真实 gpt-image-2，会产生一次图片生成费用"
+          >
+            {testImageBusy ? '生成中...' : '生成 1 张测试图'}
+          </button>
+        </div>
+        {envStatus && <p className="form-hint">{envStatus}</p>}
+        {testImageStatus && <p className="form-hint">{testImageStatus}</p>}
+
+        {envCheck && (
+          <div className="endpoint-check-grid">
+            {envCheck.items.map(item => (
+              <div key={item.key} className={`endpoint-check-card ${item.status === 'ok' ? 'ok' : item.status === 'warn' ? 'warn' : 'fail'}`}>
+                <div className="endpoint-check-head">
+                  <strong>{item.title}</strong>
+                  <span>
+                    {item.status === 'ok' && '✅ 正常'}
+                    {item.status === 'warn' && '⚠ 提示'}
+                    {item.status === 'error' && '❌ 异常'}
+                    {item.status === 'pending' && '⏳ 检查中'}
+                    {item.latency_ms != null && ` · ${item.latency_ms} ms`}
+                  </span>
+                </div>
+                <div className="endpoint-check-message">{item.summary}</div>
+                {item.detail && (
+                  <pre className="endpoint-check-meta" style={{ whiteSpace: 'pre-wrap', margin: '6px 0 0' }}>{item.detail}</pre>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {testImage && (
+          <div className={`endpoint-check-card ${testImage.ok ? 'ok' : 'fail'}`}>
+            <div className="endpoint-check-head">
+              <strong>测试图结果</strong>
+              <span>{testImage.ok ? '✅ 成功' : '❌ 失败'}{testImage.http_status ? ` · HTTP ${testImage.http_status}` : ''}{testImage.latency_ms ? ` · ${(testImage.latency_ms / 1000).toFixed(1)} s` : ''}</span>
+            </div>
+            <div className="endpoint-check-message">
+              Endpoint：{testImage.endpoint}
+            </div>
+            {testImage.saved_path && (
+              <pre className="endpoint-check-meta" style={{ whiteSpace: 'pre-wrap', margin: '6px 0 0' }}>保存路径：{testImage.saved_path}</pre>
+            )}
+            {testImage.error_message && (
+              <pre className="endpoint-check-meta" style={{ whiteSpace: 'pre-wrap', margin: '6px 0 0' }}>{testImage.error_message}</pre>
+            )}
+          </div>
+        )}
+
+        <div className="form-group">
+          <label>服务器视觉模型（参考）</label>
+          <p className="form-hint">
+            {modelsLoading
+              ? '正在加载服务器模型...'
+              : modelsError
+                ? `服务器模型获取失败：${modelsError}`
+                : visionModelHint}
+          </p>
+        </div>
+      </section>
+    );
+  }
+
+  function renderUpdate() {
+    return (
+      <section className="settings-card">
+        <h3 className="settings-section-title">CyImagePro</h3>
+        <div className="form-group">
+          <label>当前版本</label>
+          <div className="current-version-row">
+            <span className="current-version-value">{appVersion ? `V${appVersion}` : '读取中...'}</span>
+            <span className="release-stage-badge">{RELEASE_INFO.label}</span>
+          </div>
+        </div>
+        <div className="settings-actions-row">
+          <button className="settings-btn settings-btn-primary" disabled={checkingUpdate} onClick={() => void handleCheckUpdate()}>
+            {checkingUpdate ? '检查中...' : '检查更新'}
+          </button>
+          {updateStatus.updateAvailable && (
+            <span className="form-hint form-hint-warning">发现新版本 {updateStatus.updateInfo?.version}，请通过侧边栏版本按钮下载更新。</span>
+          )}
+          {!updateStatus.updateAvailable && updateStatus.initialized && (
+            <span className="form-hint form-hint-success">当前已是最新版本。</span>
+          )}
+          {updateStatus.error && <span className="form-hint form-hint-error">更新检查失败：{updateStatus.error}</span>}
+        </div>
+        <div className="form-group">
+          <label>应用信息</label>
+          <p className="form-hint">更新通道：GitHub Releases · 安装模式：passive（下载完成后询问安装）。</p>
+        </div>
+      </section>
+    );
+  }
+
+  const sectionContent = () => {
+    switch (activeSection) {
+      case 'general': return renderGeneral();
+      case 'server': return renderServer();
+      case 'agents': return <AgentProviderSettings />;
+      case 'imagegen': return renderImageGen();
+      case 'files': return renderFiles();
+      case 'postprocess': return renderPostprocess();
+      case 'diagnostics': return renderDiagnostics();
+      case 'update': return renderUpdate();
+      default: return null;
+    }
+  };
+
+  const showSectionFooter = ['general', 'server', 'imagegen', 'files', 'postprocess'].includes(activeSection);
+
+  return (
+    <div className="page settings-page settings-page-wide">
+      <div className="page-header">
+        <h2>设置与更新</h2>
+        <p>配置服务、AI 智能体、生成参数、文件、工具与软件更新。</p>
+      </div>
+      <StatusBar text={settingsStatusText} />
+
+      <div className="settings-center">
+        <nav className="settings-nav">
+          {SETTINGS_NAV.map(item => (
+            <button
+              key={item.key}
+              className={`settings-nav-item ${activeSection === item.key ? 'active' : ''}`}
+              onClick={() => {
+                setActiveSection(item.key);
+                setSettingsStatus('');
+              }}
+              title={item.desc}
+            >
+              {item.label}
+            </button>
+          ))}
+        </nav>
+        <div className="settings-content">
+          {sectionContent()}
+          {showSectionFooter && (
+            <div className="settings-section-footer">
+              <button className="settings-btn settings-btn-secondary" onClick={resetCurrentSection} disabled={!currentSectionDirty || savingSection !== null}>
+                恢复已保存值
+              </button>
+              <button className="settings-btn settings-btn-primary" onClick={() => void saveCurrentSection()} disabled={!currentSectionDirty || savingSection !== null}>
+                {savingSection !== null ? '保存中...' : '保存更改'}
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {templateModalOpen && (
+        <div className="template-modal-overlay" onClick={() => setTemplateModalOpen(false)}>
+          <div className="template-modal" onClick={event => event.stopPropagation()}>
+            <div className="template-modal-header">
+              <div>
+                <h3>智能体模板中心</h3>
+                <p>管理主任务模板、风格模板、导入导出和命中日志。</p>
+              </div>
+              <button className="template-modal-close" onClick={() => setTemplateModalOpen(false)} aria-label="关闭模板中心">×</button>
+            </div>
+
+            <StatusBar text={templateStatus} />
+
+            <div className="template-modal-tabs">
+              <button className={templateTab === 'task' ? 'active' : ''} onClick={() => setTemplateTab('task')}>主任务模板</button>
+              <button className={templateTab === 'style' ? 'active' : ''} onClick={() => setTemplateTab('style')}>风格模板</button>
+              <button className={templateTab === 'io' ? 'active' : ''} onClick={() => setTemplateTab('io')}>导入导出</button>
+              <button className={templateTab === 'logs' ? 'active' : ''} onClick={() => setTemplateTab('logs')}>命中日志</button>
+            </div>
+
+            <div className="template-modal-body">
+              {templateTab === 'task' && renderTaskTemplateTab()}
+              {templateTab === 'style' && renderStyleTemplateTab()}
+              {templateTab === 'io' && renderImportExportTab()}
+              {templateTab === 'logs' && renderLogsTab()}
+            </div>
+
+            <div className="template-modal-footer">
+              <button className="settings-btn settings-btn-secondary" onClick={() => setTemplateModalOpen(false)}>关闭</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
+  // ============ 模板中心 Tabs（保持原有能力） ============
 
   function renderTaskTemplateTab() {
     return (
@@ -957,286 +1519,4 @@ export default function Settings() {
       </div>
     );
   }
-
-  return (
-    <div className="page settings-page settings-page-wide">
-      <div className="page-header">
-        <h2>设置</h2>
-        <p>配置默认生成参数、智能体连接、自检能力、后处理工具和本地模板中心。</p>
-      </div>
-      <StatusBar text={settingsStatusText} />
-
-      <div className="settings-form settings-form-upgraded">
-        <section className="settings-card">
-          <h3 className="settings-section-title">默认生成参数</h3>
-          <div className="form-row">
-            <div className="form-group">
-              <label>默认图片尺寸</label>
-              <select value={draftSettings.default_size} onChange={event => updateDraft({ default_size: event.target.value })}>
-                {SIZES.map(size => <option key={size} value={size}>{size}</option>)}
-              </select>
-            </div>
-            <div className="form-group">
-              <label>默认质量</label>
-              <select value={draftSettings.default_quality} onChange={event => updateDraft({ default_quality: event.target.value })}>
-                {QUALITIES.map(quality => (
-                  <option key={quality} value={quality}>
-                    {QUALITY_LABELS[quality] || quality}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-          <div className="form-row">
-            <div className="form-group">
-              <label>默认输出格式</label>
-              <select value={draftSettings.default_format} onChange={event => updateDraft({ default_format: event.target.value })}>
-                {FORMATS.map(format => <option key={format} value={format}>{format.toUpperCase()}</option>)}
-              </select>
-            </div>
-            <div className="form-group" />
-          </div>
-          <div className="settings-actions-row">
-            <button className="settings-btn settings-btn-secondary" onClick={() => resetSection('defaults')} disabled={!defaultsDirty || savingSection === 'defaults'}>恢复已保存值</button>
-            <button className="settings-btn settings-btn-primary" onClick={() => void saveSection('defaults', '默认生成参数已保存')} disabled={!defaultsDirty || savingSection === 'defaults'}>
-              {savingSection === 'defaults' ? '保存中...' : '保存'}
-            </button>
-          </div>
-        </section>
-
-        <section className="settings-card">
-          <h3 className="settings-section-title">AI 智能体</h3>
-          <div className="form-group">
-            <div className="label-row">
-              <label>AI 头像</label>
-            </div>
-            <div className="avatar-setting-row">
-              <div className="avatar-preview ai">
-                {draftSettings.ai_avatar_data_url ? <img src={draftSettings.ai_avatar_data_url} alt="AI 头像" /> : 'AI'}
-              </div>
-              <div className="avatar-setting-actions">
-                <button className="settings-btn settings-btn-primary" onClick={() => void pickAiAvatar()}>更换头像</button>
-                <button className="settings-btn settings-btn-secondary" onClick={() => updateDraft({ ai_avatar_data_url: '' })} disabled={!draftSettings.ai_avatar_data_url}>清除</button>
-                <p className="form-hint">头像仅保存在本机，不上传到服务端。</p>
-              </div>
-            </div>
-          </div>
-
-          <div className="form-row">
-            <div className="form-group">
-              <div className="label-row">
-                <label>智能体名称</label>
-              </div>
-              <input type="text" value={draftSettings.agent_name} onChange={event => updateDraft({ agent_name: event.target.value })} placeholder="CyImage Agent" />
-            </div>
-            <div className="form-group">
-              <div className="label-row">
-                <label>Agent 模型</label>
-              </div>
-              <input type="text" value={draftSettings.agent_model} onChange={event => updateDraft({ agent_model: event.target.value, chat_model: event.target.value })} placeholder="gpt-4o" />
-            </div>
-          </div>
-
-          <div className="form-row">
-            <div className="form-group">
-              <div className="label-row">
-                <label>图片理解模型</label>
-              </div>
-              <input
-                list="vision-model-options"
-                type="text"
-                value={draftSettings.vision_model}
-                onChange={event => updateDraft({ vision_model: event.target.value })}
-                placeholder="gpt-4o"
-              />
-              <datalist id="vision-model-options">
-                {visionModelOptions.map(model => (
-                  <option key={model.id} value={model.name}>{model.display_name || model.name}</option>
-                ))}
-              </datalist>
-              <p className="form-hint">
-                {visionModelHint || '带图聊天和图片内容识别会优先走官方 responses 图片理解能力，不依赖当前 Agent 模型是否支持视觉。'}
-              </p>
-            </div>
-            <div className="form-group" />
-          </div>
-
-          <div className="form-row">
-            <div className="form-group">
-              <div className="label-row">
-                <label>Agent Base URL</label>
-              </div>
-              <input type="text" value={draftSettings.agent_base_url} onChange={event => updateDraft({ agent_base_url: event.target.value, chat_base_url: event.target.value })} placeholder="https://www.packyapi.com/v1" />
-            </div>
-            <div className="form-group">
-              <div className="label-row">
-                <label>Agent Token</label>
-              </div>
-              <input type="password" value={draftSettings.agent_token} onChange={event => updateDraft({ agent_token: event.target.value })} placeholder="sk-..." />
-            </div>
-          </div>
-
-          <div className="form-row">
-            <div className="form-group">
-              <div className="label-row">
-                <label>上下文窗口</label>
-              </div>
-              <input type="number" min={4096} value={draftSettings.agent_context_window} onChange={event => updateDraft({ agent_context_window: Math.max(4096, parseInt(event.target.value || '32768', 10) || 32768) })} />
-            </div>
-            <div className="form-group">
-              <div className="label-row">
-                <label>对话 Token 兜底</label>
-              </div>
-              <input type="password" value={draftSettings.chat_token} onChange={event => updateDraft({ chat_token: event.target.value })} placeholder="当 Agent Token 为空时可作为兜底" />
-            </div>
-          </div>
-
-          <div className="form-group">
-            <div className="label-row">
-              <label>智能体系统提示词</label>
-            </div>
-            <textarea rows={4} value={draftSettings.agent_system_prompt} onChange={event => updateDraft({ agent_system_prompt: event.target.value, chat_system_prompt: event.target.value })} placeholder="该提示词会影响智能体的任务理解、追问方式和提案风格。" />
-            <p className="form-hint">该提示词用于智能体理解任务和生成提案，不直接替代图片生成提示词。</p>
-          </div>
-
-          <div className="form-group">
-            <div className="label-row">
-              <label>当前聊天实际生效配置</label>
-            </div>
-            <p className="form-hint">
-              {`来源：${resolvedAgentConfig.source === 'agent' ? 'Agent 配置优先' : 'Chat 兜底配置'} · 模型：${resolvedAgentConfig.model || '未配置'} · Base URL：${resolvedAgentConfig.baseUrl || '未配置'} · Token：${resolvedAgentConfig.token ? '已配置' : '未配置'}`}
-            </p>
-            {agentConfigWarning && <p className="form-hint">{agentConfigWarning}</p>}
-          </div>
-
-          <div className="settings-actions-row">
-            <button className="settings-btn settings-btn-primary" disabled={checkingEndpoints} onClick={() => void runEndpointCheck()}>
-              {checkingEndpoints ? '检测中...' : '连接自检'}
-            </button>
-            <p className="form-hint">依次检测基础对话、system prompt、多模态聊天兼容性、JSON 解析，以及文生图和图生图状态。</p>
-          </div>
-
-          <div className="settings-actions-row settings-actions-row-end">
-            <button className="settings-btn settings-btn-secondary" onClick={() => resetSection('agent')} disabled={!agentDirty || savingSection === 'agent'}>恢复已保存值</button>
-            <button className="settings-btn settings-btn-primary" onClick={() => void saveSection('agent', 'AI 智能体设置已保存')} disabled={!agentDirty || savingSection === 'agent'}>
-              {savingSection === 'agent' ? '保存中...' : '保存'}
-            </button>
-          </div>
-
-          {agentStatus && <StatusBar text={agentStatus} />}
-
-          {endpointCheck && (
-            <div className="endpoint-check-grid">
-              {renderEndpointStatus('Agent 对话接口', endpointCheck.chat)}
-              {renderEndpointStatus('带 System Prompt 的聊天请求', endpointCheck.chat_with_system)}
-              {renderEndpointStatus('聊天链路兼容性检测', endpointCheck.chat_multimodal)}
-              {renderEndpointStatus('官方图片理解能力', endpointCheck.official_vision)}
-              {renderEndpointStatus('Agent 理解接口（JSON 解析）', endpointCheck.interpret)}
-              {renderEndpointStatus('文生图接口', endpointCheck.generation)}
-              {renderEndpointStatus('图生图接口', endpointCheck.edit)}
-            </div>
-          )}
-        </section>
-
-        <section className="settings-card">
-          <h3 className="settings-section-title">后处理工具</h3>
-          <div className="form-row">
-            <div className="form-group">
-              <div className="label-row">
-                <label>remove.bg API Key</label>
-              </div>
-              <input type="password" value={draftSettings.removebg_api_key} onChange={event => updateDraft({ removebg_api_key: event.target.value })} placeholder="用于透明背景处理" />
-            </div>
-            <div className="form-group">
-              <div className="label-row">
-                <label>Topaz API Key（预留）</label>
-              </div>
-              <input type="password" value={draftSettings.topaz_api_key} onChange={event => updateDraft({ topaz_api_key: event.target.value, upscale_provider: event.target.value ? 'topaz' : 'disabled' })} placeholder="后续用于高清放大" />
-            </div>
-          </div>
-          <div className="settings-actions-row">
-            <button className="settings-btn settings-btn-secondary" onClick={() => resetSection('postprocess')} disabled={!postprocessDirty || savingSection === 'postprocess'}>恢复已保存值</button>
-            <button className="settings-btn settings-btn-primary" onClick={() => void saveSection('postprocess', '后处理工具设置已保存')} disabled={!postprocessDirty || savingSection === 'postprocess'}>
-              {savingSection === 'postprocess' ? '保存中...' : '保存'}
-            </button>
-          </div>
-        </section>
-
-        <section className="settings-card">
-          <h3 className="settings-section-title">外观</h3>
-          <div className="form-group">
-            <label>主题模式</label>
-            <div className="theme-picker">
-              {THEME_OPTIONS.map(option => (
-                <button
-                  key={option.value}
-                  className={`theme-picker-btn ${draftSettings.theme === option.value ? 'active' : ''}`}
-                  onClick={() => updateDraft({ theme: option.value })}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="settings-actions-row">
-            <button className="settings-btn settings-btn-secondary" onClick={() => resetSection('appearance')} disabled={!appearanceDirty || savingSection === 'appearance'}>恢复已保存值</button>
-            <button className="settings-btn settings-btn-primary" onClick={() => void saveSection('appearance', '外观设置已保存')} disabled={!appearanceDirty || savingSection === 'appearance'}>
-              {savingSection === 'appearance' ? '保存中...' : '保存'}
-            </button>
-          </div>
-        </section>
-
-        <section className="settings-card template-entry-card">
-          <div className="template-entry-copy">
-            <h3 className="settings-section-title">智能体模板</h3>
-            <p>模板中心用于管理主任务模板、风格模板、导入导出和命中日志。复杂表单统一放进弹窗里处理，避免设置页继续堆叠。</p>
-            <div className="template-entry-stats">
-              <span>{taskTemplates.length} 个主任务模板</span>
-              <span>{styleTemplates.length} 个风格模板</span>
-              <span>{templateLogs.length} 条命中日志</span>
-            </div>
-          </div>
-          <div className="template-entry-actions">
-            <button className="settings-btn settings-btn-primary" onClick={() => setTemplateModalOpen(true)}>打开模板中心</button>
-            <button className="settings-btn settings-btn-secondary" onClick={() => void refreshTemplateCenter()}>刷新数据</button>
-          </div>
-        </section>
-      </div>
-
-      {templateModalOpen && (
-        <div className="template-modal-overlay" onClick={() => setTemplateModalOpen(false)}>
-          <div className="template-modal" onClick={event => event.stopPropagation()}>
-            <div className="template-modal-header">
-              <div>
-                <h3>智能体模板中心</h3>
-                <p>管理主任务模板、风格模板、导入导出和命中日志。</p>
-              </div>
-              <button className="template-modal-close" onClick={() => setTemplateModalOpen(false)} aria-label="关闭模板中心">×</button>
-            </div>
-
-            <StatusBar text={templateStatus} />
-
-            <div className="template-modal-tabs">
-              <button className={templateTab === 'task' ? 'active' : ''} onClick={() => setTemplateTab('task')}>主任务模板</button>
-              <button className={templateTab === 'style' ? 'active' : ''} onClick={() => setTemplateTab('style')}>风格模板</button>
-              <button className={templateTab === 'io' ? 'active' : ''} onClick={() => setTemplateTab('io')}>导入导出</button>
-              <button className={templateTab === 'logs' ? 'active' : ''} onClick={() => setTemplateTab('logs')}>命中日志</button>
-            </div>
-
-            <div className="template-modal-body">
-              {templateTab === 'task' && renderTaskTemplateTab()}
-              {templateTab === 'style' && renderStyleTemplateTab()}
-              {templateTab === 'io' && renderImportExportTab()}
-              {templateTab === 'logs' && renderLogsTab()}
-            </div>
-
-            <div className="template-modal-footer">
-              <button className="settings-btn settings-btn-secondary" onClick={() => setTemplateModalOpen(false)}>关闭</button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
 }
-

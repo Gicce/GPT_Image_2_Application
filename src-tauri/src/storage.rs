@@ -8,12 +8,16 @@ use tauri::AppHandle;
 use tauri::Manager;
 
 use crate::models::{
-    AgentStyleTemplate, AgentTaskTemplate, AgentTemplateClarificationRules, AgentTemplateExportPayload,
-    AgentTemplateImportPayload, AgentTemplateLog, AgentTemplateOutputSchema, ImageRecord, Task,
+    AgentStyleTemplate, AgentTaskTemplate, AgentTemplateClarificationRules,
+    AgentTemplateExportPayload, AgentTemplateImportPayload, AgentTemplateLog,
+    AgentTemplateOutputSchema, ImageRecord, Task,
 };
 
 pub fn data_dir(app: &AppHandle) -> PathBuf {
-    let dir = app.path().app_data_dir().expect("failed to resolve app data dir");
+    let dir = app
+        .path()
+        .app_data_dir()
+        .expect("failed to resolve app data dir");
     fs::create_dir_all(&dir).ok();
     dir
 }
@@ -139,8 +143,9 @@ fn open_db(path: &PathBuf) -> Option<Connection> {
         CREATE INDEX IF NOT EXISTS idx_agent_template_logs_conversation_id
             ON agent_template_logs(conversation_id);
         CREATE INDEX IF NOT EXISTS idx_agent_template_logs_created_at
-            ON agent_template_logs(created_at DESC);"
-    ).ok()?;
+            ON agent_template_logs(created_at DESC);",
+    )
+    .ok()?;
     Some(conn)
 }
 
@@ -158,10 +163,14 @@ fn stringify_json_array(values: &[String]) -> Result<String, String> {
 
 fn seed_default_agent_templates(conn: &Connection) -> Result<(), String> {
     let task_count: i64 = conn
-        .query_row("SELECT COUNT(1) FROM agent_task_templates", [], |row| row.get(0))
+        .query_row("SELECT COUNT(1) FROM agent_task_templates", [], |row| {
+            row.get(0)
+        })
         .map_err(|e| e.to_string())?;
     let style_count: i64 = conn
-        .query_row("SELECT COUNT(1) FROM agent_style_templates", [], |row| row.get(0))
+        .query_row("SELECT COUNT(1) FROM agent_style_templates", [], |row| {
+            row.get(0)
+        })
         .map_err(|e| e.to_string())?;
 
     let now = chrono::Local::now().to_rfc3339();
@@ -261,9 +270,13 @@ fn seed_default_agent_templates(conn: &Connection) -> Result<(), String> {
         ];
 
         for template in task_templates {
-            let trigger_keywords_json = serde_json::to_string(&template.trigger_keywords).map_err(|e| e.to_string())?;
-            let exclude_keywords_json = serde_json::to_string(&template.exclude_keywords).map_err(|e| e.to_string())?;
-            let clarification_required_fields_json = serde_json::to_string(&template.clarification_rules.required_fields).map_err(|e| e.to_string())?;
+            let trigger_keywords_json =
+                serde_json::to_string(&template.trigger_keywords).map_err(|e| e.to_string())?;
+            let exclude_keywords_json =
+                serde_json::to_string(&template.exclude_keywords).map_err(|e| e.to_string())?;
+            let clarification_required_fields_json =
+                serde_json::to_string(&template.clarification_rules.required_fields)
+                    .map_err(|e| e.to_string())?;
             conn.execute(
                 "INSERT OR IGNORE INTO agent_task_templates (
                     id, name, enabled, priority, category, scene, intent, match_mode,
@@ -318,9 +331,15 @@ fn seed_default_agent_templates(conn: &Connection) -> Result<(), String> {
                 name: "写实摄影".to_string(),
                 style_group: "visual_style".to_string(),
                 trigger_keywords: vec!["写实".to_string(), "真实".to_string(), "摄影".to_string()],
-                style_prompt_fragment: "整体采用真实摄影风格，光影自然，细节清晰，质感真实。".to_string(),
+                style_prompt_fragment: "整体采用真实摄影风格，光影自然，细节清晰，质感真实。"
+                    .to_string(),
                 negative_prompt_fragment: "假脸，塑料感，卡通感，低清晰度".to_string(),
-                compatible_scenes: vec!["general".to_string(), "amazon_a_plus".to_string(), "ecommerce_main".to_string(), "img2img_merge".to_string()],
+                compatible_scenes: vec![
+                    "general".to_string(),
+                    "amazon_a_plus".to_string(),
+                    "ecommerce_main".to_string(),
+                    "img2img_merge".to_string(),
+                ],
                 created_at: now.clone(),
                 updated_at: now.clone(),
                 ..AgentStyleTemplate::default()
@@ -329,10 +348,20 @@ fn seed_default_agent_templates(conn: &Connection) -> Result<(), String> {
                 id: "premium_commercial_style".to_string(),
                 name: "高端商业广告".to_string(),
                 style_group: "platform".to_string(),
-                trigger_keywords: vec!["商业".to_string(), "高级".to_string(), "广告感".to_string()],
-                style_prompt_fragment: "整体呈现高端商业广告摄影风格，构图克制，主体突出，画面高级。".to_string(),
+                trigger_keywords: vec![
+                    "商业".to_string(),
+                    "高级".to_string(),
+                    "广告感".to_string(),
+                ],
+                style_prompt_fragment:
+                    "整体呈现高端商业广告摄影风格，构图克制，主体突出，画面高级。".to_string(),
                 negative_prompt_fragment: "廉价感，画面拥挤，主体不突出".to_string(),
-                compatible_scenes: vec!["general".to_string(), "amazon_a_plus".to_string(), "brand_scene".to_string(), "ecommerce_main".to_string()],
+                compatible_scenes: vec![
+                    "general".to_string(),
+                    "amazon_a_plus".to_string(),
+                    "brand_scene".to_string(),
+                    "ecommerce_main".to_string(),
+                ],
                 created_at: now.clone(),
                 updated_at: now.clone(),
                 ..AgentStyleTemplate::default()
@@ -341,10 +370,20 @@ fn seed_default_agent_templates(conn: &Connection) -> Result<(), String> {
                 id: "cyberpunk_style".to_string(),
                 name: "赛博朋克风格".to_string(),
                 style_group: "visual_style".to_string(),
-                trigger_keywords: vec!["赛博朋克".to_string(), "cyberpunk".to_string(), "霓虹未来".to_string()],
-                style_prompt_fragment: "整体采用赛博朋克视觉风格，带有霓虹灯光、未来都市氛围和强烈的冷暖光影对比。".to_string(),
+                trigger_keywords: vec![
+                    "赛博朋克".to_string(),
+                    "cyberpunk".to_string(),
+                    "霓虹未来".to_string(),
+                ],
+                style_prompt_fragment:
+                    "整体采用赛博朋克视觉风格，带有霓虹灯光、未来都市氛围和强烈的冷暖光影对比。"
+                        .to_string(),
                 negative_prompt_fragment: "风格不统一，低质霓虹效果，背景脏乱".to_string(),
-                compatible_scenes: vec!["general".to_string(), "poster".to_string(), "brand_scene".to_string()],
+                compatible_scenes: vec![
+                    "general".to_string(),
+                    "poster".to_string(),
+                    "brand_scene".to_string(),
+                ],
                 created_at: now.clone(),
                 updated_at: now.clone(),
                 ..AgentStyleTemplate::default()
@@ -356,7 +395,11 @@ fn seed_default_agent_templates(conn: &Connection) -> Result<(), String> {
                 trigger_keywords: vec!["电商".to_string(), "主图".to_string(), "白底".to_string()],
                 style_prompt_fragment: "画面干净简洁，主体边缘清晰，适合电商展示。".to_string(),
                 negative_prompt_fragment: "背景杂乱，构图失衡，信息干扰".to_string(),
-                compatible_scenes: vec!["ecommerce_main".to_string(), "amazon_a_plus".to_string(), "general".to_string()],
+                compatible_scenes: vec![
+                    "ecommerce_main".to_string(),
+                    "amazon_a_plus".to_string(),
+                    "general".to_string(),
+                ],
                 created_at: now.clone(),
                 updated_at: now.clone(),
                 ..AgentStyleTemplate::default()
@@ -364,10 +407,14 @@ fn seed_default_agent_templates(conn: &Connection) -> Result<(), String> {
         ];
 
         for template in style_templates {
-            let trigger_keywords_json = serde_json::to_string(&template.trigger_keywords).map_err(|e| e.to_string())?;
-            let exclude_keywords_json = serde_json::to_string(&template.exclude_keywords).map_err(|e| e.to_string())?;
-            let compatible_intents_json = serde_json::to_string(&template.compatible_intents).map_err(|e| e.to_string())?;
-            let compatible_scenes_json = serde_json::to_string(&template.compatible_scenes).map_err(|e| e.to_string())?;
+            let trigger_keywords_json =
+                serde_json::to_string(&template.trigger_keywords).map_err(|e| e.to_string())?;
+            let exclude_keywords_json =
+                serde_json::to_string(&template.exclude_keywords).map_err(|e| e.to_string())?;
+            let compatible_intents_json =
+                serde_json::to_string(&template.compatible_intents).map_err(|e| e.to_string())?;
+            let compatible_scenes_json =
+                serde_json::to_string(&template.compatible_scenes).map_err(|e| e.to_string())?;
             conn.execute(
                 "INSERT OR IGNORE INTO agent_style_templates (
                     id, name, enabled, priority, style_group, trigger_keywords_json, exclude_keywords_json,
@@ -415,10 +462,14 @@ fn seed_default_agent_templates(conn: &Connection) -> Result<(), String> {
         ..AgentStyleTemplate::default()
     };
 
-    let trigger_keywords_json = serde_json::to_string(&iphone_style_template.trigger_keywords).map_err(|e| e.to_string())?;
-    let exclude_keywords_json = serde_json::to_string(&iphone_style_template.exclude_keywords).map_err(|e| e.to_string())?;
-    let compatible_intents_json = serde_json::to_string(&iphone_style_template.compatible_intents).map_err(|e| e.to_string())?;
-    let compatible_scenes_json = serde_json::to_string(&iphone_style_template.compatible_scenes).map_err(|e| e.to_string())?;
+    let trigger_keywords_json = serde_json::to_string(&iphone_style_template.trigger_keywords)
+        .map_err(|e| e.to_string())?;
+    let exclude_keywords_json = serde_json::to_string(&iphone_style_template.exclude_keywords)
+        .map_err(|e| e.to_string())?;
+    let compatible_intents_json = serde_json::to_string(&iphone_style_template.compatible_intents)
+        .map_err(|e| e.to_string())?;
+    let compatible_scenes_json = serde_json::to_string(&iphone_style_template.compatible_scenes)
+        .map_err(|e| e.to_string())?;
     conn.execute(
         "INSERT INTO agent_style_templates (
             id, name, enabled, priority, style_group, trigger_keywords_json, exclude_keywords_json,
@@ -462,7 +513,8 @@ fn seed_default_agent_templates(conn: &Connection) -> Result<(), String> {
 fn row_to_task_template(row: &rusqlite::Row<'_>) -> rusqlite::Result<AgentTaskTemplate> {
     let trigger_keywords_json: String = row.get("trigger_keywords_json")?;
     let exclude_keywords_json: String = row.get("exclude_keywords_json")?;
-    let clarification_required_fields_json: String = row.get("clarification_required_fields_json")?;
+    let clarification_required_fields_json: String =
+        row.get("clarification_required_fields_json")?;
     Ok(AgentTaskTemplate {
         id: row.get("id")?,
         name: row.get("name")?,
@@ -555,7 +607,10 @@ pub fn get_agent_task_templates(app: &AppHandle) -> Result<Vec<AgentTaskTemplate
     Ok(rows.filter_map(Result::ok).collect())
 }
 
-pub fn save_agent_task_template(app: &AppHandle, mut template: AgentTaskTemplate) -> Result<AgentTaskTemplate, String> {
+pub fn save_agent_task_template(
+    app: &AppHandle,
+    mut template: AgentTaskTemplate,
+) -> Result<AgentTaskTemplate, String> {
     let conn = open_app_db(app)?;
     let now = chrono::Local::now().to_rfc3339();
     if template.id.trim().is_empty() {
@@ -567,7 +622,8 @@ pub fn save_agent_task_template(app: &AppHandle, mut template: AgentTaskTemplate
     template.updated_at = now;
     let trigger_keywords_json = stringify_json_array(&template.trigger_keywords)?;
     let exclude_keywords_json = stringify_json_array(&template.exclude_keywords)?;
-    let clarification_required_fields_json = stringify_json_array(&template.clarification_rules.required_fields)?;
+    let clarification_required_fields_json =
+        stringify_json_array(&template.clarification_rules.required_fields)?;
     conn.execute(
         "INSERT INTO agent_task_templates (
             id, name, enabled, priority, category, scene, intent, match_mode,
@@ -645,8 +701,11 @@ pub fn save_agent_task_template(app: &AppHandle, mut template: AgentTaskTemplate
 
 pub fn delete_agent_task_template(app: &AppHandle, id: &str) -> Result<(), String> {
     let conn = open_app_db(app)?;
-    conn.execute("DELETE FROM agent_task_templates WHERE id = ?1", params![id])
-        .map_err(|e| e.to_string())?;
+    conn.execute(
+        "DELETE FROM agent_task_templates WHERE id = ?1",
+        params![id],
+    )
+    .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -654,7 +713,11 @@ pub fn toggle_agent_task_template(app: &AppHandle, id: &str, enabled: bool) -> R
     let conn = open_app_db(app)?;
     conn.execute(
         "UPDATE agent_task_templates SET enabled = ?2, updated_at = ?3 WHERE id = ?1",
-        params![id, if enabled { 1 } else { 0 }, chrono::Local::now().to_rfc3339()],
+        params![
+            id,
+            if enabled { 1 } else { 0 },
+            chrono::Local::now().to_rfc3339()
+        ],
     )
     .map_err(|e| e.to_string())?;
     Ok(())
@@ -672,7 +735,10 @@ pub fn get_agent_style_templates(app: &AppHandle) -> Result<Vec<AgentStyleTempla
     Ok(rows.filter_map(Result::ok).collect())
 }
 
-pub fn save_agent_style_template(app: &AppHandle, mut template: AgentStyleTemplate) -> Result<AgentStyleTemplate, String> {
+pub fn save_agent_style_template(
+    app: &AppHandle,
+    mut template: AgentStyleTemplate,
+) -> Result<AgentStyleTemplate, String> {
     let conn = open_app_db(app)?;
     let now = chrono::Local::now().to_rfc3339();
     if template.id.trim().is_empty() {
@@ -729,8 +795,11 @@ pub fn save_agent_style_template(app: &AppHandle, mut template: AgentStyleTempla
 
 pub fn delete_agent_style_template(app: &AppHandle, id: &str) -> Result<(), String> {
     let conn = open_app_db(app)?;
-    conn.execute("DELETE FROM agent_style_templates WHERE id = ?1", params![id])
-        .map_err(|e| e.to_string())?;
+    conn.execute(
+        "DELETE FROM agent_style_templates WHERE id = ?1",
+        params![id],
+    )
+    .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -738,13 +807,20 @@ pub fn toggle_agent_style_template(app: &AppHandle, id: &str, enabled: bool) -> 
     let conn = open_app_db(app)?;
     conn.execute(
         "UPDATE agent_style_templates SET enabled = ?2, updated_at = ?3 WHERE id = ?1",
-        params![id, if enabled { 1 } else { 0 }, chrono::Local::now().to_rfc3339()],
+        params![
+            id,
+            if enabled { 1 } else { 0 },
+            chrono::Local::now().to_rfc3339()
+        ],
     )
     .map_err(|e| e.to_string())?;
     Ok(())
 }
 
-pub fn get_agent_template_logs(app: &AppHandle, limit: Option<usize>) -> Result<Vec<AgentTemplateLog>, String> {
+pub fn get_agent_template_logs(
+    app: &AppHandle,
+    limit: Option<usize>,
+) -> Result<Vec<AgentTemplateLog>, String> {
     let conn = open_app_db(app)?;
     let max_rows = limit.unwrap_or(200).clamp(1, 1000) as i64;
     let mut stmt = conn
@@ -756,7 +832,10 @@ pub fn get_agent_template_logs(app: &AppHandle, limit: Option<usize>) -> Result<
     Ok(rows.filter_map(Result::ok).collect())
 }
 
-pub fn append_agent_template_log(app: &AppHandle, mut log: AgentTemplateLog) -> Result<AgentTemplateLog, String> {
+pub fn append_agent_template_log(
+    app: &AppHandle,
+    mut log: AgentTemplateLog,
+) -> Result<AgentTemplateLog, String> {
     let conn = open_app_db(app)?;
     if log.id.trim().is_empty() {
         log.id = uuid::Uuid::new_v4().to_string();
@@ -798,9 +877,19 @@ pub fn export_agent_templates(app: &AppHandle) -> Result<AgentTemplateExportPayl
     })
 }
 
-pub fn import_agent_templates(app: &AppHandle, payload: AgentTemplateImportPayload, conflict_mode: &str) -> Result<AgentTemplateExportPayload, String> {
-    let existing_task_ids: std::collections::HashSet<String> = get_agent_task_templates(app)?.into_iter().map(|t| t.id).collect();
-    let existing_style_ids: std::collections::HashSet<String> = get_agent_style_templates(app)?.into_iter().map(|t| t.id).collect();
+pub fn import_agent_templates(
+    app: &AppHandle,
+    payload: AgentTemplateImportPayload,
+    conflict_mode: &str,
+) -> Result<AgentTemplateExportPayload, String> {
+    let existing_task_ids: std::collections::HashSet<String> = get_agent_task_templates(app)?
+        .into_iter()
+        .map(|t| t.id)
+        .collect();
+    let existing_style_ids: std::collections::HashSet<String> = get_agent_style_templates(app)?
+        .into_iter()
+        .map(|t| t.id)
+        .collect();
     let overwrite = conflict_mode.eq_ignore_ascii_case("overwrite");
 
     for template in payload.task_templates {
@@ -823,7 +912,11 @@ fn read_db_value(path: &PathBuf) -> Option<String> {
     let conn = open_db(path)?;
     let key = key_for_path(path);
     let value: Option<String> = conn
-        .query_row("SELECT value_json FROM kv_store WHERE key = ?1", params![key], |row| row.get(0))
+        .query_row(
+            "SELECT value_json FROM kv_store WHERE key = ?1",
+            params![key],
+            |row| row.get(0),
+        )
         .ok();
     if value.is_some() {
         return value;
@@ -838,7 +931,10 @@ fn read_db_value(path: &PathBuf) -> Option<String> {
         );
         let _ = conn.execute(
             "INSERT OR IGNORE INTO migrations (id, applied_at) VALUES (?1, ?2)",
-            params![format!("json_import_{}", key_for_path(path)), chrono::Local::now().to_rfc3339()],
+            params![
+                format!("json_import_{}", key_for_path(path)),
+                chrono::Local::now().to_rfc3339()
+            ],
         );
         return fs::read_to_string(path).ok();
     }

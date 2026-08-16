@@ -3,7 +3,6 @@ import { getVersion } from '@tauri-apps/api/app';
 import type { PageType } from '../types';
 import VersionModal from './VersionModal';
 import { useUpdateStore } from '../store/useUpdateStore';
-import { useAuthStore, displayGroupType } from '../store/useAuthStore';
 import './Sidebar.css';
 
 interface SidebarProps {
@@ -13,11 +12,12 @@ interface SidebarProps {
 
 const menuItems: { id: PageType; label: string; icon: string }[] = [
   { id: 'agent', label: 'AI 智能体', icon: '◎' },
+  { id: 'imagestudio', label: '图片生成', icon: '✦' },
   { id: 'queue', label: '任务队列', icon: '▣' },
   { id: 'gallery', label: '图片库', icon: '▦' },
   { id: 'history', label: '历史记录', icon: '◷' },
   { id: 'account', label: '我的账户', icon: '◉' },
-  { id: 'settings', label: '设置', icon: '⚙' },
+  { id: 'settings', label: '设置与更新', icon: '⚙' },
   { id: 'about', label: '关于我们', icon: 'ⓘ' },
 ];
 
@@ -25,10 +25,9 @@ export default function Sidebar({ currentPage, onNavigate }: SidebarProps) {
   const [appVersion, setAppVersion] = useState('');
   const [showVersionModal, setShowVersionModal] = useState(false);
   const { status, checkUpdate } = useUpdateStore();
-  const { user, isLoggedIn } = useAuthStore();
 
   useEffect(() => {
-    getVersion().then(v => setAppVersion('v' + v));
+    getVersion().then(v => setAppVersion('V' + v));
     checkUpdate();
   }, []);
 
@@ -50,15 +49,6 @@ export default function Sidebar({ currentPage, onNavigate }: SidebarProps) {
           >
             <span className="sidebar-icon">{item.icon}</span>
             <span className="sidebar-label">{item.label}</span>
-            {item.id === 'account' && isLoggedIn && user && user.tokens && user.tokens.length > 0 && (
-              <div className="sidebar-balance-group">
-                {user.tokens.map(t => (
-                  <span key={t.group} className={`sidebar-balance ${displayGroupType(t.group) === 'image' ? 'img' : 'chat'}`}>
-                    ${Number(t.balance_usd).toFixed(2)}
-                  </span>
-                ))}
-              </div>
-            )}
           </button>
         ))}
       </nav>

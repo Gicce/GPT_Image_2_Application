@@ -1,5 +1,7 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuthStore } from '../store/useAuthStore';
+import { useSettingsStore } from '../store/useSettingsStore';
+import { useServerStatusStore } from '../store/useServerStatusStore';
 import { serverApi } from '../services/serverApi';
 import { explainError } from '../utils/errors';
 import './Auth.css';
@@ -11,7 +13,7 @@ interface Props {
 
 export default function Auth({ onSuccess, onClose }: Props) {
   const [mode, setMode] = useState<'login' | 'register' | 'forgot'>('login');
-  const [regType, setRegType] = useState<'trial' | 'normal'>('trial');
+  const [regType, setRegType] = useState<'trial' | 'normal'>('normal'); // 默认改为普通账号
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -33,6 +35,19 @@ export default function Auth({ onSuccess, onClose }: Props) {
   const [forgotSuccess, setForgotSuccess] = useState('');
 
   const { login, registerSendCode, registerVerify } = useAuthStore();
+  const { connectionStatus, checkConnection } = useServerStatusStore();
+  const { settings } = useSettingsStore();
+
+  // Connection status display - hide server address, only show status
+  const connectionStatusDisplay = React.useMemo(() => {
+    if (connectionStatus === 'connected') {
+      return { icon: '🟢', text: '已连接服务器', canSubmit: true };
+    }
+    if (connectionStatus === 'connecting') {
+      return { icon: '🟡', text: '正在连接服务器...', canSubmit: false };
+    }
+    return { icon: '🔴', text: '无法连接服务器，请前往「设置与更新 → 服务连接」检查服务器连接', canSubmit: false };
+  }, [connectionStatus]);
 
   // 倒计时
   useEffect(() => {
@@ -60,6 +75,17 @@ export default function Auth({ onSuccess, onClose }: Props) {
   async function handleLoginSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError('');
+
+    // Check connection status first
+    if (connectionStatus !== 'connected') {
+      // Try to reconnect once
+      const connected = await checkConnection();
+      if (!connected) {
+        setError('无法连接服务器，请前往「设置与更新 → 服务连接」检查服务器连接');
+        return;
+      }
+    }
+
     setLoading(true);
     try {
       await login(username, password);
@@ -74,15 +100,42 @@ export default function Auth({ onSuccess, onClose }: Props) {
   async function handleRegSendCode(e: React.FormEvent) {
     e.preventDefault();
     setError('');
+
+    // Check connection status first
+    if (connectionStatus !== 'connected') {
+      // Try to reconnect once
+      const connected = await checkConnection();
+      if (!connected) {
+        setError('无法连接服务器，请前往「设置与更新 → 服务连接」检查服务器连接');
+        return;
+      }
+    }
+
     setLoading(true);
+
+    // [临时诊断] 点击日志
+    console.log('[Auth] ===== CLICK GET CODE =====');
+    console.log('[Auth] current server_url:', useSettingsStore.getState().settings.server_url);
+    console.log('[Auth] regType:', regType);
+    console.log('[Auth] email:', email);
+    console.log('[Auth] username:', username);
+    console.log('[Auth] password length:', password.length);
+
     try {
+      console.log('[Auth] calling registerSendCode...');
       await registerSendCode(username, email, password, regType);
+      console.log('[Auth] registerSendCode SUCCESS');
       setRegStep(2);
       setCountdown(60);
     } catch (e: any) {
+      console.error('[Auth] registerSendCode FAILED:', e);
+      console.error('[Auth] error message:', e.message);
+      console.error('[Auth] error status:', e.status);
+      console.error('[Auth] error isNetworkError:', e.isNetworkError);
       setError(explainError(e));
     } finally {
       setLoading(false);
+      console.log('[Auth] ===== CLICK GET CODE END =====');
     }
   }
 
@@ -150,6 +203,16 @@ export default function Auth({ onSuccess, onClose }: Props) {
           <button className="auth-close" onClick={onClose} title="关闭">×</button>
         )}
         <div className="auth-logo">CyImagePro</div>
+
+        {/* 服务器连接状态 - 不显示具体地址 */}
+        <div className="auth-server-status">
+          <span className={`auth-server-indicator ${connectionStatus}`}>
+            {connectionStatusDisplay.icon}
+          </span>
+          <span className={`auth-server-text ${connectionStatus}`}>
+            {connectionStatusDisplay.text}
+          </span>
+        </div>
 
         {/* 登录 / 注册 tab */}
         <div className="auth-tabs">

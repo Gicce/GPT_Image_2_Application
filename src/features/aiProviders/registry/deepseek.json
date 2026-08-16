@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "provider_type": "deepseek_official",
+  "display_name": "DeepSeek 官方 API",
+  "base_url": "https://api.deepseek.com/v1",
+  "updated_at": "2026-08-15",
+  "billing_modes": [
+    {
+      "mode": "api",
+      "label": "API 按量计费",
+      "description": "使用 DeepSeek 开放平台余额计费",
+      "base_url": "https://api.deepseek.com/v1",
+      "notes": [
+        "🔒 DeepSeek 官方 API 地址，由 CyImagePro 管理"
+      ]
+    }
+  ],
+  "models": [
+    { "model_id": "deepseek-chat", "display_name": "DeepSeek Chat", "capabilities": ["text", "tools", "structured_output"], "lifecycle": "active", "recommended": true },
+    { "model_id": "deepseek-reasoner", "display_name": "DeepSeek Reasoner", "capabilities": ["text", "reasoning"], "lifecycle": "active" }
+  ]
+}

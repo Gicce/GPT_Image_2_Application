@@ -2,6 +2,14 @@ import { create } from 'zustand';
 import type { Settings } from '../types';
 import { api } from '../services/api';
 
+// Generate a unique device ID (UUID-like)
+function generateDeviceId(): string {
+  const timestamp = Date.now().toString(36);
+  const randomPart = Math.random().toString(36).substring(2, 10);
+  const randomPart2 = Math.random().toString(36).substring(2, 6);
+  return `${timestamp}-${randomPart}-${randomPart2}`;
+}
+
 interface SettingsState {
   settings: Settings;
   loading: boolean;
@@ -34,9 +42,11 @@ const defaultSettings: Settings = {
   chat_model: 'gpt-4o',
   chat_base_url: 'https://www.packyapi.com/v1',
   chat_system_prompt: '',
-  server_url: 'https://www.zjcypc.com',
+  server_url: 'http://localhost:4001',
   notice_enabled: true,
   theme: 'system',
+  device_id: '',
+  video_studio_executable: '',
 };
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
@@ -51,6 +61,14 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       const settings = await api.getSettings();
       const merged = normalizeSettings({ ...defaultSettings, ...settings });
       if (merged.default_quality === 'standard') merged.default_quality = 'auto';
+
+      // Generate device_id if not present
+      if (!merged.device_id || merged.device_id.trim() === '') {
+        merged.device_id = generateDeviceId();
+        // Persist the generated device_id immediately
+        await api.saveSettings(merged);
+      }
+
       set({ settings: merged, loading: false });
     } catch {
       set({ loading: false });

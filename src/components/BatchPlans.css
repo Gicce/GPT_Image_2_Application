@@ -1,0 +1,609 @@
+/* ============================================================
+   批量生成方案 —— 简洁卡片 + 详情抽屉（CyImagePro 设计体系）
+   ============================================================ */
+
+/* ---------- 方案卡片 ---------- */
+.bp-card {
+  display: flex;
+  gap: 14px;
+  padding: 16px 18px;
+  border: 1px solid var(--border-default);
+  border-radius: 12px;
+  background: var(--bg-card);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.bp-card:hover {
+  border-color: var(--accent-primary);
+}
+
+.bp-card.selected {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 2px var(--accent-primary-light);
+  background: var(--accent-primary-light);
+}
+
+.bp-card-index {
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: var(--accent-primary-light);
+  color: var(--accent-primary-text);
+  font-weight: 600;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.bp-card-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.bp-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.bp-card-title {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  font-size: 15px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bp-status-badge {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.bp-status-badge.success { background: var(--badge-success-bg); color: var(--badge-success-text); }
+.bp-status-badge.loading { background: var(--badge-info-bg); color: var(--badge-info-text); }
+.bp-status-badge.pending { background: var(--badge-warn-bg); color: var(--badge-warn-text); }
+.bp-status-badge.error { background: var(--badge-danger-bg); color: var(--badge-danger-text); }
+
+.bp-card-summary {
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--text-tertiary);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.bp-card-pending-hint {
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--text-muted);
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--bg-subtle);
+  border: 1px dashed var(--border-default);
+}
+
+.bp-card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.bp-tag {
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  background: var(--bg-inset);
+  color: var(--text-tertiary);
+  border: 1px solid var(--border-light);
+}
+
+.bp-card-error {
+  font-size: 13px;
+  color: var(--text-error);
+  background: var(--bg-error);
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+
+.bp-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.bp-more-wrap {
+  position: relative;
+  margin-left: auto;
+}
+
+.bp-more-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 172px;
+  background: var(--bg-dialog);
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+  padding: 6px;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+}
+
+.bp-more-menu button {
+  text-align: left;
+  padding: 8px 12px;
+  font-size: 13px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.bp-more-menu button:hover {
+  background: var(--bg-hover);
+}
+
+.bp-more-menu button.bp-more-danger {
+  color: var(--accent-danger);
+}
+
+.bp-more-menu button.bp-more-danger:hover {
+  background: var(--badge-danger-bg);
+}
+
+/* ---------- 方案详情抽屉（页面最外层 Overlay） ---------- */
+.bp-drawer-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--bg-overlay);
+  z-index: 1500;
+  display: flex;
+  justify-content: flex-end;
+  animation: bp-fade-in 0.15s ease;
+}
+
+.bp-drawer {
+  width: min(560px, 92vw);
+  height: 100%;
+  background: var(--bg-card);
+  border-left: 1px solid var(--border-default);
+  display: flex;
+  flex-direction: column;
+  animation: bp-slide-in 0.2s ease;
+}
+
+@keyframes bp-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes bp-slide-in {
+  from { transform: translateX(40px); opacity: 0.6; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+.bp-drawer-header {
+  flex-shrink: 0;
+  padding: 18px 22px 14px;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.bp-drawer-head-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.bp-drawer-plan-no {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent-primary-text);
+  background: var(--accent-primary-light);
+  padding: 2px 10px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.bp-drawer-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bp-drawer-close {
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 18px;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.bp-drawer-close:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.bp-drawer-meta {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.bp-drawer-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 18px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.bp-drawer-body .form-group {
+  margin: 0;
+}
+
+.bp-drawer-body textarea {
+  width: 100%;
+  font-family: inherit;
+  font-size: 13.5px;
+  line-height: 1.6;
+  padding: 10px 12px;
+  border: 1px solid var(--border-input);
+  border-radius: 8px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  resize: vertical;
+}
+
+.bp-drawer-body textarea:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 2px var(--accent-primary-light);
+}
+
+.bp-drawer-body textarea:disabled {
+  background: var(--bg-subtle);
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+/* 提示词 Textarea：覆盖全局 .form-group textarea 的 min-height（spec 39/40 完整展示） */
+.bp-drawer .bp-textarea-prompt {
+  min-height: 180px;
+  max-height: 360px;
+}
+
+.bp-drawer .bp-textarea-negative {
+  min-height: 90px;
+  max-height: 220px;
+}
+
+.bp-drawer-field-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.bp-drawer-field-head label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.bp-drawer-divider {
+  flex-shrink: 0;
+  height: 1px;
+  background: var(--border-light);
+  margin: 2px 0;
+}
+
+.bp-drawer-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.bp-drawer-optimizing {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: var(--badge-info-bg);
+  color: var(--badge-info-text);
+  font-size: 13px;
+}
+
+.bp-drawer-footer {
+  flex-shrink: 0;
+  border-top: 1px solid var(--border-light);
+  padding: 14px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--bg-card);
+}
+
+.bp-drawer-footer-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.bp-drawer-footer-row .bp-footer-spacer {
+  flex: 1;
+}
+
+.bp-drawer-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border-light);
+}
+
+.bp-drawer-nav-info {
+  font-size: 12.5px;
+  color: var(--text-faint);
+}
+
+.bp-saved-hint {
+  font-size: 12.5px;
+  color: var(--accent-success);
+}
+
+/* ---------- 只读模式（历史记录方案详情） ---------- */
+.bp-readonly-text {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: var(--bg-subtle);
+  font-size: 13.5px;
+  line-height: 1.65;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.bp-readonly-text.bp-readonly-prompt {
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.bp-readonly-text.bp-readonly-negative {
+  color: var(--text-tertiary);
+}
+
+/* ---------- 未保存关闭确认 / 通用小确认 ---------- */
+.bp-confirm-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--bg-overlay);
+  z-index: 1600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: bp-fade-in 0.12s ease;
+}
+
+.bp-confirm {
+  width: min(400px, 90vw);
+  background: var(--bg-dialog);
+  border-radius: 14px;
+  padding: 22px 24px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.2);
+}
+
+.bp-confirm-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-dialog-title);
+  margin-bottom: 8px;
+}
+
+.bp-confirm-text {
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--text-dialog-desc);
+  margin-bottom: 18px;
+  white-space: pre-line;
+}
+
+.bp-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* ---------- 阶段标题 / 需求面板 / 摘要 ---------- */
+.bp-stage-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 6px 0 12px;
+}
+
+.bp-stage-head-plans { margin-top: 26px; padding-top: 18px; border-top: 1px solid var(--border-light); }
+.bp-stage-head-settings { margin-top: 26px; padding-top: 18px; border-top: 1px solid var(--border-light); }
+.bp-stage-head-summary { margin-top: 26px; padding-top: 18px; border-top: 1px solid var(--border-light); }
+
+.bp-require-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin: 12px 0 4px;
+}
+
+.bp-stage-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-heading);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.bp-stage-no {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--accent-primary-light);
+  color: var(--accent-primary-text);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.bp-stage-hint {
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.bp-requirement-hint {
+  font-size: 12.5px;
+  color: var(--accent-orange);
+  background: var(--badge-warn-bg);
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin-top: 10px;
+}
+
+.bp-planning {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.bp-planning-status {
+  font-size: 13.5px;
+  color: var(--badge-info-text);
+  background: var(--badge-info-bg);
+  border-radius: 8px;
+  padding: 10px 14px;
+}
+
+.bp-skeleton-card {
+  border: 1px dashed var(--border-default);
+  border-radius: 12px;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--bg-subtle);
+}
+
+.bp-skeleton-line {
+  height: 12px;
+  border-radius: 6px;
+  background: linear-gradient(90deg, var(--bg-inset) 25%, var(--bg-hover) 50%, var(--bg-inset) 75%);
+  background-size: 200% 100%;
+  animation: bp-shimmer 1.2s ease-in-out infinite;
+}
+
+.bp-skeleton-line.w60 { width: 60%; }
+.bp-skeleton-line.w90 { width: 90%; }
+.bp-skeleton-line.w35 { width: 35%; }
+
+@keyframes bp-shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+
+.bp-plans-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.bp-plans-count {
+  font-size: 13px;
+  color: var(--text-tertiary);
+}
+
+.bp-summary-grid {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.bp-summary-item {
+  flex: 1;
+  min-width: 128px;
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  padding: 10px 14px;
+  background: var(--bg-subtle);
+}
+
+.bp-summary-item .bp-summary-num {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--accent-primary-text);
+}
+
+.bp-summary-item .bp-summary-label {
+  font-size: 12.5px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.bp-submit-hint {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-top: 8px;
+}
+
+.bp-submit-hint.warn {
+  color: var(--badge-warn-text);
+}
+
+@media (max-width: 1366px) {
+  .bp-drawer { width: min(500px, 92vw); }
+}

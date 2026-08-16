@@ -1,0 +1,77 @@
+.ptb-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ptb-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.ptb-title {
+  font-size: 11px;
+  color: var(--text-faint);
+  flex-shrink: 0;
+}
+
+.ptb-copy {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.ptb-copy:hover {
+  background: var(--bg-inset);
+  color: var(--text-primary);
+}
+
+.ptb-copy.copied {
+  color: var(--accent-success);
+}
+
+.ptb-content {
+  font-size: 12px;
+  line-height: 20px;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-y: auto;
+}
+
+.ptb-content.collapsed {
+  overflow: hidden;
+  position: relative;
+  mask-image: linear-gradient(to bottom, #000 70%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, #000 70%, transparent 100%);
+}
+
+.ptb-empty {
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+.ptb-toggle {
+  align-self: flex-start;
+  border: none;
+  background: transparent;
+  color: var(--accent-primary);
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+  padding: 2px 0;
+}
+
+.ptb-toggle:hover {
+  text-decoration: underline;
+}

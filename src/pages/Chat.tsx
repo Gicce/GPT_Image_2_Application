@@ -1,12 +1,22 @@
-﻿import { useEffect, useRef, useState, useCallback } from 'react';
+﻿import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useChatStore } from '../store/useChatStore';
+import { useAIProviderStore, resolveConversationAgent } from '../features/aiProviders/store';
+import { isNewlyDiscovered } from '../features/aiProviders/registry/registry';
+import { resolveProfileBaseUrl } from '../features/aiProviders/adapters';
+import { ProviderLogo } from '../features/aiProviders/ProviderLogo';
+import { isSyntheticAssistantMessage } from '../utils/agent/historySanitizer';
+import type { AIProviderModel } from '../features/aiProviders/types';
+import { defaultUseScopes } from '../features/aiProviders/types';
+import { BILLING_MODE_LABELS } from '../features/aiProviders/types';
 import { memo } from 'react';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { useImageStore } from '../store/useImageStore';
+import { useTaskStore } from '../store/useTaskStore';
 import { useAuthStore, setGroupTypeMap, isGroupTypeMapReady } from '../store/useAuthStore';
 import { api } from '../services/api';
-import { serverApi, type ServerModel } from '../services/serverApi';
-import type { ChatAttachment, ChatConversation, ChatMessage, GallerySearchCriteria, GallerySearchResult, GallerySearchState, ImageRecord } from '../types';
+import { serverApi } from '../services/serverApi';
+import type { ChatAttachment, ChatConversation, ChatMessage, ChatMode, GallerySearchCriteria, GallerySearchResult, GallerySearchState, ImageRecord } from '../types';
+import TaskMessageCard from '../components/TaskMessageCard';
 import { marked } from 'marked';
 import hljs from 'highlight.js/lib/core';
 import bash from 'highlight.js/lib/languages/bash';
@@ -20,9 +30,11 @@ import xml from 'highlight.js/lib/languages/xml';
 import { Command } from '@tauri-apps/plugin-shell';
 import { invoke } from '@tauri-apps/api/core';
 import DeleteConvDialog from '../components/DeleteConvDialog';
+import { toastSuccess, toastError } from '../components/Toast';
+import { setAsAvatarFromDataUrl } from '../services/avatarService';
 import ContextMeter from '../components/ContextMeter';
+import { dedupeGalleryItems, normalizeGalleryPath } from '../utils/galleryIdentity';
 import { decideAgentAction } from '../utils/agentIntent';
-import { resolveAgentConfig } from '../utils/agentConfig';
 import {
   createGalleryCriteriaFromText as buildGalleryCriteriaFromText,
   DEFAULT_GALLERY_CRITERIA as DEFAULT_GALLERY_CRITERIA_RULES,
@@ -40,6 +52,9 @@ import {
   TIME_OPTIONS as TIME_OPTIONS_RULES,
   USAGE_OPTIONS as USAGE_OPTIONS_RULES,
 } from '../utils/agent/galleryCriteria';
+import { SKILL_REGISTRY, getSkillById, detectSkill } from '../agent/skills';
+import { getAttachmentDisplayLabel } from '../utils/agent/attachmentLabels';
+import { formatConversationForClipboard } from '../utils/conversationExport';
 import 'highlight.js/styles/atom-one-dark.css';
 import './Chat.css';
 import './ImageEdit.css';
@@ -91,6 +106,21 @@ renderer.code = function(code: any) {
     return originalCode(code);
   }
   return `<pre class="code-block"><div class="code-header"><span class="code-lang">${lang || 'text'}</span><button class="code-copy-btn" data-code="${encoded}" type="button">复制</button></div><code class="hljs language-${lang || 'plaintext'}">${highlighted}</code></pre>`;
+};
+
+// Inline code renderer: emits the wrap+button as part of the HTML string so we
+// never have to touch the DOM after React mounts it. Click handling is done
+// via event delegation in MessageItem.
+renderer.codespan = function(token: any) {
+  const rawHtml = typeof token === 'string' ? token : (token?.text ?? '');
+  const decoded = rawHtml
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
+  const encoded = btoa(unescape(encodeURIComponent(decoded)));
+  return `<span class="inline-code-wrap"><code class="inline-code">${rawHtml}</code><button class="inline-copy-btn" data-code="${encoded}" type="button">复制</button></span>`;
 };
 
 // Callout blockquote renderer
@@ -157,6 +187,13 @@ function getImageSourceLabel(sourceKind?: ImageRecord['source_kind']): string {
   if (sourceKind === 'output') return '输出目录';
   if (sourceKind === 'postprocess') return '后处理';
   return '对话图片';
+}
+
+function imageIdFromPath(path: string): string | null {
+  if (!path) return null;
+  const fileName = path.split(/[\\/]/).pop() || path;
+  const match = fileName.match(/^([0-9a-fA-F]{8,}-[0-9a-fA-F]{4,}-[0-9a-fA-F]{4,}-[0-9a-fA-F]{4,}-[0-9a-fA-F]{12,})/);
+  return match ? match[1] : null;
 }
 
 function buildAttachmentGuidance(attachments: ChatAttachment[], input: string): string | null {
@@ -310,29 +347,58 @@ function ConversationList({
   );
 }
 
+// group -> model_type 映射的模块级 TTL 缓存：进入 Chat 页面不重复请求服务器
+const GROUP_TYPE_MAP_TTL_MS = 5 * 60 * 1000;
+let groupTypeMapCache: { at: number; map: Record<string, 'image' | 'agent' | 'postprocess' | 'chat'> } | null = null;
+
+// 消息窗口化：默认只渲染最近 N 条，向上翻页加载更早消息（长会话首屏/打字性能）
+const MESSAGE_WINDOW_SIZE = 80;
+
 export default function Chat() {
   const conversations = useChatStore(state => state.conversations);
   const activeId = useChatStore(state => state.activeId);
   const runtimeById = useChatStore(state => state.runtimeById);
   const error = useChatStore(state => state.error);
+  const taskSubmitting = useChatStore(state => state.taskSubmitting);
   const loadConversations = useChatStore(state => state.loadConversations);
   const newConversation = useChatStore(state => state.newConversation);
   const switchConversation = useChatStore(state => state.switchConversation);
   const deleteConversation = useChatStore(state => state.deleteConversation);
   const renameConversation = useChatStore(state => state.renameConversation);
   const sendMessage = useChatStore(state => state.sendMessage);
+  const sendTaskMessage = useChatStore(state => state.sendTaskMessage);
+  const confirmTaskMessage = useChatStore(state => state.confirmTaskMessage);
+  const cancelTaskMessage = useChatStore(state => state.cancelTaskMessage);
+  const editTaskMessage = useChatStore(state => state.editTaskMessage);
+  const retryTaskMessage = useChatStore(state => state.retryTaskMessage);
+  const replanTaskMessage = useChatStore(state => state.replanTaskMessage);
+  const syncTaskMessage = useChatStore(state => state.syncTaskMessage);
+  const setConversationChatMode = useChatStore(state => state.setConversationChatMode);
+  const setConversationAgentSelection = useChatStore(state => state.setConversationAgentSelection);
   const stopGeneration = useChatStore(state => state.stopGeneration);
   const confirmProposal = useChatStore(state => state.confirmProposal);
   const cancelProposal = useChatStore(state => state.cancelProposal);
   const updateProposalPrompt = useChatStore(state => state.updateProposalPrompt);
   const toggleProposalBatchItem = useChatStore(state => state.toggleProposalBatchItem);
-  const { settings, saveSettings } = useSettingsStore();
+  // Skill 相关状态
+  const skillMode = useChatStore(state => state.skillMode);
+  const selectedSkillId = useChatStore(state => state.selectedSkillId);
+  const detectedSkillId = useChatStore(state => state.detectedSkillId);
+  const setSkillMode = useChatStore(state => state.setSkillMode);
+  const setSelectedSkillId = useChatStore(state => state.setSelectedSkillId);
+  const { settings } = useSettingsStore();
   const { user, isLoggedIn } = useAuthStore();
-  const [chatModels, setChatModels] = useState<ServerModel[]>([]);
   const [modelLoadError, setModelLoadError] = useState<string | null>(null);
   const { images, loadImages } = useImageStore();
   const [input, setInput] = useState('');
-  const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
+  // Composer 图片附件按对话/任务模式严格隔离。
+  // 切到 chat → 永远从 chat[] 起手（即使 task[] 还有图）。
+  // 切回 task → 恢复 task[]，不会因去 chat 问一句话就丢任务素材。
+  // active_image_id 不再隐式进入普通 chat —— chat[] 仅由用户在对话模式下主动选图填充。
+  const [attachmentsByMode, setAttachmentsByMode] = useState<{
+    chat: ChatAttachment[];
+    task: ChatAttachment[];
+  }>({ chat: [], task: [] });
   const [isListening, setIsListening] = useState(false);
   const recognitionRef = useRef<any>(null);
   const [deletingConv, setDeletingConv] = useState<{ id: string; title: string } | null>(null);
@@ -348,15 +414,122 @@ export default function Chat() {
   const gpHoverCache = useRef<Record<string, string>>({});
   const gpHoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [previewImage, setPreviewImage] = useState<PreviewImageState | null>(null);
+  const [settingAvatar, setSettingAvatar] = useState(false);
   const [galleryFullImageCache, setGalleryFullImageCache] = useState<Record<string, string>>({});
   const [copySuccess, setCopySuccess] = useState(false);
+  // 一键复制全部对话的反馈状态（成功"已复制当前对话"，失败"复制失败，请重试"）
+  const [convCopyState, setConvCopyState] = useState<'idle' | 'success' | 'error'>('idle');
+  useEffect(() => {
+    if (convCopyState === 'idle') return;
+    const timer = setTimeout(() => setConvCopyState('idle'), 2000);
+    return () => clearTimeout(timer);
+  }, [convCopyState]);
   const chatAreaRef = useRef<HTMLDivElement>(null);
   const chatInputAreaRef = useRef<HTMLDivElement>(null);
   const isNearBottomRef = useRef(true);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   const [composerHeight, setComposerHeight] = useState(96);
   const [galleryDrafts, setGalleryDrafts] = useState<Record<string, GallerySearchCriteria>>({});
-  const resolvedAgentConfig = resolveAgentConfig(settings);
+  // Skill UI 状态
+  const [showSkillPicker, setShowSkillPicker] = useState(false);
+  // 任务队列跳转 highlightId（来自 TaskMessageCard 的 "查看任务"）
+  const [pendingFocusTaskId, setPendingFocusTaskId] = useState<string | null>(null);
+
+  // ====== 多 AI 智能体：用户 Profile 选择（会话级） ======
+  const aiProfiles = useAIProviderStore(state => state.profiles);
+  const hydrateProfiles = useAIProviderStore(state => state.hydrate);
+  useEffect(() => {
+    hydrateProfiles();
+  }, [hydrateProfiles]);
+  const activeConvAgentSelection = useMemo(() => {
+    if (!activeId) return null;
+    const conv = conversations.find(c => c.id === activeId);
+    if (!conv?.selected_agent_profile_id) return null;
+    return {
+      profileId: conv.selected_agent_profile_id,
+      modelId: conv.selected_agent_model_id || '',
+    };
+  }, [activeId, conversations]);
+  const enabledProfileGroups = useMemo(() => {
+    // 使用范围双层判定：Provider 级与模型级 use_scopes 都允许「AI 对话」才进入选择器
+    return aiProfiles
+      .filter(profile => profile.enabled && (profile.use_scopes ?? defaultUseScopes()).chat)
+      .map(profile => ({
+        profile,
+        models: profile.models
+          .filter(model => model.enabled && (model.use_scopes ?? defaultUseScopes()).chat)
+          .sort((a, b) => (a.model_id === profile.default_model_id ? -1 : b.model_id === profile.default_model_id ? 1 : 0)),
+      }))
+      .filter(group => group.models.length > 0);
+  }, [aiProfiles]);
+
+  // 当前会话的聊天模式：来自 store 持久化字段 chat_mode，默认 chat
+  const activeChatMode: ChatMode = useMemo(() => {
+    if (!activeId) return 'chat';
+    const conv = conversations.find(c => c.id === activeId);
+    return conv?.chat_mode === 'task' ? 'task' : 'chat';
+  }, [activeId, conversations]);
+  const setActiveChatMode = useCallback((mode: ChatMode) => {
+    if (!activeId) {
+      const id = newConversation();
+      setConversationChatMode(id, mode);
+      return;
+    }
+    setConversationChatMode(activeId, mode);
+  }, [activeId, newConversation, setConversationChatMode]);
+
+  // 当前模式对应的附件数组 +  setter。所有读 attachments / 调 setAttachments
+  // 的代码都不需要知道自己处于哪个模式 —— 这层 indirection 帮我们隔离 chat/task。
+  const attachments = attachmentsByMode[activeChatMode];
+  const setAttachments = useCallback(
+    (next: ChatAttachment[] | ((prev: ChatAttachment[]) => ChatAttachment[])) => {
+      setAttachmentsByMode(prev => {
+        const current = prev[activeChatMode];
+        const resolved =
+          typeof next === 'function'
+            ? (next as (p: ChatAttachment[]) => ChatAttachment[])(current)
+            : next;
+        if (resolved === current) return prev;
+        return { ...prev, [activeChatMode]: resolved };
+      });
+    },
+    [activeChatMode],
+  );
+
+  // 模式切换诊断：让 Runtime 一眼确认 chat[] / task[] 没有互相串线。
+  useEffect(() => {
+    if (!activeId) return;
+    const chatCount = attachmentsByMode.chat.length;
+    const taskCount = attachmentsByMode.task.length;
+    const chatLabels = attachmentsByMode.chat.map((_, idx) =>
+      getAttachmentDisplayLabel(idx),
+    );
+    console.log('[ComposerMode]', {
+      to: activeChatMode,
+      conversationId: activeId,
+      chat_images: chatCount,
+      task_images: taskCount,
+      chat_labels: chatLabels,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeChatMode, activeId]);
+
+  // 输入草稿预览识别：实时计算当前输入对应的 Skill（只用于 UI 显示，无网络请求）
+  const draftDetectedSkill = useMemo(() => {
+    if (skillMode === 'manual' && selectedSkillId) {
+      return selectedSkillId;
+    }
+    if (!input.trim() && attachments.length === 0) {
+      return detectedSkillId;
+    }
+    const result = detectSkill({
+      text: input,
+      hasImageAttachments: attachments.some(a => a.type === 'image'),
+      hasEditableImage: attachments.some(a => a.type === 'image' && !!a.filePath),
+      attachmentCount: attachments.length,
+    });
+    return result.skillId;
+  }, [input, attachments, skillMode, selectedSkillId, detectedSkillId]);
 
   const copyImageToClipboard = useCallback(async (imgSrc: string) => {
     try {
@@ -404,6 +577,21 @@ export default function Chat() {
     setCopySuccess(false);
   }, []);
 
+  /** 图片预览 → 设为当前头像：经 Avatar Service 裁剪保存独立副本 */
+  const handleSetAvatar = useCallback(async () => {
+    const img = previewImage;
+    if (!img || settingAvatar) return;
+    setSettingAvatar(true);
+    try {
+      await setAsAvatarFromDataUrl(img.src);
+      toastSuccess('头像设置成功');
+    } catch (err) {
+      toastError(err instanceof Error ? err.message : '头像设置失败，请重试');
+    } finally {
+      setSettingAvatar(false);
+    }
+  }, [previewImage, settingAvatar]);
+
   // Global keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -433,38 +621,88 @@ export default function Chat() {
 
   useEffect(() => { loadConversations(); }, []);
 
-  // 拉取可用对话模型列表，并缓存 group 到 type 的映射
+  // 实时任务状态：监听 Tauri 后端的 task-updated 事件，原地更新对话中的 TaskMessageCard。
+  // TaskStore 刷新由 ensureTaskEventBridge 全局单点负责，这里只做 Chat 侧任务卡同步。
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    let cancelled = false;
+    api.onTaskUpdated(async (taskId) => {
+      try {
+        await useChatStore.getState().syncTaskMessage(taskId);
+      } catch (err) {
+        console.warn('[TaskEvent] sync failed', taskId, err);
+      }
+    }).then(fn => {
+      if (cancelled) {
+        try { fn(); } catch {}
+        return;
+      }
+      unlisten = fn;
+    }).catch(err => {
+      console.warn('[TaskEvent] subscribe failed', err);
+    });
+    return () => {
+      cancelled = true;
+      if (unlisten) {
+        try { unlisten(); } catch {}
+        unlisten = null;
+      }
+    };
+  }, []);
+
+  // 离线 reconcile：当用户从图库 / 任务队列切回 AI 智能体页面、
+  // 或者整个窗口重新可见时，强制用 TaskStore 当前态同步一次任务卡。
+  // task-updated 事件可能在用户离开页面时丢失，持久化快照也可能陈旧，
+  // 这一层 reconcile 是"任务卡显示 RUNNING 但 Task 已经 FAILED"问题的最终防线。
+  // 注意：只 reconcile 当前激活会话（其余会话在 switchConversation 时懒恢复），
+  // 且只在页面 mount 时挂监听 —— 依赖 [activeId] 会在每次切换会话时全量重跑，是打开卡顿的根因之一。
+  useEffect(() => {
+    const triggerReconcile = () => {
+      const active = useChatStore.getState().activeId;
+      useTaskStore.getState().loadTasks().then(() =>
+        useChatStore.getState().reconcileTaskMessages(active || undefined)
+      ).catch(err => console.warn('[TaskReconcile] failed', err));
+    };
+    triggerReconcile();
+    document.addEventListener('visibilitychange', triggerReconcile);
+    window.addEventListener('focus', triggerReconcile);
+    const onCustomReconcile = () => triggerReconcile();
+    window.addEventListener('cy-chat-reconcile-tasks', onCustomReconcile as EventListener);
+    return () => {
+      document.removeEventListener('visibilitychange', triggerReconcile);
+      window.removeEventListener('focus', triggerReconcile);
+      window.removeEventListener('cy-chat-reconcile-tasks', onCustomReconcile as EventListener);
+    };
+  }, []);
+
+  // 切换到任务队列 Tab 时的高亮 hook（用 storage 事件 + 自定义事件实现跨组件传递）
+  useEffect(() => {
+    if (!pendingFocusTaskId) return;
+    const handler = () => setPendingFocusTaskId(null);
+    window.addEventListener('cy-taskqueue-focus-done', handler);
+    return () => window.removeEventListener('cy-taskqueue-focus-done', handler);
+  }, [pendingFocusTaskId]);
+
+  // 拉取服务器模型列表仅用于缓存 group -> model_type 映射（服务器 Token 分组同步、
+  // 图片 / 后处理等服务器业务准入判断）。AI 智能体对话模型一律来自用户本地配置的
+  // Provider（BYOK），不再把服务器 Agent 模型合入聊天模型选择器。
+  // 性能：模块级 TTL 缓存 —— 来回切换页面不再重复请求服务器。
   useEffect(() => {
     if (!isLoggedIn) return;
+    if (groupTypeMapCache && Date.now() - groupTypeMapCache.at < GROUP_TYPE_MAP_TTL_MS) {
+      setGroupTypeMap(groupTypeMapCache.map);
+      setModelLoadError(null);
+      return;
+    }
     serverApi.getModels()
       .then(list => {
         setModelLoadError(null);
-        if (list.length === 0) {
-            console.warn('[Chat] /api/models 返回空数组，服务端可能未配置模型');
-        }
-        // 缓存 group -> model_type，供 token 同步和前端准入判断使用
         const map: Record<string, 'image' | 'agent' | 'postprocess' | 'chat'> = {};
         for (const m of list) {
           if (m.group) map[m.group] = m.model_type;
         }
+        groupTypeMapCache = { at: Date.now(), map };
         setGroupTypeMap(map);
-
-        const chatList = list.filter(m => m.model_type === 'agent' || m.model_type === 'chat');
-        const visionList = chatList.filter(m => m.supports_vision);
-        setChatModels(chatList);
-        if (chatList.length > 0 && !chatList.find(m => m.name === resolvedAgentConfig.model)) {
-          const isTrial = user?.account_type === 'trial';
-          const first = isTrial ? (chatList.find(m => m.trial_allowed) ?? chatList[0]) : chatList[0];
-          if (first) {
-            saveSettings({
-              agent_model: first.name,
-              chat_model: first.name,
-              ...(settings.vision_model ? {} : { vision_model: (visionList[0] ?? first).name }),
-            });
-          }
-        } else if (!settings.vision_model && visionList.length > 0) {
-          saveSettings({ vision_model: visionList[0].name });
-        }
       })
       .catch((err: any) => {
         if (err?.status === 401) {
@@ -475,18 +713,56 @@ export default function Chat() {
           setModelLoadError(err?.message || '加载模型列表失败');
         }
       });
-  }, [user?.account_type, isLoggedIn, resolvedAgentConfig.model, saveSettings, settings.vision_model]);
+  }, [isLoggedIn]);
 
   const activeConversationExists = !!activeId && conversations.some(conversation => conversation.id === activeId);
   const activeConv = activeConversationExists
     ? conversations.find(conversation => conversation.id === activeId) || null
     : null;
+
+  // ====== BYOK 模型解析：聊天 / Planner 唯一来源 = 已启用 Provider 的模型 ======
+  // resolveConversationAgent 内部顺序：会话级选择 → 全局选择 → 默认 Profile，无服务器回退。
+  const resolvedAgentSelection = useMemo(
+    () => resolveConversationAgent(activeConv),
+    [activeConv, aiProfiles],
+  );
+  // V3.0.6：「对话助手 / 创作智能体」类型已删除 —— 创作能力属于 CyImagePro，
+  // 所有模型服务共用完整工作流；是否参与任务规划由使用范围（use_scopes）决定。
+  const isTaskMode = activeChatMode === 'task';
+  // 会话显式绑定的 Provider 已被停用 / 删除：不静默换模型，仅提示重新选择
+  const staleConvAgentProfile = useMemo(() => {
+    const boundId = activeConv?.selected_agent_profile_id;
+    if (!boundId) return null;
+    const profile = aiProfiles.find(p => p.id === boundId);
+    return profile && profile.enabled ? null : (profile?.name || boundId);
+  }, [activeConv, aiProfiles]);
   const isSending = activeId ? !!runtimeById[activeId]?.isSending : false;
-  const contextUsed = estimateConversationTokens(activeConv);
+  // token 估算按会话 memo：此前每次 render（包括输入框每个按键）都会重新遍历整个消息列表
+  const contextUsed = useMemo(() => estimateConversationTokens(activeConv), [activeConv]);
   const contextLimit = settings.agent_context_window || 32768;
   const showEmptyState = conversations.length === 0;
   const showWelcomeState = !showEmptyState && !!activeConv && activeConv.messages.length === 0;
   const showMessageState = !!activeConv && activeConv.messages.length > 0;
+
+  // ====== 消息窗口化（分页渲染，避免长会话一次性挂载全部 MessageItem） ======
+  const [visibleMessageCount, setVisibleMessageCount] = useState(MESSAGE_WINDOW_SIZE);
+  useEffect(() => { setVisibleMessageCount(MESSAGE_WINDOW_SIZE); }, [activeId]);
+  const visibleMessages = useMemo(() => {
+    if (!activeConv) return [];
+    return activeConv.messages.slice(-visibleMessageCount);
+  }, [activeConv, visibleMessageCount]);
+  const hiddenMessageCount = activeConv ? Math.max(0, activeConv.messages.length - visibleMessageCount) : 0;
+
+  // 一键复制全部对话：从 message 数据生成干净 Markdown（禁止 DOM 复制）。
+  const handleCopyConversation = useCallback(async () => {
+    if (!activeConv || activeConv.messages.length === 0) return;
+    const text = formatConversationForClipboard(activeConv, {
+      userName: user?.username,
+      agentName: settings.agent_name || 'CyImage Agent',
+    });
+    const ok = await copyTextToClipboard(text);
+    setConvCopyState(ok ? 'success' : 'error');
+  }, [activeConv, user?.username, settings.agent_name]);
 
   // Scroll listener to track whether user is near bottom
   useEffect(() => {
@@ -566,7 +842,13 @@ export default function Chat() {
     }
   }, [showGalleryPicker]);
 
-  const getPlaceholder = () => '给 Agent 发送任务、问题或图片需求（Shift+Enter 换行）';
+  const getPlaceholder = () => {
+    if (!resolvedAgentSelection) return '尚未配置 AI 对话模型，请前往「设置与更新 → AI 智能体」…';
+    if (isSending || taskSubmitting) return '等待回复中...';
+    return isTaskMode
+      ? '描述希望 Agent 执行的任务，例如：生成一张日本街道风景图'
+      : '给 Agent 发送消息或问题…（Shift+Enter 换行）';
+  };
 
   const addAttachment = (attachment: Omit<ChatAttachment, 'id'>) => {
     setAttachments(prev => {
@@ -583,6 +865,22 @@ export default function Chat() {
   const removeAttachment = (id: string) => {
     setAttachments(prev => prev.filter(a => a.id !== id));
   };
+
+  // 一键清空当前 Composer 的全部图片附件。模式切换不清图，
+  // 但用户点击 Context Bar 的"清除全部"会主动清空当前模式对应的 attachments，
+  // 并（仅在 task 模式下）撤销会话级 active_image 绑定。
+  // chat 模式下 active_image 本就不展示，因此只清空 chat[]。
+  const clearAllAttachments = () => {
+    setAttachments([]);
+    if (isTaskMode && activeId && activeConv?.active_image_id) {
+      useChatStore.getState().setActiveImageId(activeId, null, null);
+    }
+  };
+
+  // 给每张附件按当前数组下标生成 "图一 / 图二 / 图三" 语义标签。
+  // 删除中间项后，剩余项的标签会随下标自动重排 —— 无需维护额外状态。
+  // 该 helper 同时用于 Context Bar 附件卡片与 Gallery Picker 选中态展示。
+  const attachmentLabel = (index: number) => getAttachmentDisplayLabel(index);
 
   const patchGalleryMessage = useCallback((messageId: string, patch: Partial<GallerySearchState>, content?: string) => {
     useChatStore.setState(s => ({
@@ -645,8 +943,11 @@ export default function Chat() {
   }, [newConversation]);
 
   const buildLocalContextSummary = useCallback((conversation: ChatConversation) => {
+    // 摘要只包含真实对话轮次；任务卡 / 提案 / 错误等合成消息混入摘要
+    // 会随 system 上下文再次进入模型，造成上下文污染。
     const liveMessages = conversation.messages
-      .filter(message => message.role === 'user' || message.role === 'assistant')
+      .filter(message => (message.role === 'user' || message.role === 'assistant')
+        && !isSyntheticAssistantMessage(message))
       .slice(-24);
 
     if (liveMessages.length === 0) {
@@ -721,11 +1022,12 @@ export default function Chat() {
   const handleSend = useCallback(async (planOnly = false) => {
     const text = input.trim();
     if (!text && !attachments.length) return;
-    if (isSending) return;
-    const agentAccessBlocked = isLoggedIn && isGroupTypeMapReady() && (chatModels.length === 0 || !resolvedAgentConfig.token);
-    if (agentAccessBlocked) {
-      localStorage.setItem('cy_recharge_focus', 'agent');
-      useAuthStore.getState().setRequestedPage('account');
+    if (isSending || taskSubmitting) return;
+    // BYOK：Agent 对话 / Planner 只能使用用户已配置的 Provider 模型。
+    // 没有可用模型（或 Provider 缺 Key）时提示配置，禁止回退服务器 Agent 模型。
+    if (!resolvedAgentSelection) {
+      alert('尚未配置 AI 对话模型。请前往「设置与更新 → AI 智能体」添加并启用一个模型服务。');
+      useAuthStore.getState().setRequestedPage('settings');
       return;
     }
     if (text === '/压缩' && attachments.length === 0) {
@@ -738,8 +1040,30 @@ export default function Chat() {
       applyLocalContextCompression(false);
     }
 
-    if (!resolvedAgentConfig.token) {
-      alert('当前账户暂无智能体额度，请前往“我的账户”充值或申请试用');
+    // ====== 任务模式：只创建 WAITING_CONFIRM 任务卡，不调用图片模型 ======
+    if (!planOnly && isTaskMode) {
+      setInput('');
+      setAttachments([]);
+      if (inputRef.current) inputRef.current.style.height = 'auto';
+
+      await sendTaskMessage({
+        text,
+        attachments,
+        settings: {
+          chat_token: settings.chat_token,
+          token: settings.token,
+          chat_model: settings.chat_model,
+          chat_base_url: settings.chat_base_url,
+          chat_system_prompt: settings.chat_system_prompt,
+          agent_token: settings.agent_token,
+          agent_model: settings.agent_model,
+          agent_base_url: settings.agent_base_url,
+          agent_system_prompt: settings.agent_system_prompt,
+          agent_context_window: settings.agent_context_window,
+          vision_model: settings.vision_model,
+        },
+        mode: 'task',
+      });
       return;
     }
 
@@ -750,6 +1074,7 @@ export default function Chat() {
       planOnly,
     });
 
+    // 图库动作路由（V3.0.6：所有模型服务共用完整工作流，无对话助手分支）
     if (!planOnly && attachments.length === 0 && actionDecision.type === 'clarify_gallery') {
       setInput('');
       if (inputRef.current) inputRef.current.style.height = 'auto';
@@ -780,7 +1105,7 @@ export default function Chat() {
       agent_context_window: settings.agent_context_window,
       vision_model: settings.vision_model,
     }, { planOnly, attachments });
-  }, [input, attachments, isSending, isLoggedIn, chatModels.length, contextLimit, contextUsed, activeConv, resolvedAgentConfig.token, settings, sendMessage, applyLocalContextCompression, appendGalleryClarification, appendDirectGallerySearch]);
+  }, [input, attachments, isSending, taskSubmitting, resolvedAgentSelection, contextLimit, contextUsed, activeConv, settings, sendMessage, sendTaskMessage, isTaskMode, applyLocalContextCompression, appendGalleryClarification, appendDirectGallerySearch]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(false); }
@@ -926,6 +1251,16 @@ export default function Chat() {
       return;
     }
 
+    // Toggle 行为：如果图片已经被选中，立即移除；否则加入。
+    // 修复"图库多选无法再次点击取消"的核心问题 —— 旧版本只能通过附件区 × 删除。
+    // 比较用 normalized path，与选择器选中态保持同一身份判定。
+    const imageKey = normalizeGalleryPath(image.local_path);
+    const existing = attachments.find(att => normalizeGalleryPath(att.filePath) === imageKey);
+    if (existing) {
+      removeAttachment(existing.id);
+      return;
+    }
+
     try {
       const dataUrl = await api.readImageData(image.local_path);
       addAttachment({
@@ -1057,10 +1392,17 @@ export default function Chat() {
   }, []);
 
   const describeGalleryImage = useCallback(async (img: ImageRecord): Promise<{ description: string; tags: string[] } | null> => {
-    const token = resolvedAgentConfig.token;
-    const model = resolvedAgentConfig.model;
-    const baseUrl = resolvedAgentConfig.baseUrl;
-    if (!token || !model || !baseUrl) return null;
+    // BYOK：图库语义描述使用当前用户 Provider 的视觉模型（无服务器回退）
+    if (!resolvedAgentSelection) return null;
+    const { profile } = resolvedAgentSelection;
+    const token = (profile.api_key || profile.fallback_token || '').trim();
+    const visionModel = profile.models.find(m => m.model_id === profile.vision_model_id && m.enabled)
+      ?? (resolvedAgentSelection.model.supports_vision ? resolvedAgentSelection.model : undefined)
+      ?? profile.models.find(m => m.supports_vision && m.enabled);
+    if (!token || !visionModel) return null;
+    const model = visionModel.model_id;
+    const baseUrl = resolveProfileBaseUrl(profile);
+    if (!baseUrl) return null;
     try {
       const dataUrl = await api.readImageData(img.local_path);
       const resp = await fetch(`${baseUrl}/chat/completions`, {
@@ -1095,7 +1437,7 @@ export default function Chat() {
     } catch {
       return null;
     }
-  }, [resolvedAgentConfig.baseUrl, resolvedAgentConfig.model, resolvedAgentConfig.token]);
+  }, [resolvedAgentSelection]);
 
   const ensureGalleryIndex = useCallback(async (img: ImageRecord, needDescription: boolean): Promise<{ image: ImageRecord; semanticLimited: boolean }> => {
     let next = img;
@@ -1327,8 +1669,8 @@ export default function Chat() {
     });
   }, [activeConv?.messages, patchGalleryMessage]);
 
-  const agentAccessBlocked = isLoggedIn && isGroupTypeMapReady() && (chatModels.length === 0 || !resolvedAgentConfig.token);
-  const disabledInput = isSending || agentAccessBlocked;
+  // BYOK：Agent 对话不依赖服务器权益 / 余额（图片、后处理等服务器业务各自保留检查）
+  const disabledInput = isSending || taskSubmitting;
   const attachmentGuidance = buildAttachmentGuidance(attachments, input);
 
   useEffect(() => {
@@ -1343,11 +1685,10 @@ export default function Chat() {
     const observer = new ResizeObserver(syncHeight);
     observer.observe(node);
     return () => observer.disconnect();
-  }, [agentAccessBlocked, attachments.length]);
+  }, [attachments.length]);
 
-  const goRechargeAgent = () => {
-    localStorage.setItem('cy_recharge_focus', 'agent');
-    useAuthStore.getState().setRequestedPage('account');
+  const goConfigureAgentModel = () => {
+    useAuthStore.getState().setRequestedPage('settings');
   };
 
   const handleConfirmProposal = useCallback(async (messageId: string) => {
@@ -1381,6 +1722,111 @@ export default function Chat() {
     await toggleProposalBatchItem(activeId, messageId, itemId);
   }, [activeId, toggleProposalBatchItem]);
 
+  const handleRetryTaskMessage = useCallback(async (messageId: string, taskId: string) => {
+    if (!activeId) return;
+    if (!taskId || taskId.startsWith('failed_') || taskId === 'no_task') {
+      // 任务从未创建成功，仅本地占位。提示用户重新发起。
+      useChatStore.setState({ error: '该任务尚未提交成功，请修改提示词后重新执行。' });
+      return;
+    }
+    await retryTaskMessage(activeId, taskId);
+  }, [activeId, retryTaskMessage]);
+
+  const handleViewTask = useCallback((taskId: string) => {
+    if (!taskId) return;
+    try {
+      localStorage.setItem('cy_taskqueue_focus_id', taskId);
+    } catch {}
+    setPendingFocusTaskId(taskId);
+    useAuthStore.getState().setRequestedPage('queue');
+  }, []);
+
+  const handleEditTaskImage = useCallback((imagePath: string, imageId?: string) => {
+    if (!imagePath) return;
+    if (!activeId) return;
+    // 进入"基于此图编辑"上下文：保留在当前聊天，切换到任务模式，
+    // 后续用户输入修改要求时，Agent 会创建 EDIT Task 而不是 GENERATION。
+    useChatStore.getState().setActiveImageId(activeId, imageId || imageIdFromPath(imagePath) || imagePath, imagePath);
+    useChatStore.getState().setConversationChatMode(activeId, 'task');
+    // 提示用户当前已绑定源图
+    useChatStore.setState({ error: null });
+    try {
+      localStorage.setItem('cy_imageedit_source_path', imagePath);
+    } catch {}
+  }, [activeId]);
+
+  const handleRegenerateTask = useCallback(async (messageId: string, taskId: string) => {
+    if (!activeId) return;
+    if (!taskId || taskId.startsWith('failed_') || taskId === 'no_task') {
+      useChatStore.setState({ error: '该任务尚未提交成功，无法再来一张，请重新发起。' });
+      return;
+    }
+    // "再来一张" 语义：克隆原任务的最终提示词，强制走一次全新的 GENERATION 规划。
+    // 即使当前会话 active_image_id 还指着上一张图，也必须忽略它 —— ignoreActiveImage=true
+    // 保证 Planner 拿到的是干净的"无源图"上下文，对应任务卡里 sourceImageId=null。
+    const conv = useChatStore.getState().conversations.find(c => c.id === activeId);
+    const msg = conv?.messages.find(m => m.id === messageId);
+    const tm = msg?.task_message;
+    const promptForRegenerate = (tm?.finalPrompt || tm?.prompt || '').trim();
+    if (!promptForRegenerate) {
+      useChatStore.setState({ error: '原任务没有可复用的提示词，请重新发起。' });
+      return;
+    }
+    await sendTaskMessage({
+      text: promptForRegenerate,
+      attachments: [],
+      settings: {
+        chat_token: settings.chat_token,
+        token: settings.token,
+        chat_model: settings.chat_model,
+        chat_base_url: settings.chat_base_url,
+        chat_system_prompt: settings.chat_system_prompt,
+        agent_token: settings.agent_token,
+        agent_model: settings.agent_model,
+        agent_base_url: settings.agent_base_url,
+        agent_system_prompt: settings.agent_system_prompt,
+        agent_context_window: settings.agent_context_window,
+        vision_model: settings.vision_model,
+      },
+      mode: 'task',
+      ignoreActiveImage: true,
+    });
+  }, [activeId, sendTaskMessage, settings]);
+
+  const handleConfirmTaskMessage = useCallback(async (_messageId: string, taskId: string) => {
+    if (!activeId) return;
+    await confirmTaskMessage(activeId, taskId);
+  }, [activeId, confirmTaskMessage]);
+
+  const handleCancelTaskMessage = useCallback(async (_messageId: string, taskId: string) => {
+    if (!activeId) return;
+    await cancelTaskMessage(activeId, taskId);
+  }, [activeId, cancelTaskMessage]);
+
+  const handleModifyTaskMessage = useCallback((_messageId: string, taskId: string, finalPrompt: string, finalNegativePrompt: string) => {
+    if (!activeId) return;
+    editTaskMessage(activeId, taskId, finalPrompt, finalNegativePrompt);
+  }, [activeId, editTaskMessage]);
+
+  // 重新规划：原地更新同一张 PLANNING_FAILED / WAITING_CONFIRM 任务卡，
+  // 不再删除卡片、不再二次调用 sendTaskMessage（避免追加第二条相同的用户消息）。
+  const handleReplanTaskMessage = useCallback(async (messageId: string, taskId: string, newText?: string) => {
+    if (!activeId) return;
+    await replanTaskMessage(activeId, taskId, {
+      chat_token: settings.chat_token,
+      token: settings.token,
+      chat_model: settings.chat_model,
+      chat_base_url: settings.chat_base_url,
+      chat_system_prompt: settings.chat_system_prompt,
+      agent_token: settings.agent_token,
+      agent_model: settings.agent_model,
+      agent_base_url: settings.agent_base_url,
+      agent_system_prompt: settings.agent_system_prompt,
+      agent_context_window: settings.agent_context_window,
+      vision_model: settings.vision_model,
+    }, newText);
+  }, [activeId, replanTaskMessage, settings]);
+
   const handleRenameConversation = useCallback((id: string, currentTitle: string) => {
     const title = prompt('重命名对话', currentTitle || '新对话');
     if (title !== null && title.trim()) renameConversation(id, title.trim());
@@ -1411,11 +1857,49 @@ export default function Chat() {
             <svg width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
           </button>
           <span className="chat-model-label">
-            {resolvedAgentConfig.model || 'Agent'}
-            {resolvedAgentConfig.hasOverrides ? ' · Agent配置' : ' · Chat兜底'}
+            {resolvedAgentSelection && (
+              <ProviderLogo
+                providerType={resolvedAgentSelection.profile.provider_type}
+                name={resolvedAgentSelection.profile.name}
+                size={18}
+              />
+            )}
+            <span className="chat-model-name">
+              {resolvedAgentSelection
+                ? `${resolvedAgentSelection.profile.name} · ${resolvedAgentSelection.model.display_name || resolvedAgentSelection.model.model_id}`
+                : '未配置 AI 模型'}
+            </span>
+            {resolvedAgentSelection?.profile.billing_mode && (
+              <span className="model-mode-tag">
+                {BILLING_MODE_LABELS[resolvedAgentSelection.profile.billing_mode]}
+              </span>
+            )}
           </span>
+          {activeConv && activeConv.messages.length > 0 && (
+            <button
+              type="button"
+              className={`chat-copy-conv-btn ${convCopyState !== 'idle' ? convCopyState : ''}`}
+              onClick={handleCopyConversation}
+              title="复制当前对话的全部内容（干净 Markdown，不含技术信息）"
+              disabled={convCopyState !== 'idle'}
+            >
+              <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+              {convCopyState === 'success' ? '已复制当前对话' : convCopyState === 'error' ? '复制失败，请重试' : '复制全部对话'}
+            </button>
+          )}
           <ContextMeter used={contextUsed} limit={contextLimit} />
-          {agentAccessBlocked && <span className="chat-no-token">AI 智能体额度未开通</span>}
+          {!resolvedAgentSelection && (
+            <span className="chat-no-token">
+              尚未配置 AI 对话模型
+              <button
+                type="button"
+                className="settings-btn settings-btn-link settings-btn-sm"
+                onClick={() => window.dispatchEvent(new CustomEvent('cyimage-navigate', { detail: { page: 'settings', section: 'agents' } }))}
+              >
+                前往设置
+              </button>
+            </span>
+          )}
         </div>
 
         <div className="chat-area" ref={chatAreaRef}>
@@ -1431,7 +1915,15 @@ export default function Chat() {
                 <p>描述你的图片需求，智能体会自动选择文生图、图生图、图库检索和后处理工具。</p>
               </div>
             ) : showMessageState && activeConv ? (
-              activeConv.messages.map(m => (
+              <>
+              {hiddenMessageCount > 0 && (
+                <div className="chat-load-earlier">
+                  <button onClick={() => setVisibleMessageCount(c => c + MESSAGE_WINDOW_SIZE)}>
+                    加载更早的消息（还有 {hiddenMessageCount} 条）
+                  </button>
+                </div>
+              )}
+              {visibleMessages.map(m => (
                 <MessageItem
                   key={m.id}
                   message={m}
@@ -1454,8 +1946,17 @@ export default function Chat() {
                   onCancelProposal={handleCancelProposal}
                   onUpdateProposal={handleUpdateProposal}
                   onToggleProposalBatchItem={handleToggleProposalBatchItem}
+                  onRetryTaskMessage={handleRetryTaskMessage}
+                  onViewTask={handleViewTask}
+                  onEditTaskImage={handleEditTaskImage}
+                  onRegenerateTask={handleRegenerateTask}
+                  onConfirmTaskMessage={handleConfirmTaskMessage}
+                  onCancelTaskMessage={handleCancelTaskMessage}
+                  onModifyTaskMessage={handleModifyTaskMessage}
+                  onReplanTaskMessage={handleReplanTaskMessage}
                 />
-              ))
+              ))}
+              </>
             ) : null}
             {isSending && (
               <div className="chat-stop-row">
@@ -1502,54 +2003,158 @@ export default function Chat() {
             >
               复制
             </button>
+            <button
+              className="chat-error-copy"
+              onClick={() => useChatStore.getState().dismissError()}
+              title="关闭错误提示"
+            >
+              关闭
+            </button>
           </div>
         )}
 
         <div className="chat-input-area" ref={chatInputAreaRef}>
           <div className="chat-input-wrapper">
-            {agentAccessBlocked && (
+            {!resolvedAgentSelection && (
               <div className="agent-paywall-banner">
                 <div>
-                  <strong>开通 AI 智能体后即可使用</strong>
-                  <span>支持 Agent 对话、文生图、图生图、图库理解和后处理工具调度。</span>
+                  <strong>尚未配置 AI 对话模型</strong>
+                  <span>AI 智能体使用你自己的模型服务（如智谱 GLM、DeepSeek 或第三方 API）。请先在设置中配置并启用一个智能体。</span>
                 </div>
-                <button onClick={goRechargeAgent}>去充值开通</button>
+                <button onClick={goConfigureAgentModel}>前往设置</button>
               </div>
             )}
-            <div className="chat-input-box">
-              {attachments.length > 0 && (
-                <div className="agent-attachments">
-                  {attachments.map(att => (
-                    <div key={att.id} className={`agent-attachment ${att.type}`}>
-                      {att.type === 'image' && att.dataUrl ? (
-                        <img src={att.dataUrl} alt={att.name} />
-                      ) : (
-                        <span className="agent-attachment-file">FILE</span>
-                      )}
-                      <div className="agent-attachment-meta">
-                        <span className="agent-attachment-name">{att.name}</span>
-                        <span className="agent-attachment-source">
-                          {att.source === 'gallery' ? '图库' : att.source === 'paste' ? '粘贴' : '本地'}
-                          {att.size ? ` 路 ${att.size < 1024 ? att.size + 'B' : (att.size / 1024).toFixed(1) + 'KB'}` : ''}
-                        </span>
-                      </div>
-                      <button className="agent-attachment-remove" onClick={() => removeAttachment(att.id)} title="移除">×</button>
-                    </div>
-                  ))}
+            {staleConvAgentProfile && (
+              <div className="agent-paywall-banner">
+                <div>
+                  <strong>当前会话绑定的智能体「{staleConvAgentProfile}」已停用或删除</strong>
+                  <span>不会自动切换模型，请在下方重新选择对话模型。</span>
                 </div>
-              )}
-              {attachmentGuidance && (
-                <div className="agent-attachment-guidance">{attachmentGuidance}</div>
-              )}
+              </div>
+            )}
+            {/* 模式切换器 —— 必须在输入框外围，与工具按钮分离。
+                修复"切换器塞进输入框 + 与附件按钮长得一样"两个 UI 问题。 */}
+            <div className="chat-composer-topbar">
+              <div className="chat-mode-switcher" role="group" aria-label="对话/任务模式">
+                <button
+                  type="button"
+                  className={`chat-mode-btn ${!isTaskMode ? 'active' : ''}`}
+                  onClick={() => setActiveChatMode('chat')}
+                  title="普通对话、讨论需求"
+                >
+                  💬 对话
+                </button>
+                <button
+                  type="button"
+                  className={`chat-mode-btn task ${isTaskMode ? 'active' : ''}`}
+                  onClick={() => setActiveChatMode('task')}
+                  title="将本条输入作为任务需求发送给 Agent，确认后再执行"
+                >
+                  ⚡ 任务
+                </button>
+              </div>
+              <div className="chat-composer-topbar-hint">
+                {isTaskMode
+                  ? '提交后进入任务规划 / 确认流程，确认才执行'
+                  : '普通对话，可附带图片上下文讨论需求'}
+              </div>
+            </div>
+            {/* 图片上下文栏 —— 取代旧 "编辑模式：已绑定源图" 横幅 + 附件列表。
+                关键：图片存在 ≠ 编辑模式；这里只是中性的"图片上下文"，是否真编辑由任务规划判定。
+                多图时按选择顺序显示 图一 / 图二 / 图三，删除中间项后自动重编号。
+                普通对话模式严格只展示 chat[]；active_image 仅在 task 模式下作为编辑目标展示。 */}
+            {(isTaskMode && activeConv?.active_image_id && activeConv?.active_image_path) || attachments.length > 0 ? (
+              <div className="chat-context-bar">
+                <div className="chat-context-header">
+                  <span className="chat-context-title">{isTaskMode ? '任务图片' : '图片上下文'}</span>
+                  <span className="chat-context-count">
+                    {attachments.length > 0
+                      ? `${attachments.length} 张`
+                      : '已绑定源图'}
+                  </span>
+                  {attachments.length > 0 && (
+                    <button
+                      type="button"
+                      className="chat-context-clear-all"
+                      onClick={clearAllAttachments}
+                      title="清空全部图片附件，并解除编辑目标绑定"
+                    >清除全部</button>
+                  )}
+                </div>
+                <div className="chat-context-items">
+                  {isTaskMode && activeConv?.active_image_id && activeConv?.active_image_path && (
+                    <div className="chat-context-item active-bound" title={activeConv.active_image_path}>
+                      <div className="chat-context-thumb">
+                        {(() => {
+                          const found = activeConv.messages
+                            .flatMap(m => m.task_message?.images || [])
+                            .find(img => img.localPath === activeConv.active_image_path || img.imageId === activeConv.active_image_id);
+                          return found?.url
+                            ? <img src={found.url} alt="源图" />
+                            : <span className="chat-context-thumb-placeholder">源图</span>;
+                        })()}
+                        <span className="chat-context-label">{attachmentLabel(0)}</span>
+                      </div>
+                      <div className="chat-context-meta">
+                        <span className="chat-context-name">
+                          {activeConv.active_image_path.split(/[\\/]/).pop() || activeConv.active_image_path}
+                        </span>
+                        <span className="chat-context-source">已绑定 · 编辑目标</span>
+                      </div>
+                      <button
+                        type="button"
+                        className="chat-context-remove"
+                        onClick={() => useChatStore.getState().setActiveImageId(activeConv.id, null, null)}
+                        title="取消编辑目标绑定"
+                      >×</button>
+                    </div>
+                  )}
+                  {attachments.map((att, index) => {
+                    // active_image 仅在 task 模式下展示；存在时 attachments 从 图二 起编号。
+                    // chat 模式下即便会话仍残留 active_image_id，也不会影响编号 —— 这里永远是 图一 起。
+                    const labelIndex = isTaskMode && activeConv?.active_image_id ? index + 1 : index;
+                    return (
+                      <div key={att.id} className={`chat-context-item attachment-${att.type}`}>
+                        <div className="chat-context-thumb">
+                          {att.type === 'image' && att.dataUrl ? (
+                            <img src={att.dataUrl} alt={att.name} />
+                          ) : (
+                            <span className="chat-context-thumb-placeholder">FILE</span>
+                          )}
+                          <span className="chat-context-label">{attachmentLabel(labelIndex)}</span>
+                        </div>
+                        <div className="chat-context-meta">
+                          <span className="chat-context-name" title={att.name}>{att.name}</span>
+                          <span className="chat-context-source">
+                            {att.source === 'gallery' ? '图库' : att.source === 'paste' ? '粘贴' : '本地'}
+                            {att.size ? ` · ${att.size < 1024 ? att.size + 'B' : (att.size / 1024).toFixed(1) + 'KB'}` : ''}
+                          </span>
+                        </div>
+                        <button
+                          className="chat-context-remove"
+                          onClick={() => removeAttachment(att.id)}
+                          title="移除该图片"
+                        >×</button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : null}
+            {attachmentGuidance && (
+              <div className="agent-attachment-guidance">{attachmentGuidance}</div>
+            )}
+            <div className="chat-input-box">
               <textarea
                 ref={inputRef}
                 value={input}
                 onChange={e => { setInput(e.target.value); autoResize(e.target); }}
                 onKeyDown={handleKeyDown}
                 onPaste={handlePaste}
-                placeholder={agentAccessBlocked ? '请先开通 AI 智能体额度' : isSending ? '等待回复中...' : getPlaceholder()}
+                placeholder={getPlaceholder()}
                 disabled={disabledInput}
                 rows={1}
+                className={isTaskMode ? 'task-mode-active' : ''}
               />
               <div className="chat-input-bottom">
                 <div className="chat-input-left">
@@ -1568,36 +2173,35 @@ export default function Chat() {
                 </div>
                 <div className="chat-input-right">
                   <button
-                    className="chat-plan-btn"
-                    onClick={() => handleSend(true)}
-                    disabled={(!input.trim() && !attachments.length) || disabledInput}
-                    title="只生成计划，不执行工具"
-                  >
-                    计划
-                  </button>
-                  <button
-                    className={`chat-btn-send ${(!input.trim() && !attachments.length) || disabledInput ? 'disabled' : ''}`}
+                    className={`chat-btn-send ${(!input.trim() && !attachments.length) || disabledInput ? 'disabled' : ''} ${isTaskMode ? 'task-mode' : ''}`}
                     onClick={() => handleSend(false)}
                     disabled={(!input.trim() && !attachments.length) || disabledInput}
-                    title="发送"
+                    title={isTaskMode ? '提交任务' : '发送'}
                   >
-                    <svg width="16" height="16" fill="currentColor" viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+                    {isTaskMode ? (
+                      <span className="chat-btn-send-task">提交任务</span>
+                    ) : (
+                      <svg width="16" height="16" fill="currentColor" viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+                    )}
                   </button>
                 </div>
               </div>
             </div>
             <div className="chat-disclaimer-row">
               <ModelPicker
-                models={chatModels}
-                value={resolvedAgentConfig.model}
-                isTrial={user?.account_type === 'trial'}
-                onChange={(name) => saveSettings({ agent_model: name, chat_model: name })}
+                profileGroups={enabledProfileGroups}
+                resolvedSelection={resolvedAgentSelection}
+                conversationSelection={activeConvAgentSelection}
+                onProfileSelect={(profileId, modelId) => {
+                  if (activeId) setConversationAgentSelection(activeId, profileId, modelId);
+                }}
+                onGoToSettings={goConfigureAgentModel}
               />
               <span className="chat-disclaimer">AI 可能产生错误信息，请核实重要内容</span>
             </div>
             {modelLoadError && (
               <div className="chat-model-error">
-                <span>模型列表加载失败：{modelLoadError}</span>
+                <span>服务器模型分组加载失败：{modelLoadError}</span>
                 <button onClick={() => {
                   setModelLoadError(null);
                   serverApi.getModels()
@@ -1605,7 +2209,6 @@ export default function Chat() {
                       const map: Record<string, 'image' | 'agent' | 'postprocess' | 'chat'> = {};
                       for (const m of list) if (m.group) map[m.group] = m.model_type;
                       setGroupTypeMap(map);
-                      setChatModels(list.filter(m => m.model_type === 'agent' || m.model_type === 'chat'));
                     })
                     .catch(() => setModelLoadError('重试失败，请检查网络'));
                 }}>重试</button>
@@ -1636,6 +2239,9 @@ export default function Chat() {
               <button className="img-preview-btn" onClick={async () => {
                 await api.saveImageAs(previewImage.src, previewImage.name || `image_${Date.now()}.png`);
               }}>保存图片</button>
+              <button className="img-preview-btn" disabled={settingAvatar} onClick={() => { void handleSetAvatar(); }}>
+                {settingAvatar ? '设置中…' : '设为头像'}
+              </button>
               {previewImage.localPath && (
                 <button className="img-preview-btn" onClick={() => api.openFile(previewImage.localPath!)}>
                   系统打开原图
@@ -1652,19 +2258,26 @@ export default function Chat() {
       {showGalleryPicker && (() => {
         const gpPageSize = gpLayoutMode === '3x3' ? 9 : 16;
         const gpCols = gpLayoutMode === '3x3' ? 3 : 4;
-        const gpSorted = [...images]
-          .filter(img => gallerySourceFilter === 'all' ? true : img.source_kind === gallerySourceFilter)
-          .sort((a, b) => {
-            const cmp = a.created_at.localeCompare(b.created_at);
-            return gpSortOrder === 'desc' ? -cmp : cmp;
-          });
+        const gpSorted = dedupeGalleryItems(
+          [...images]
+            .filter(img => gallerySourceFilter === 'all' ? true : img.source_kind === gallerySourceFilter)
+            .sort((a, b) => {
+              const cmp = a.created_at.localeCompare(b.created_at);
+              return gpSortOrder === 'desc' ? -cmp : cmp;
+            }),
+        );
         const gpVisible = gpSorted.slice(gpPage * gpPageSize, (gpPage + 1) * gpPageSize);
         const gpTotalPages = Math.ceil(gpSorted.length / gpPageSize);
         return (
           <div className="gp-overlay" onClick={() => setShowGalleryPicker(false)}>
             <div className="gp-modal" onClick={e => e.stopPropagation()}>
               <div className="gp-header">
-                <h3 className="gp-title">从图库选择</h3>
+                <h3 className="gp-title">
+                  从图库选择
+                  {attachments.length > 0 && (
+                    <span className="gp-selected-count">已选择 {attachments.length} 张</span>
+                  )}
+                </h3>
                 <div className="gp-header-right">
                   <button
                     className="gp-sort-btn"
@@ -1701,7 +2314,16 @@ export default function Chat() {
                 <div className="gp-grid" style={{ gridTemplateColumns: `repeat(${gpCols}, 1fr)` }}>
                   {gpVisible.map(img => {
                     const url = img.missing ? '' : galleryThumbs[img.id];
-                    const alreadySelected = attachments.some(att => att.filePath === img.local_path);
+                    // 关键：选中态以 attachments 顺序为准，编号由当前下标实时生成。
+                    // 选中态穿过翻页 / 排序 / 来源过滤 —— 因为 source of truth 在 Composer 侧。
+                    // 比较用 normalized path，防止分隔符 / 大小写差异导致选中态错位。
+                    const imgPathKey = normalizeGalleryPath(img.local_path);
+                    const selectedIndex = attachments.findIndex(att => normalizeGalleryPath(att.filePath) === imgPathKey);
+                    const alreadySelected = selectedIndex >= 0;
+                    // active_image 只在 task 模式展示；存在时 attachments 从 图二 起编号。
+                    // chat 模式严格从 图一 起 —— 即使会话残留 active_image_id 也不影响 chat 编号。
+                    const labelIndex = isTaskMode && activeConv?.active_image_id ? selectedIndex + 1 : selectedIndex;
+                    const selectionLabel = alreadySelected ? getAttachmentDisplayLabel(labelIndex) : '';
                     return (
                       <div
                         key={img.id}
@@ -1709,14 +2331,23 @@ export default function Chat() {
                         onClick={() => !img.missing && handleSelectGalleryImage(img)}
                         onMouseEnter={e => !img.missing && handleGpMouseEnter(e, img.id, img.local_path)}
                         onMouseLeave={handleGpMouseLeave}
-                        title={img.missing ? `${img.file_name}（文件已移动或不存在）` : img.file_name}
+                        title={img.missing ? `${img.file_name}（文件已移动或不存在）` : alreadySelected ? `${img.file_name}（已选 · ${selectionLabel}，再次点击取消）` : `${img.file_name}（点击选择）`}
                       >
                         {url ? <img src={url} alt={img.file_name} draggable={false} /> : <div className="gp-placeholder">{img.missing ? '文件缺失' : '...'}</div>}
+                        {/* 选中态：左上角顺序标签 + 右上角 check badge。
+                            旧版本只靠 1px 绿色描边，几乎看不出区别 —— 现在改成"描边 + overlay + badge + 顺序标签"四重视觉。 */}
+                        {alreadySelected && (
+                          <>
+                            <div className="gp-item-overlay" />
+                            <span className="gp-item-order-label">{selectionLabel}</span>
+                            <span className="gp-item-check" aria-hidden="true">✓</span>
+                          </>
+                        )}
                         <div className="gp-item-meta">
                           <span className="gp-item-name">{img.file_name}</span>
                           <span className="gp-item-source">
                             {getImageSourceLabel(img.source_kind)}
-                            {alreadySelected ? ' · 已加入当前任务' : ''}
+                            {alreadySelected ? ` · ${selectionLabel}` : ''}
                           </span>
                         </div>
                       </div>
@@ -1726,13 +2357,20 @@ export default function Chat() {
               )}
 
               <div className="gp-footer">
-                <span className="gp-hint">点击有效图片加入当前任务，缺失文件不会进入附件区。</span>
+                <span className="gp-hint">
+                  单击选择 / 再次单击取消；编号按选择顺序生成（图一 / 图二 / 图三），缺失文件不会进入附件区。
+                </span>
                 <div className="gp-pagination">
                   <button className="gp-page-btn" onClick={() => setGpPage(p => Math.max(0, p - 1))} disabled={gpPage === 0}>‹</button>
                   <span className="gp-page-info">{gpPage + 1} / {gpTotalPages || 1}</span>
                   <button className="gp-page-btn" onClick={() => setGpPage(p => Math.min(gpTotalPages - 1, p + 1))} disabled={gpPage >= gpTotalPages - 1}>›</button>
                 </div>
                 <div className="gp-footer-btns">
+                  {attachments.length > 0 && (
+                    <button className="gp-btn-clear" onClick={clearAllAttachments} title="清空当前全部选中">
+                      清空选中（{attachments.length}）
+                    </button>
+                  )}
                   <button className="gp-btn-cancel" onClick={() => setShowGalleryPicker(false)}>关闭</button>
                 </div>
               </div>
@@ -1769,10 +2407,12 @@ const MessageItem = memo(function MessageItem({
   galleryDraft, onGalleryDraftChange, onApplyGalleryPreset, onStartGallerySearch,
   onCloseGalleryPanel, onShowMoreGalleryResults, onPreviewGalleryImage, onSelectGalleryImage, onOpenGalleryImage,
   onConfirmProposal, onCancelProposal, onUpdateProposal, onToggleProposalBatchItem,
+  onRetryTaskMessage, onViewTask, onEditTaskImage, onRegenerateTask,
+  onConfirmTaskMessage, onCancelTaskMessage, onModifyTaskMessage, onReplanTaskMessage,
 }: {
   message: ChatMessage;
   isStreaming: boolean;
-  onImageClick: (url: string) => void;
+  onImageClick: (url: string, meta?: { name?: string; width?: number | null; height?: number | null; localPath?: string; createdAt?: string }) => void;
   userName?: string;
   agentName?: string;
   userAvatar?: string;
@@ -1790,79 +2430,103 @@ const MessageItem = memo(function MessageItem({
   onCancelProposal: (messageId: string) => Promise<void>;
   onUpdateProposal: (messageId: string, finalPrompt: string, finalNegativePrompt: string) => Promise<void>;
   onToggleProposalBatchItem: (messageId: string, itemId: string) => Promise<void>;
+  onRetryTaskMessage: (messageId: string, taskId: string) => void;
+  onViewTask: (taskId: string) => void;
+  onEditTaskImage: (imagePath: string, imageId?: string) => void;
+  onRegenerateTask: (messageId: string, taskId: string) => void;
+  onConfirmTaskMessage: (messageId: string, taskId: string) => void;
+  onCancelTaskMessage: (messageId: string, taskId: string) => void;
+  onModifyTaskMessage: (messageId: string, taskId: string, finalPrompt: string, finalNegativePrompt: string) => void;
+  onReplanTaskMessage: (messageId: string, taskId: string, newText?: string) => void;
 }) {
   const isUser = message.role === 'user';
-  const contentRef = useRef<HTMLDivElement>(null);
   const [reasoningOpen, setReasoningOpen] = useState(true);
   const avatar = isUser ? userAvatar : aiAvatar;
   const initials = isUser ? getInitials(userName, 'U') : getInitials(agentName, 'AI');
 
-  useEffect(() => {
-    if (!contentRef.current) return;
-    if (isUser && message.images?.length) {
-      contentRef.current.innerHTML = '';
-      const textEl = document.createElement('div');
-      textEl.textContent = message.content;
-      contentRef.current.appendChild(textEl);
-      message.images.forEach(url => {
-        const img = document.createElement('img');
-        img.src = url; img.className = 'msg-thumb';
-        img.onclick = () => onImageClick(url);
-        contentRef.current!.appendChild(img);
-      });
-      return;
+  const assistantHtml = useMemo(() => {
+    if (isUser || !message.content) return '';
+    try {
+      return marked.parse(message.content) as string;
+    } catch {
+      return escapeHtml(message.content);
     }
-    if (!isUser && message.content) {
-      const html = marked.parse(message.content) as string;
-      contentRef.current.innerHTML = html;
-      // 内联 code 样式和复制按钮
-      contentRef.current.querySelectorAll('code:not(pre code)').forEach((el) => {
-        (el as HTMLElement).classList.add('inline-code');
-        const wrap = document.createElement('span');
-        wrap.className = 'inline-code-wrap';
-        const btn = document.createElement('button');
-        btn.className = 'inline-copy-btn';
-        btn.type = 'button';
-        btn.textContent = '复制';
-        const codeText = (el as HTMLElement).textContent || '';
-        btn.dataset.code = btoa(unescape(encodeURIComponent(codeText)));
-        (el as HTMLElement).parentNode!.insertBefore(wrap, el);
-        wrap.appendChild(el);
-        wrap.appendChild(btn);
-      });
-    }
-  }, [message.content, message.images, isUser, onImageClick]);
+  }, [isUser, message.content]);
 
-  useEffect(() => () => {
-    if (contentRef.current) contentRef.current.innerHTML = '';
+  const reasoningHtml = useMemo(() => {
+    if (isUser || !message.reasoning) return '';
+    try {
+      return marked.parse(message.reasoning) as string;
+    } catch {
+      return escapeHtml(message.reasoning);
+    }
+  }, [isUser, message.reasoning]);
+
+  const handleContentClick = useCallback(async (e: React.MouseEvent<HTMLDivElement>) => {
+    const target = e.target as HTMLElement;
+    const btn = (target.closest('.code-copy-btn') || target.closest('.inline-copy-btn') || target.closest('.prompt-copy-btn')) as HTMLButtonElement | null;
+    if (!btn) return;
+    const encoded = btn.dataset.code || '';
+    const ok = await copyCodeBlock(encoded);
+    if (ok) {
+      const original = btn.textContent;
+      btn.textContent = '已复制';
+      btn.classList.add('copied');
+      setTimeout(() => {
+        btn.textContent = original;
+        btn.classList.remove('copied');
+      }, 1500);
+    }
   }, []);
 
-  // 事件代理处理代码复制按钮
-  useEffect(() => {
-    const container = contentRef.current;
-    if (!container || isUser) return;
-    const handler = async (e: Event) => {
-      const target = e.target as HTMLElement;
-      const btn = (target.closest('.code-copy-btn') || target.closest('.inline-copy-btn') || target.closest('.prompt-copy-btn')) as HTMLButtonElement | null;
-      if (!btn) return;
-      const encoded = btn.dataset.code || '';
-      const ok = await copyCodeBlock(encoded);
-      if (ok) {
-        const original = btn.textContent;
-        btn.textContent = '已复制';
-        btn.classList.add('copied');
-        setTimeout(() => {
-          btn.textContent = original;
-          btn.classList.remove('copied');
-        }, 1500);
-      }
-    };
-    container.addEventListener('click', handler);
-    return () => container.removeEventListener('click', handler);
-  }, [isUser]);
-
   const generatedImgUrl = message.generated_image ? `data:image/png;base64,${message.generated_image}` : null;
-  const isImageStage = !isUser && isStreaming && message.is_image && !generatedImgUrl;
+  const isImageStage = !isUser && isStreaming && message.is_image && !generatedImgUrl && !message.task_message;
+  const userImages = isUser && message.images?.length ? message.images : null;
+
+  let contentNode: React.ReactNode = null;
+  if (isImageStage) {
+    contentNode = (
+      <div className="chat-image-stage">
+        <div className="image-stage-loader" />
+        <div className="image-stage-text">{message.content}</div>
+      </div>
+    );
+  } else if (isUser) {
+    contentNode = (
+      <div className="chat-msg-content user-message">
+        <div className="user-message-text">{message.content}</div>
+        {userImages && userImages.length > 0 ? (
+          <div className="user-message-images">
+            {userImages.map((url, idx) => (
+              <img
+                key={`${url}-${idx}`}
+                src={url}
+                className="msg-thumb"
+                alt=""
+                loading="lazy"
+                decoding="async"
+                onClick={() => onImageClick(url)}
+              />
+            ))}
+          </div>
+        ) : null}
+      </div>
+    );
+  } else if (message.content && !message.task_message) {
+    contentNode = (
+      <div
+        className="chat-msg-content assistant-message"
+        onClick={handleContentClick}
+        dangerouslySetInnerHTML={{ __html: assistantHtml }}
+      />
+    );
+  } else if (isStreaming && !message.task_message) {
+    contentNode = (
+      <div className="chat-msg-content assistant-message">
+        <span className="chat-thinking">思考中<span className="dots">...</span></span>
+      </div>
+    );
+  }
 
   return (
     <div className={`chat-msg ${message.role} ${isStreaming ? 'streaming' : ''}`}>
@@ -1878,7 +2542,7 @@ const MessageItem = memo(function MessageItem({
               <span className="thinking-label">思考过程</span>
               {message.reasoning_duration && <span className="reasoning-duration">{message.reasoning_duration}</span>}
             </div>
-            <div className={`reasoning-body ${reasoningOpen ? 'open' : ''}`} dangerouslySetInnerHTML={{ __html: marked.parse(message.reasoning) as string }} />
+            <div className={`reasoning-body ${reasoningOpen ? 'open' : ''}`} dangerouslySetInnerHTML={{ __html: reasoningHtml }} />
           </div>
         )}
         {!isUser && generatedImgUrl && (
@@ -1889,16 +2553,7 @@ const MessageItem = memo(function MessageItem({
             </div>
           </div>
         )}
-        {isImageStage ? (
-          <div className="chat-image-stage">
-            <div className="image-stage-loader" />
-            <div className="image-stage-text">{message.content}</div>
-          </div>
-        ) : (
-          <div className="chat-msg-content" ref={contentRef}>
-            {isUser ? message.content : (message.content || (isStreaming ? <span className="chat-thinking">思考中<span className="dots">...</span></span> : null))}
-          </div>
-        )}
+        {contentNode}
         {!isUser && message.gallery_search && (
           <GallerySearchPanel
             message={message}
@@ -1923,7 +2578,27 @@ const MessageItem = memo(function MessageItem({
             onToggleBatchItem={onToggleProposalBatchItem}
           />
         )}
-        {/* Token 鐠侊繝鍣哄鑺ョ垼 */}
+        {!isUser && message.task_message && (
+          <TaskMessageCard
+            state={message.task_message}
+            isStreaming={isStreaming}
+            onPreviewImage={(url, meta) => onImageClick(url, meta)}
+            onRetry={() => onRetryTaskMessage(message.id, message.task_message!.taskId)}
+            onViewTask={() => onViewTask(message.task_message!.taskId)}
+            onEditTask={message.task_message.images && message.task_message.images[0]?.localPath
+              ? () => onEditTaskImage(
+                  message.task_message!.images![0].localPath!,
+                  message.task_message!.images![0].imageId || message.task_message!.images![0].id,
+                )
+              : undefined}
+            onRegenerate={() => onRegenerateTask(message.id, message.task_message!.taskId)}
+            onConfirm={() => onConfirmTaskMessage(message.id, message.task_message!.taskId)}
+            onCancel={() => onCancelTaskMessage(message.id, message.task_message!.taskId)}
+            onModify={(finalPrompt, finalNegativePrompt) => onModifyTaskMessage(message.id, message.task_message!.taskId, finalPrompt, finalNegativePrompt)}
+            onReplan={(newText) => onReplanTaskMessage(message.id, message.task_message!.taskId, newText)}
+          />
+        )}
+        {/* Token badge */}
         {isUser && message.input_tokens !== undefined && (
           <div className="msg-token-badge">{message.input_tokens} tokens</div>
         )}
@@ -2235,7 +2910,19 @@ function OptionGroup({
   );
 }
 
-function ModelPicker({ models, value, isTrial, onChange }: { models: ServerModel[]; value: string; isTrial: boolean; onChange: (name: string) => void }) {
+type ProfilePickerGroup = {
+  profile: { id: string; name: string; provider_type: import('../features/aiProviders/types').AIProviderType; billing_mode?: import('../features/aiProviders/types').BillingMode };
+  models: AIProviderModel[];
+};
+
+function ModelPicker({ profileGroups = [], resolvedSelection, conversationSelection, onProfileSelect, onGoToSettings }: {
+  profileGroups?: ProfilePickerGroup[];
+  /** 会话级解析结果（含全局默认兜底），仅用于按钮文案与选中态展示 */
+  resolvedSelection?: { profile: { id: string; name: string; provider_type: import('../features/aiProviders/types').AIProviderType; billing_mode?: import('../features/aiProviders/types').BillingMode }; model: AIProviderModel } | null;
+  conversationSelection?: { profileId: string; modelId: string } | null;
+  onProfileSelect?: (profileId: string, modelId: string) => void;
+  onGoToSettings?: () => void;
+}) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
 
@@ -2248,8 +2935,13 @@ function ModelPicker({ models, value, isTrial, onChange }: { models: ServerModel
     return () => document.removeEventListener('mousedown', onClick);
   }, [open]);
 
-  const current = models.find(m => m.name === value);
-  const display = current?.display_name || current?.name || value || '选择模型';
+  // 唯一来源：用户已启用 Provider 的模型。没有 Provider 时显示配置引导。
+  const display = resolvedSelection
+    ? `${resolvedSelection.profile.name} · ${resolvedSelection.model.display_name || resolvedSelection.model.model_id}`
+    : '尚未配置模型';
+
+  const activeProfileId = conversationSelection?.profileId || resolvedSelection?.profile.id || '';
+  const activeModelId = conversationSelection?.modelId || resolvedSelection?.model.model_id || '';
 
   return (
     <div className="model-picker" ref={wrapRef}>
@@ -2258,42 +2950,76 @@ function ModelPicker({ models, value, isTrial, onChange }: { models: ServerModel
         className={`model-picker-btn ${open ? 'open' : ''}`}
         onClick={() => setOpen(v => !v)}
       >
-        <span className="model-picker-name">{display}</span>
+        <span className="model-picker-name">
+          {resolvedSelection && (
+            <ProviderLogo
+              providerType={resolvedSelection.profile.provider_type}
+              name={resolvedSelection.profile.name}
+              size={16}
+            />
+          )}
+          <span className="model-picker-name-text">{display}</span>
+          {resolvedSelection?.profile.billing_mode && (
+            <span className="model-mode-tag">{BILLING_MODE_LABELS[resolvedSelection.profile.billing_mode]}</span>
+          )}
+        </span>
         <svg width="10" height="10" viewBox="0 0 12 12" fill="currentColor">
           <path d="M2 4l4 4 4-4" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
         </svg>
       </button>
       {open && (
         <div className="model-picker-panel">
-          {models.length === 0 ? (
-            <div className="model-option empty">暂无可用模型</div>
-          ) : (
-            models.map(m => {
-              const disabled = isTrial && !m.trial_allowed;
-              const selected = m.name === value;
-              return (
-                <div
-                  key={m.name}
-                  className={`model-option ${selected ? 'selected' : ''} ${disabled ? 'disabled' : ''}`}
-                  title={disabled ? '试用账户暂不可用' : undefined}
+          {profileGroups.length === 0 && (
+            <div className="model-option empty">
+              <div>尚未配置 AI 对话模型</div>
+              <div className="model-option-empty-hint">请在「设置与更新 → AI 智能体」中添加</div>
+              {onGoToSettings && (
+                <button
+                  className="model-option-goto"
                   onClick={() => {
-                    if (disabled) return;
-                    onChange(m.name);
+                    onGoToSettings();
                     setOpen(false);
                   }}
                 >
-                  <span className="model-option-name">{m.display_name || m.name}</span>
-                  {m.group && <span className="model-option-group">{m.group}</span>}
-                  {disabled && <span className="model-option-tag">付费</span>}
-                  {selected && !disabled && (
-                    <svg className="model-option-check" width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-                      <path d="M13.5 4.5L6 12 2.5 8.5" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
-                    </svg>
-                  )}
-                </div>
-              );
-            })
+                  前往设置
+                </button>
+              )}
+            </div>
           )}
+          {profileGroups.map(group => (
+            <div key={group.profile.id} className="model-picker-group">
+              <div className="model-option-group-title">
+                <ProviderLogo providerType={group.profile.provider_type} name={group.profile.name} size={14} />
+                <span className="model-option-group-name">{group.profile.name}</span>
+                {group.profile.billing_mode && (
+                  <span className="model-mode-tag">{BILLING_MODE_LABELS[group.profile.billing_mode]}</span>
+                )}
+              </div>
+              {group.models.map(m => {
+                const selected = group.profile.id === activeProfileId && m.model_id === activeModelId;
+                return (
+                  <div
+                    key={`${group.profile.id}:${m.model_id}`}
+                    className={`model-option ${selected ? 'selected' : ''}`}
+                    onClick={() => {
+                      onProfileSelect?.(group.profile.id, m.model_id);
+                      setOpen(false);
+                    }}
+                  >
+                    <span className="model-option-name">{m.display_name || m.model_id}</span>
+                    {isNewlyDiscovered(m) && <span className="model-option-tag new">✨新</span>}
+                    {m.supports_vision && <span className="model-option-tag vision">视觉</span>}
+                    {m.test_status === 'failed' && <span className="model-option-tag warn">⚠</span>}
+                    {selected && (
+                      <svg className="model-option-check" width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M13.5 4.5L6 12 2.5 8.5" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
+                      </svg>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          ))}
         </div>
       )}
     </div>

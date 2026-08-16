@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <!-- 通用第三方 API 标识（CyImagePro 自绘，非任何 Provider 商标）：括号 + 接口节点 -->
+  <rect x="1.5" y="1.5" width="21" height="21" rx="6" stroke="#7c8794" stroke-width="1.6"/>
+  <circle cx="7.5" cy="12" r="2.1" fill="#7c8794"/>
+  <circle cx="16.5" cy="7.5" r="2.1" fill="#7c8794"/>
+  <circle cx="16.5" cy="16.5" r="2.1" fill="#7c8794"/>
+  <path d="M9.4 11 14.6 8.2M9.4 13 14.6 15.8" stroke="#7c8794" stroke-width="1.6" stroke-linecap="round"/>
+</svg>

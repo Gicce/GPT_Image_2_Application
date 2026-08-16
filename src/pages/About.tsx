@@ -1,23 +1,23 @@
 import { useState, useEffect } from 'react';
 import { getVersion } from '@tauri-apps/api/app';
 import { useUpdateStore } from '../store/useUpdateStore';
+import { RELEASE_INFO } from '../config/release';
 import './About.css';
 
-const services = [
-  { icon: '🖥️', title: '电脑 DIY 组装', desc: '个性化配置，性能优化' },
-  { icon: '📹', title: '监控安防', desc: '监控安装与维护' },
-  { icon: '🌐', title: '网络部署', desc: '路由器/交换机部署调试' },
-  { icon: '💻', title: '软件应用开发', desc: '定制开发，满足需求' },
-  { icon: '🏢', title: '企业网络搭建', desc: '企业级网络规划与实施' },
-  { icon: '📱', title: '电子产品销售', desc: '电脑配件及数码产品' },
-  { icon: '🏠', title: '智能家居', desc: '智能安防/家居系统方案' },
+const introParagraphs = [
+  'CyImagePro 是一款面向 AI 图片创作与批量生产场景的桌面应用，由 CY 开发。',
+  'CY 拥有多年软件开发与项目实践经验，希望通过 CyImagePro 将复杂的 AI 图片生成、提示词优化、批量方案规划、任务管理和素材管理流程整合为更加直观、高效的创作工具。',
+  '项目目前围绕 GPT Image 2 构建图片生成能力，并整合 AI 提示词优化、智能批量方案规划、图片编辑、任务队列、历史记录、图片库以及与 CY Video Studio 的素材联动。',
+  'CyImagePro 的目标是让用户从「描述需求」开始，完成方案规划、图片生成、结果管理以及继续进入视频制作的完整工作流。',
 ];
 
 const features = [
-  { icon: '🎨', title: '批量图像生成', desc: '支持 GPT Image 2 等模型，一键批量生成高质量图像' },
-  { icon: '✏️', title: '图生图编辑', desc: '上传参考图，AI 智能改写与风格迁移' },
-  { icon: '💬', title: '智能对话', desc: '多模型对话支持，GPT-4o / Claude 等主流模型' },
-  { icon: '📦', title: '多模型支持', desc: '图像与对话模型自由切换，按需选择' },
+  { icon: '🎨', title: 'AI 图片生成', desc: '支持 GPT Image 2 文生图与图片编辑。' },
+  { icon: '🧩', title: 'AI 智能批量规划', desc: '一个自然语言需求即可规划多个差异化生成方案。' },
+  { icon: '✨', title: 'AI 提示词优化', desc: '自动生成中文正向提示词与负面提示词。' },
+  { icon: '📋', title: '任务管理', desc: '统一管理生成任务、执行状态和历史结果。' },
+  { icon: '🖼️', title: '图片素材库', desc: '集中预览、管理、编辑和复用所有生成图片。' },
+  { icon: '🎬', title: 'Image → Video', desc: '生成图片可直接同步至 CY Video Studio，用于后续图生视频和视频创作。' },
 ];
 
 export default function About() {
@@ -39,83 +39,64 @@ export default function About() {
     <div className="about-page">
       {/* 顶部标题区 */}
       <div className="about-hero">
-        <h1 className="about-hero-title">关于我们</h1>
-        <p className="about-hero-sub">晨阳电脑 · CyImagePro</p>
+        <h1 className="about-hero-title">关于 CyImagePro</h1>
+        <p className="about-hero-sub">AI 图片生产与智能创作工具</p>
       </div>
 
-      {/* 主体：左右两栏 */}
-      <div className="about-main-row">
-        {/* 左侧：关于晨阳电脑 */}
-        <div className="about-card about-left-card">
-          <h2 className="card-title">关于晨阳电脑</h2>
-          <p className="card-desc">
-            晨阳电脑成立于2004年，至今已有20年专业服务经验。我们专注于 AI 图像处理与智能对话领域，致力于为用户提供高效、便捷的 AI 创作工具。
-          </p>
-          <p className="card-desc">
-            由一名拥有8年代码开发经验的工程师经营，我们始终坚持"专业、诚信、用心"的服务理念，为个人、家庭和企业客户提供高效、可靠的技术支持与解决方案。
-          </p>
-          <div className="info-list">
-            <div className="info-item">
-              <span className="info-label">店铺名称</span>
-              <span className="info-value">晨阳电脑</span>
-            </div>
-            <div className="info-item">
-              <span className="info-label">经营者</span>
-              <span className="info-value">资深代码工程师（8年开发经验）</span>
-            </div>
-            <div className="info-item">
-              <span className="info-label">成立时间</span>
-              <span className="info-value">2004年（20年老店）</span>
-            </div>
-            <div className="info-item">
-              <span className="info-label">联系电话</span>
-              <span className="info-value">18106683831（微信同号）</span>
-            </div>
-            <div className="info-item">
-              <span className="info-label">地址</span>
-              <span className="info-value">浙江省宁波市慈溪市匡堰镇高家村晨阳电脑</span>
-            </div>
+      {/* ① 项目介绍 */}
+      <div className="about-card about-section-card">
+        <h2 className="card-title">项目介绍</h2>
+        {introParagraphs.map((text, i) => (
+          <p className="card-desc" key={i}>{text}</p>
+        ))}
+        <div className="info-list">
+          <div className="info-item">
+            <span className="info-label">项目名称</span>
+            <span className="info-value">CyImagePro</span>
           </div>
-        </div>
-
-        {/* 右侧：主营业务 */}
-        <div className="about-card about-right-card">
-          <h2 className="card-title">我们的主营业务</h2>
-          <div className="biz-grid">
-            {services.map((s, i) => (
-              <div className="biz-card" key={i}>
-                <span className="biz-icon">{s.icon}</span>
-                <div>
-                  <div className="biz-title">{s.title}</div>
-                  <div className="biz-desc">{s.desc}</div>
-                </div>
-              </div>
-            ))}
+          <div className="info-item">
+            <span className="info-label">作者</span>
+            <span className="info-value">CY</span>
+          </div>
+          <div className="info-item">
+            <span className="info-label">开发经验</span>
+            <span className="info-value">多年软件开发与项目实践经验</span>
+          </div>
+          <div className="info-item">
+            <span className="info-label">定位</span>
+            <span className="info-value">AI 图片生产与智能创作工具</span>
+          </div>
+          <div className="info-item">
+            <span className="info-label">当前版本</span>
+            <span className="info-value">{appVersion ? `V${appVersion}` : '读取中…'}</span>
+          </div>
+          <div className="info-item">
+            <span className="info-label">发布阶段</span>
+            <span className="info-value">{RELEASE_INFO.label}</span>
           </div>
         </div>
       </div>
 
-      {/* 产品特性 + 联系我们 */}
-      <div className="about-main-row">
-        {/* 产品特性 */}
-        <div className="about-card about-features-card">
-          <h2 className="card-title">产品特性</h2>
-          <div className="features-grid">
-            {features.map((f, i) => (
-              <div className="feature-card" key={i}>
-                <span className="feature-icon">{f.icon}</span>
-                <div>
-                  <div className="feature-title">{f.title}</div>
-                  <div className="feature-desc">{f.desc}</div>
-                </div>
+      {/* ② 产品特性 */}
+      <div className="about-card about-section-card">
+        <h2 className="card-title">产品特性</h2>
+        <div className="features-grid">
+          {features.map(f => (
+            <div className="feature-card" key={f.title}>
+              <span className="feature-icon">{f.icon}</span>
+              <div>
+                <div className="feature-title">{f.title}</div>
+                <div className="feature-desc">{f.desc}</div>
               </div>
-            ))}
-          </div>
+            </div>
+          ))}
         </div>
+      </div>
 
-        {/* 联系我们 */}
-        <div className="about-card about-contact-card">
-          <h2 className="card-title">联系我们</h2>
+      {/* ③ 联系我们 */}
+      <div className="about-card about-section-card about-contact-card">
+        <h2 className="card-title">联系我们</h2>
+        <div className="contact-body">
           <div className="contact-sections">
             <div className="contact-section">
               <div className="contact-label">售前咨询</div>
@@ -138,7 +119,7 @@ export default function About() {
 
       {/* 底部页脚 */}
       <div className="about-page-footer">
-        <p>CyImagePro v{appVersion} · Powered by GPT Image 2</p>
+        <p>CyImagePro {appVersion ? `V${appVersion}` : ''} · Powered by GPT Image 2</p>
         <button className="about-changelog-btn" onClick={handleOpenChangelog}>
           {status.checking ? '加载中...' : '查看更新日志'}
         </button>

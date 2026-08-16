@@ -81,34 +81,6 @@
   flex: 1;
 }
 
-.sidebar-balance {
-  font-size: 11px;
-  color: var(--accent-success);
-  font-weight: 600;
-  margin-left: auto;
-}
-
-.sidebar-balance-group {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 1px;
-  margin-left: auto;
-}
-
-.sidebar-balance-group .sidebar-balance {
-  margin-left: 0;
-  font-size: 10px;
-}
-
-.sidebar-balance-group .sidebar-balance.img {
-  color: var(--accent-success);
-}
-
-.sidebar-balance-group .sidebar-balance.chat {
-  color: var(--accent-primary-text);
-}
-
 .sidebar-footer {
   padding: 16px 20px;
   border-top: 1px solid var(--border-sidebar);

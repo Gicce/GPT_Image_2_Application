@@ -1,10 +1,11 @@
 use std::fs;
 use std::path::Path;
 
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
-use crate::models::{ImageRecord, Task};
+use crate::models::{ImageRecord, RuntimeAuthConfig, Task};
 use crate::storage;
+use crate::RuntimeAuthState;
 
 #[derive(Debug, serde::Deserialize)]
 #[allow(dead_code)]
@@ -37,14 +38,24 @@ fn extract_error_parts(text: &str) -> (Option<String>, Option<String>) {
             .get("detail")
             .and_then(|v| v.as_str())
             .or_else(|| value.get("message").and_then(|v| v.as_str()))
-            .or_else(|| value.get("error").and_then(|v| v.get("message")).and_then(|v| v.as_str()))
+            .or_else(|| {
+                value
+                    .get("error")
+                    .and_then(|v| v.get("message"))
+                    .and_then(|v| v.as_str())
+            })
             .map(str::trim)
             .filter(|v| !v.is_empty())
             .map(str::to_string);
         let code = value
             .get("code")
             .and_then(|v| v.as_str())
-            .or_else(|| value.get("error").and_then(|v| v.get("code")).and_then(|v| v.as_str()))
+            .or_else(|| {
+                value
+                    .get("error")
+                    .and_then(|v| v.get("code"))
+                    .and_then(|v| v.as_str())
+            })
             .map(str::trim)
             .filter(|v| !v.is_empty())
             .map(str::to_string);
@@ -81,6 +92,58 @@ fn format_upstream_image_error(status: reqwest::StatusCode, text: &str) -> Strin
     message
 }
 
+/// Translate a reqwest send error into a friendly, classified message for the task queue.
+/// We do NOT expose the Authorization header or token value here — only network/HTTP signals.
+fn format_send_error(err: &reqwest::Error, url: &str) -> String {
+    let kind = if err.is_timeout() {
+        "timeout"
+    } else if err.is_connect() {
+        "connect"
+    } else if err.is_request() {
+        "request"
+    } else {
+        "network"
+    };
+    let hint = match kind {
+        "timeout" => "请求超时。请前往“设置 → 一键检查运行环境”确认代理可达、或适当调低尺寸/质量后重试。",
+        "connect" => "无法建立连接。请检查 Windows 系统代理（如 127.0.0.1:7897）是否启用且可达，前往“设置 → 一键检查运行环境”可一键诊断。",
+        "request" => "请求在客户端被拒绝，请前往“设置 → 一键检查运行环境”查看详情。",
+        _ => "网络异常，请检查代理与本地网络后重试。",
+    };
+    format!("图片服务连接失败（{kind}）：{hint} [endpoint: {url}]")
+}
+
+/// Read runtime auth config from memory (never persisted).
+/// Returns a snapshot; if the mutex is poisoned, returns default (empty).
+fn read_runtime_config(app: &AppHandle) -> RuntimeAuthConfig {
+    if let Some(state) = app.try_state::<RuntimeAuthState>() {
+        if let Ok(guard) = state.config.lock() {
+            return guard.clone();
+        }
+    }
+    RuntimeAuthConfig::default()
+}
+
+/// Resolve image token: prefer runtime memory, fallback to settings.token.
+fn resolve_image_token(runtime: &RuntimeAuthConfig, settings_token: &str) -> String {
+    let rt = runtime.image_token.trim().to_string();
+    if !rt.is_empty() {
+        rt
+    } else {
+        settings_token.trim().to_string()
+    }
+}
+
+/// Resolve image base_url: prefer runtime memory, fallback to default.
+fn resolve_image_base_url(runtime: &RuntimeAuthConfig) -> String {
+    let rt = runtime.image_base_url.trim().to_string();
+    if rt.is_empty() {
+        "https://www.packyapi.com".to_string()
+    } else {
+        rt.trim_end_matches('/').to_string()
+    }
+}
+
 fn effective_prompt(task: &Task, index: usize) -> String {
     if let Some(item) = task.batch_items.get(index) {
         let override_prompt = item.prompt_override.trim();
@@ -102,6 +165,50 @@ fn effective_prompt(task: &Task, index: usize) -> String {
     base
 }
 
+/// 子任务级负面提示词：batch_items[i].negative_override 优先，回落任务级字段。
+fn effective_negative_prompt(task: &Task, index: usize) -> String {
+    if let Some(item) = task.batch_items.get(index) {
+        let override_negative = item.negative_override.trim();
+        if !override_negative.is_empty() {
+            return override_negative.to_string();
+        }
+    }
+    if !task.final_negative_prompt.trim().is_empty() {
+        task.final_negative_prompt.trim().to_string()
+    } else {
+        task.negative_prompt.trim().to_string()
+    }
+}
+
+/// 子任务级图片描述：批量方案任务（batch_items 带 label，例如「方案 1 · 红黑重甲 · 长枪 · 古城墙」）
+/// 写入 ImageRecord.description，图库卡片优先展示方案标题而非整段 Prompt。
+fn batch_item_description(task: &Task, index: usize) -> Option<String> {
+    let label = task
+        .batch_items
+        .get(index)
+        .map(|item| item.label.trim())
+        .unwrap_or("");
+    if label.is_empty() {
+        None
+    } else {
+        Some(label.to_string())
+    }
+}
+
+/// gpt-image-2 走 OpenAI Images API，没有独立的 negative_prompt 参数；
+/// 负面提示词在适配层（这里）组合进最终指令，UI 不感知 Provider 差异。
+fn compose_model_instruction(positive: &str, negative: &str) -> String {
+    let negative = negative.trim();
+    if negative.is_empty() {
+        return positive.trim().to_string();
+    }
+    format!(
+        "{}\n\n画面中严格避免出现以下内容：{}",
+        positive.trim(),
+        negative
+    )
+}
+
 fn effective_source_images(task: &Task, index: usize) -> Vec<String> {
     if let Some(item) = task.batch_items.get(index) {
         if !item.source_images.is_empty() {
@@ -119,10 +226,7 @@ fn effective_source_images(task: &Task, index: usize) -> Vec<String> {
 pub async fn process_next_task(app: &AppHandle) {
     // Find a pending task
     let task_opt = storage::with_tasks(app, |tasks| {
-        tasks
-            .iter()
-            .find(|t| t.status == "pending")
-            .cloned()
+        tasks.iter().find(|t| t.status == "pending").cloned()
     });
 
     let task = match task_opt {
@@ -134,15 +238,20 @@ pub async fn process_next_task(app: &AppHandle) {
     storage::with_tasks(app, |tasks| {
         if let Some(t) = tasks.iter_mut().find(|t| t.id == task.id) {
             t.status = "running".to_string();
+            if t.started_at.is_none() {
+                t.started_at = Some(chrono::Local::now().to_rfc3339());
+            }
         }
     });
 
     let _ = app.emit("task-updated", &task.id);
 
-    // Get token
+    // Get token: prefer runtime memory token, fallback to settings.token
     let settings_path = storage::settings_path(app);
     let settings: crate::models::Settings = storage::read_json(&settings_path, Default::default());
-    let token = settings.token.clone();
+    let runtime_config = read_runtime_config(app);
+    let token = resolve_image_token(&runtime_config, &settings.token);
+    let image_base_url = resolve_image_base_url(&runtime_config);
     let requires_openai_token = task.task_type != "remove_background";
 
     if requires_openai_token && token.is_empty() {
@@ -177,11 +286,18 @@ pub async fn process_next_task(app: &AppHandle) {
         }
     }
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(600))
-        .use_native_tls()
-        .build()
-        .unwrap_or_else(|_| reqwest::Client::new());
+    let client = {
+        let mut builder = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(600))
+            .connect_timeout(std::time::Duration::from_secs(30))
+            .use_native_tls();
+        if let Some(proxy_url) = crate::commands::read_windows_system_proxy() {
+            if let Ok(proxy) = reqwest::Proxy::all(&proxy_url) {
+                builder = builder.proxy(proxy);
+            }
+        }
+        builder.build().unwrap_or_else(|_| reqwest::Client::new())
+    };
 
     let mut success_count = 0usize;
     let mut failed_count = 0usize;
@@ -216,9 +332,9 @@ pub async fn process_next_task(app: &AppHandle) {
         let result = if task.task_type == "remove_background" {
             remove_background_single_image(&settings, &task, i).await
         } else if task.task_type == "edit" {
-            edit_single_image(&client, &token, &task, i).await
+            edit_single_image(&client, &token, &image_base_url, &task, i).await
         } else {
-            generate_single_image(&client, &token, &task, i).await
+            generate_single_image(&client, &token, &image_base_url, &task, i).await
         };
 
         match result {
@@ -258,6 +374,7 @@ pub async fn process_next_task(app: &AppHandle) {
     // Finalize task status
     storage::with_tasks(app, |tasks| {
         if let Some(t) = tasks.iter_mut().find(|t| t.id == task.id) {
+            t.completed_at = Some(chrono::Local::now().to_rfc3339());
             if was_cancelled || t.status == "cancelled" {
                 t.status = "cancelled".to_string();
                 for sub_task in &mut t.sub_tasks {
@@ -286,13 +403,16 @@ pub async fn process_next_task(app: &AppHandle) {
 async fn generate_single_image(
     client: &reqwest::Client,
     token: &str,
+    base_url: &str,
     task: &Task,
     index: usize,
 ) -> Result<ImageRecord, String> {
-
     let body = serde_json::json!({
         "model": "gpt-image-2",
-        "prompt": effective_prompt(task, index),
+        "prompt": compose_model_instruction(
+            &effective_prompt(task, index),
+            &effective_negative_prompt(task, index),
+        ),
         "size": task.size,
         "quality": task.quality,
         "output_format": task.output_format,
@@ -300,14 +420,16 @@ async fn generate_single_image(
         "n": 1
     });
 
+    let url = format!("{}/v1/images/generations", base_url);
+
     let response = client
-        .post("https://www.packyapi.com/v1/images/generations")
+        .post(&url)
         .header("Content-Type", "application/json")
         .header("Authorization", format!("Bearer {}", token))
         .json(&body)
         .send()
         .await
-        .map_err(|e| format!("网络请求失败: {}", e))?;
+        .map_err(|e| format_send_error(&e, &url))?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -355,7 +477,7 @@ async fn generate_single_image(
         last_seen_at: Some(now.to_rfc3339()),
         width: None,
         height: None,
-        description: None,
+        description: batch_item_description(task, index),
         tags: Vec::new(),
         indexed_at: None,
     })
@@ -424,7 +546,10 @@ async fn remove_background_single_image(
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("image");
     let filename = format!("{}_transparent_{}.png", stem, now.format("%Y%m%d_%H%M%S"));
     let filepath = transparent_dir.join(&filename);
-    let image_bytes = resp.bytes().await.map_err(|e| format!("读取 remove.bg 响应失败: {}", e))?;
+    let image_bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| format!("读取 remove.bg 响应失败: {}", e))?;
     fs::write(&filepath, &image_bytes).map_err(|e| format!("保存透明图失败: {}", e))?;
 
     Ok(ImageRecord {
@@ -448,21 +573,27 @@ async fn remove_background_single_image(
 async fn edit_single_image(
     client: &reqwest::Client,
     token: &str,
+    base_url: &str,
     task: &Task,
     index: usize,
 ) -> Result<ImageRecord, String> {
-
     let mut form = reqwest::multipart::Form::new()
         .text("model", "gpt-image-2")
-        .text("prompt", effective_prompt(task, index))
+        .text(
+            "prompt",
+            compose_model_instruction(
+                &effective_prompt(task, index),
+                &effective_negative_prompt(task, index),
+            ),
+        )
         .text("n", "1")
         .text("size", task.size.clone())
         .text("response_format", "b64_json");
 
     for img_path in &effective_source_images(task, index) {
         let path = Path::new(img_path);
-        let file_bytes = fs::read(path)
-            .map_err(|e| format!("无法读取源图片 {}: {}", img_path, e))?;
+        let file_bytes =
+            fs::read(path).map_err(|e| format!("无法读取源图片 {}: {}", img_path, e))?;
         let file_name = path
             .file_name()
             .and_then(|n| n.to_str())
@@ -476,13 +607,15 @@ async fn edit_single_image(
         form = form.part("image[]", part);
     }
 
+    let url = format!("{}/v1/images/edits", base_url);
+
     let response = client
-        .post("https://www.packyapi.com/v1/images/edits")
+        .post(&url)
         .header("Authorization", format!("Bearer {}", token))
         .multipart(form)
         .send()
         .await
-        .map_err(|e| format!("网络请求失败: {} (is_connect={}, is_timeout={})", e, e.is_connect(), e.is_timeout()))?;
+        .map_err(|e| format_send_error(&e, &url))?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -530,7 +663,7 @@ async fn edit_single_image(
         last_seen_at: Some(now.to_rfc3339()),
         width: None,
         height: None,
-        description: None,
+        description: batch_item_description(task, index),
         tags: Vec::new(),
         indexed_at: None,
     })

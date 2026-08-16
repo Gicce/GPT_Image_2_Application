@@ -133,6 +133,12 @@
   white-space: nowrap;
 }
 
+/* 执行中任务的实时耗时（spec 六十节） */
+.task-queue-elapsed {
+  color: var(--accent, #4a90d9);
+  font-variant-numeric: tabular-nums;
+}
+
 .task-errors {
   margin-top: 8px;
 }
@@ -209,4 +215,12 @@
 
 .delete-task-btn:hover {
   background: var(--badge-danger-bg);
+}
+
+
+/* Chat TaskMessageCard 焦点定位 */
+.task-card.focused {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--accent-primary) 30%, transparent);
 }

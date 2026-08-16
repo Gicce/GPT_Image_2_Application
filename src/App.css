@@ -248,9 +248,14 @@ body {
   to { transform: rotate(360deg); }
 }
 
+/**
+ * 页面容器：默认铺满 Main Content 剩余宽度（数据密集页：图库 / 任务队列 / 历史记录）。
+ * 表单型页面自行设置可读 max-width（见各页 CSS：settings-page 1280 / image-studio-page
+ * 1480 / account-page 1400），不再全局锁 1200px 导致 2K 大屏右侧大片空白。
+ */
 .page {
   padding: 28px 32px;
-  max-width: 1200px;
+  min-width: 0;
   animation: fadeIn 0.15s ease;
 }
 

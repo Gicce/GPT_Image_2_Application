@@ -1,4 +1,5 @@
 import type { Settings } from '../types';
+import type { BillingMode } from '../features/aiProviders/types';
 
 type AgentConfigInput = Pick<Settings, 'chat_token' | 'chat_model' | 'chat_base_url' | 'chat_system_prompt'> & Partial<Pick<Settings, 'agent_token' | 'agent_model' | 'agent_base_url' | 'agent_system_prompt'>>;
 
@@ -10,6 +11,8 @@ export type ResolvedAgentConfig = {
   source: 'agent' | 'chat';
   hasOverrides: boolean;
   mismatch: boolean;
+  /** BYOK 路径附加：Provider 连接的使用方式（官方多模式 Provider 才有），随调用链透传 */
+  billingMode?: BillingMode;
 };
 
 function clean(value?: string) {

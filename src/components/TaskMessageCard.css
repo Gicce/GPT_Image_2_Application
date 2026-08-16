@@ -1,0 +1,661 @@
+.task-message-card {
+  margin-top: 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--bg-chat) 94%, black 6%);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text-chat);
+  transition: border-color 0.2s;
+}
+
+.task-message-card.badge-running,
+.task-message-card.badge-queued {
+  border-color: color-mix(in srgb, var(--accent-primary) 60%, transparent);
+  background: color-mix(in srgb, var(--accent-primary-light) 80%, var(--bg-chat) 20%);
+}
+
+.task-message-card.badge-success {
+  border-color: color-mix(in srgb, var(--accent-success) 50%, transparent);
+}
+
+.task-message-card.badge-failed {
+  border-color: color-mix(in srgb, var(--accent-danger) 55%, transparent);
+}
+
+.task-message-card.badge-waiting {
+  border-color: color-mix(in srgb, #f59e0b 55%, transparent);
+  background: color-mix(in srgb, #f59e0b 6%, var(--bg-chat) 94%);
+}
+
+.task-message-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.task-message-head-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.task-message-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.task-message-badge.badge-queued,
+.task-message-badge.badge-analyzing,
+.task-message-badge.badge-running,
+.task-message-badge.badge-saving {
+  background: color-mix(in srgb, var(--accent-primary) 18%, transparent);
+  color: var(--accent-primary-hover, var(--accent-primary));
+}
+
+.task-message-badge.badge-success {
+  background: color-mix(in srgb, var(--accent-success) 18%, transparent);
+  color: var(--accent-success);
+}
+
+.task-message-badge.badge-failed {
+  background: color-mix(in srgb, var(--accent-danger) 18%, transparent);
+  color: var(--accent-danger);
+}
+
+.task-message-badge.badge-cancelled {
+  background: var(--bg-inset);
+  color: var(--text-chat-muted);
+}
+
+.task-message-badge.badge-waiting {
+  background: color-mix(in srgb, #f59e0b 18%, transparent);
+  color: #b45309;
+}
+
+.task-message-card.badge-waiting .task-message-badge.badge-waiting {
+  color: #d97706;
+}
+
+.task-message-spinner {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  animation: tm-card-spin 0.9s linear infinite;
+  display: inline-block;
+}
+
+@keyframes tm-card-spin {
+  to { transform: rotate(360deg); }
+}
+
+.task-message-id {
+  font-size: 11px;
+  color: var(--text-chat-muted);
+  font-family: 'Cascadia Code', 'Fira Code', Consolas, monospace;
+}
+
+.task-message-title {
+  font-size: 12px;
+  color: var(--text-chat-muted);
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-message-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bg-inset) 70%, transparent);
+  overflow: hidden;
+  position: relative;
+}
+
+.task-message-skeleton::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in srgb, var(--accent-primary) 14%, transparent) 50%,
+    transparent 100%
+  );
+  transform: translateX(-100%);
+  animation: tm-card-shimmer 1.4s ease-in-out infinite;
+}
+
+@keyframes tm-card-shimmer {
+  0% { transform: translateX(-100%); }
+  60%, 100% { transform: translateX(100%); }
+}
+
+.task-message-skeleton-row {
+  height: 12px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--text-chat-muted) 22%, transparent);
+  position: relative;
+  z-index: 1;
+}
+
+.task-message-skeleton-row.long { width: 92%; }
+.task-message-skeleton-row.medium { width: 64%; }
+.task-message-skeleton-row.short { width: 36%; }
+
+.task-message-sub {
+  font-size: 12px;
+  color: var(--text-chat-muted);
+}
+
+/* 执行耗时：执行中（弱强调）/ 完成（成功色）/ 失败（警示色） */
+.task-message-elapsed {
+  font-variant-numeric: tabular-nums;
+}
+
+.task-message-elapsed.done {
+  color: var(--success, #2e9e5b);
+}
+
+.task-message-elapsed.failed {
+  color: var(--danger, #c0392b);
+}
+
+.task-message-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-chat-muted);
+}
+
+.task-message-meta span {
+  padding: 2px 8px;
+  background: var(--bg-inset);
+  border-radius: 8px;
+}
+
+.task-message-images {
+  display: grid;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.task-message-images.image-count-1 {
+  grid-template-columns: 1fr;
+  max-width: 360px;
+}
+
+.task-message-images.image-count-2 {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.task-message-images.image-count-3,
+.task-message-images.image-count-4 {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.task-message-image-btn {
+  padding: 0;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-inset);
+  border-radius: 10px;
+  overflow: hidden;
+  cursor: pointer;
+  display: block;
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+
+.task-message-image-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+}
+
+.task-message-image-btn img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-height: 220px;
+  object-fit: cover;
+}
+
+.task-message-images.image-count-1 .task-message-image-btn img {
+  max-height: 380px;
+}
+
+.task-message-gallery-hint {
+  font-size: 11px;
+  color: var(--accent-success);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.task-message-error {
+  font-size: 12px;
+  color: var(--accent-danger);
+  background: color-mix(in srgb, var(--accent-danger) 10%, transparent);
+  border-radius: 8px;
+  padding: 8px 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.task-message-error.muted {
+  color: var(--text-chat-muted);
+  background: var(--bg-inset);
+}
+
+.task-message-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tm-btn {
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-inset);
+  color: var(--text-chat);
+  padding: 0 12px;
+  height: 28px;
+  border-radius: 8px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.tm-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--border-default);
+}
+
+.tm-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.tm-btn.primary {
+  background: var(--accent-primary);
+  border-color: var(--accent-primary);
+  color: var(--text-on-accent);
+}
+
+.tm-btn.primary:hover:not(:disabled) {
+  background: var(--accent-primary-hover, var(--accent-primary));
+  border-color: var(--accent-primary-hover, var(--accent-primary));
+}
+
+/* ===== WAITING_CONFIRM：任务详情展示 ===== */
+.task-message-info-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 6px 12px;
+  padding: 10px 12px;
+  background: var(--bg-inset);
+  border-radius: 10px;
+  font-size: 12px;
+}
+
+.task-message-info-grid > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.task-message-info-grid span {
+  color: var(--text-chat-muted);
+  font-size: 11px;
+}
+
+.task-message-info-grid p {
+  margin: 0;
+  color: var(--text-chat);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 主体列表等长文本字段：占满整行 */
+.task-message-info-grid > div.tm-info-wide {
+  grid-column: 1 / -1;
+}
+
+.task-message-info-grid > div.tm-info-wide p {
+  white-space: normal;
+}
+
+.task-message-final-prompt {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  background: color-mix(in srgb, #f59e0b 8%, var(--bg-inset));
+  border: 1px solid color-mix(in srgb, #f59e0b 30%, transparent);
+  border-radius: 10px;
+}
+
+.task-message-final-prompt.muted {
+  background: var(--bg-inset);
+  border-color: var(--border-subtle);
+}
+
+.task-message-final-prompt span {
+  font-size: 11px;
+  color: var(--text-chat-muted);
+}
+
+.task-message-final-prompt p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-chat);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.task-message-raw-prompt {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+}
+
+.task-message-raw-prompt span {
+  font-size: 11px;
+  color: var(--text-chat-muted);
+}
+
+.task-message-raw-prompt p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-chat-muted);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ===== WAITING_CONFIRM：任务内联编辑 ===== */
+.task-message-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--bg-inset);
+  border-radius: 10px;
+}
+
+.task-message-edit-input {
+  width: 100%;
+  resize: vertical;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-chat);
+  background: var(--bg-chat);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+
+.task-message-edit-input.small {
+  font-size: 11px;
+}
+
+.task-message-edit-input:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+}
+
+.task-message-edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+/* ====== 编辑任务确认卡：源图片缩略图 ====== */
+.task-message-source-image {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent-primary-light) 35%, var(--bg-chat) 65%);
+  border: 1px dashed color-mix(in srgb, var(--accent-primary) 50%, transparent);
+}
+
+.task-message-source-image > span:first-child {
+  font-size: 11px;
+  color: var(--text-muted);
+  letter-spacing: 0.5px;
+}
+
+.task-message-source-image-body {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.task-message-source-image-body img {
+  width: 80px;
+  height: 80px;
+  object-fit: cover;
+  border-radius: 8px;
+  cursor: zoom-in;
+  border: 1px solid var(--border-subtle);
+  background: #000;
+}
+
+.task-message-source-image-placeholder {
+  width: 80px;
+  height: 80px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-chat) 80%, black 20%);
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  font-size: 11px;
+  padding: 6px;
+  border: 1px solid var(--border-subtle);
+}
+
+.task-message-source-image-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  color: var(--text-chat);
+  min-width: 0;
+}
+
+.task-message-source-image-name {
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
+}
+
+.task-message-source-image-id {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* ====== 多图附件列表（图二 / 图三 参考图汇总） ======
+   仅在任务提交时快照里有 > 1 张附件时显示。 */
+.task-message-attachments-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-chat) 92%, transparent);
+  border: 1px solid var(--border-subtle);
+  margin-top: 6px;
+}
+
+.task-message-attachments-summary > span:first-child {
+  font-size: 11px;
+  color: var(--text-muted);
+  letter-spacing: 0.5px;
+}
+
+.task-message-attachments-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.task-message-attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
+  color: var(--accent-primary);
+  border: 1px solid color-mix(in srgb, var(--accent-primary) 30%, transparent);
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: default;
+}
+
+/* PLANNING_FAILED 卡片视觉提示 */
+.task-message-card.badge-failed.is-planning-failed {
+  border-style: dashed;
+}
+
+/* ===== Planner 诊断详情展开区（PLANNING_FAILED 卡片内） ===== */
+.task-message-planner-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  font-size: 12px;
+}
+
+.task-message-planner-detail-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.task-message-planner-detail-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.task-message-planner-detail-label {
+  font-size: 11px;
+  color: var(--text-chat-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.task-message-planner-detail-pre {
+  margin: 0;
+  padding: 6px 8px;
+  background: color-mix(in srgb, var(--accent-danger) 5%, var(--bg-inset));
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11px;
+  color: var(--text-chat);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.tm-btn.tiny {
+  height: 22px;
+  padding: 0 8px;
+  font-size: 11px;
+  border-radius: 6px;
+}
+
+/* ===== 执行失败详情块（FAILED / INTERRUPTED 卡片内） ===== */
+.task-message-exec-failure {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.task-message-subtask-errors {
+  margin: 0;
+  padding: 6px 10px 6px 22px;
+  font-size: 11px;
+  color: var(--text-chat-muted);
+  background: var(--bg-inset);
+  border-radius: 6px;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.task-message-subtask-errors li {
+  list-style: disc;
+  word-break: break-word;
+  white-space: pre-wrap;
+  line-height: 1.5;
+}
+
+/* ====== 任务上下文继承摘要（多轮补充任务时显示作品 / 主体）====== */
+.task-message-context-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 12px;
+  margin: 6px 0;
+  background: var(--bg-inset);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+}
+
+.task-message-context-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.task-message-context-line span {
+  min-width: 48px;
+  color: var(--text-chat-muted);
+  font-size: 11px;
+}
+
+.task-message-context-line p {
+  margin: 0;
+  color: var(--text-chat);
+  word-break: break-word;
+}

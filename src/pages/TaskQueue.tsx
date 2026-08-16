@@ -4,6 +4,8 @@ import type { Task } from '../types';
 import { api } from '../services/api';
 import EditTaskModal from '../components/EditTaskModal';
 import DeleteTaskDialog from '../components/DeleteTaskDialog';
+import { formatDuration } from '../utils/taskDuration';
+import { executionModeLabel, promptOptimizationState } from '../utils/taskDisplay';
 import './TaskQueue.css';
 import './ImageEdit.css';
 
@@ -14,6 +16,8 @@ const STATUS_MAP: Record<string, { label: string; cls: string }> = {
   failed: { label: '失败', cls: 'status-failed' },
   cancelled: { label: '已取消', cls: 'status-cancelled' },
 };
+
+const FOCUS_KEY = 'cy_taskqueue_focus_id';
 
 function getTaskTypeLabel(task: Task): string {
   if (task.task_type === 'edit') return '图生图';
@@ -31,10 +35,6 @@ function getApiEndpoint(task: Task): string {
   return 'POST https://www.packyapi.com/v1/images/generations';
 }
 
-function getExecutionLabel(task: Task): string {
-  return task.execution_mode === 'batch' ? `批量 / ${task.batch_strategy || 'repeat_same'}` : '单任务';
-}
-
 function getSubTaskStatusLabel(status: string): string {
   const meta = STATUS_MAP[status];
   return meta?.label || status;
@@ -45,19 +45,40 @@ export default function TaskQueue() {
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [deletingTask, setDeletingTask] = useState<Task | null>(null);
   const [expandedPrompts, setExpandedPrompts] = useState<Set<string>>(new Set());
-
+  const [focusTaskId, setFocusTaskId] = useState<string | null>(null);
+  // 执行中任务的实时耗时刷新（250ms，低频）。TaskQueue 没有单任务的
+  // executionStartedAt（那在 Chat 任务卡上），这里只显示已完成的固定 duration
+  // 和进行中的粗略状态 —— 所以用一个轻量 tick 驱动重渲染即可。
+  const [, setDurationTick] = useState(0);
   useEffect(() => {
-    void loadTasks();
-    let unlistener: (() => void) | null = null;
-    api.onTaskUpdated(async () => {
-      await loadTasks();
-    }).then(fn => {
-      unlistener = fn;
-    });
-    return () => {
-      if (unlistener) unlistener();
-    };
-  }, [loadTasks]);
+    const hasActive = useTaskStore.getState().tasks.some(t => t.status === 'pending' || t.status === 'running');
+    if (!hasActive) return;
+    const timer = setInterval(() => setDurationTick(t => t + 1), 1000);
+    return () => clearInterval(timer);
+  }, [tasks]);
+
+  // 任务刷新：task-updated 事件由 useTaskStore 全局单点桥接（ensureTaskEventBridge）
+  useEffect(() => { void loadTasks(); }, [loadTasks]);
+
+  // 来自 Chat TaskMessageCard 的 "查看任务" 焦点定位
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(FOCUS_KEY);
+      if (stored) {
+        setFocusTaskId(stored);
+        localStorage.removeItem(FOCUS_KEY);
+        // 通知 chat 侧清理
+        window.dispatchEvent(new CustomEvent('cy-taskqueue-focus-done'));
+        // 自动滚动到目标卡片
+        setTimeout(() => {
+          const el = document.querySelector(`.task-card[data-task-id="${CSS.escape(stored)}"]`);
+          if (el) {
+            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          }
+        }, 200);
+      }
+    } catch {}
+  }, [tasks]);
 
   const togglePrompt = (id: string) => {
     setExpandedPrompts(prev => {
@@ -112,19 +133,39 @@ export default function TaskQueue() {
             const hasPromptDiff = !!task.final_prompt && task.final_prompt !== task.user_prompt_raw;
             const labels = task.sub_tasks.map(item => item.label).filter(Boolean) as string[];
             const subTaskErrors = task.sub_tasks.filter(subTask => subTask.error);
+            const optimized = promptOptimizationState(task).applied;
 
             return (
-              <div key={task.id} className="task-card">
+              <div
+                key={task.id}
+                className={`task-card${focusTaskId === task.id ? ' focused' : ''}`}
+                data-task-id={task.id}
+              >
                 <div className="task-card-header">
                   <div>
                     <span className={`status-badge ${statusMeta.cls}`}>{statusMeta.label}</span>
                     <span className="type-badge edit-badge">{getTaskTypeLabel(task)}</span>
                     <span className="type-badge">{getSourceLabel(task)}</span>
-                    <span className="type-badge">{getExecutionLabel(task)}</span>
+                    <span className="type-badge">{executionModeLabel(task)}</span>
                     <span className="task-id">#{task.id.slice(0, 8)}</span>
                   </div>
                   <span className="task-time">{new Date(task.created_at).toLocaleString('zh-CN')}</span>
                 </div>
+
+                {(() => {
+                  // 执行耗时：优先用 started_at（正式执行起点），旧任务回落 created_at
+                  if (!isActive) return null;
+                  const startIso = task.started_at || task.created_at;
+                  const elapsed = Date.now() - new Date(startIso).getTime();
+                  if (!Number.isFinite(elapsed) || elapsed <= 0) return null;
+                  const text = formatDuration(elapsed);
+                  if (!text) return null;
+                  return (
+                    <p className="task-dir task-queue-elapsed">
+                      {task.status === 'running' ? '生成中' : '排队中'} · {text}
+                    </p>
+                  );
+                })()}
 
                 <div className="task-card-body">
                   <p
@@ -140,7 +181,7 @@ export default function TaskQueue() {
                     <span>{task.quality}</span>
                     <span>{task.output_format.toUpperCase()}</span>
                     <span>{task.count} 张</span>
-                    <span>{task.prompt_optimized ? '已优化提示词' : '原始提示词'}</span>
+                    <span>{optimized ? '已优化提示词' : '原始提示词'}</span>
                   </div>
 
                   {task.task_plan_summary && (

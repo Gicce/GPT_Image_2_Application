@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type { UserInfo, UserToken } from '../services/serverApi';
 import { serverApi } from '../services/serverApi';
 import { useSettingsStore } from './useSettingsStore';
+import { clearRuntimeConfig } from '../services/runtimeTokenService';
 
 // 全局缓存：group → model_type 的映射，由首次成功的 getModels 调用填充
 let groupTypeMap: Record<string, 'image' | 'agent' | 'postprocess' | 'chat'> = {};
@@ -35,21 +36,21 @@ export function displayGroupType(group: string): 'image' | 'agent' | 'postproces
   return 'agent';
 }
 
-// 把后端下发的 token 自动同步到本地 settings，让 Rust 端能读
+// 把后端下发的 api_token 同步到本地 settings，让 Rust 端能读（未登录手动 Token 模式的 fallback）
+// 注意：runtime token 不走此路径，runtime token 通过 Tauri command 写入 Rust 内存
 function syncTokensToSettings(user: UserInfo | null) {
   if (!user) return;
-  // groupTypeMap 未填充时不做同步，避免用正则猜测导致 token 分配错误
-  // setGroupTypeMap() 填充后会再次调用此函数
   if (Object.keys(groupTypeMap).length === 0) return;
 
   const settings = useSettingsStore.getState().settings;
   const partial: any = {};
-  // 直接用 groupTypeMap 做精确匹配，不再依赖 isImageGroup()
-  const imageToken = user.tokens.find(t => groupTypeMap[t.group] === 'image')?.api_token ?? '';
-  const agentToken = user.tokens.find(t => groupTypeMap[t.group] === 'agent' || groupTypeMap[t.group] === 'chat')?.api_token ?? '';
-  if (settings.token !== imageToken) partial.token = imageToken;
-  if (settings.agent_token !== agentToken) partial.agent_token = agentToken;
-  if (settings.chat_token !== agentToken) partial.chat_token = agentToken;
+
+  const apiImageToken = user.tokens.find(t => groupTypeMap[t.group] === 'image')?.api_token ?? '';
+  const apiAgentToken = user.tokens.find(t => groupTypeMap[t.group] === 'agent' || groupTypeMap[t.group] === 'chat')?.api_token ?? '';
+
+  if (settings.token !== apiImageToken) partial.token = apiImageToken;
+  if (settings.agent_token !== apiAgentToken) partial.agent_token = apiAgentToken;
+  if (settings.chat_token !== apiAgentToken) partial.chat_token = apiAgentToken;
   if (Object.keys(partial).length > 0) {
     useSettingsStore.getState().saveSettings(partial);
   }
@@ -159,6 +160,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   logout: () => {
+    clearRuntimeConfig();
     localStorage.removeItem('cy_jwt');
     localStorage.removeItem('cy_user');
     set({ jwt: null, user: null, isLoggedIn: false });

@@ -10,10 +10,13 @@ import type {
   AgentTemplateLog,
   ChatConversation,
   CreateTaskParams,
+  EnvCheckResult,
+  GenerateTestImageResult,
   ImageMeta,
   ImageRecord,
   Settings,
   Task,
+  VideoSyncResult,
   VisionUnderstandPayload,
   VisionUnderstandResult,
 } from '../types';
@@ -75,6 +78,37 @@ export const api = {
   readThumbnail: (path: string): Promise<string> => invoke('read_thumbnail', { path }),
   openFile: (path: string): Promise<void> => invoke('open_file', { path }),
   openFolder: (path: string): Promise<void> => invoke('open_folder', { path }),
+  syncImageToVideo: (params: {
+    imageId: string;
+    taskId?: string | null;
+    filePath: string;
+    fileName: string;
+    prompt?: string | null;
+    width?: number | null;
+    height?: number | null;
+    createdAt?: string | null;
+    model?: string | null;
+  }): Promise<VideoSyncResult> => invoke('sync_image_to_video', {
+    params: {
+      imageId: params.imageId,
+      taskId: params.taskId ?? null,
+      filePath: params.filePath,
+      fileName: params.fileName,
+      prompt: params.prompt ?? null,
+      width: params.width ?? null,
+      height: params.height ?? null,
+      createdAt: params.createdAt ?? null,
+      model: params.model ?? null,
+    },
+  }),
+  openExternalUrl: (url: string): Promise<void> => invoke('open_external_url', { url }),
+  /** CY Video Studio Bridge 健康检查（启动后轮询用） */
+  videoBridgeOnline: (): Promise<boolean> => invoke('video_bridge_online'),
+  /** 自动启动 CY Video Studio（进程已在时不重复拉起；找不到安装位置抛 CY_VIDEO_NOT_FOUND: 前缀错误） */
+  launchVideoStudio: (): Promise<{ launched: boolean; reason: string; executable: string }> =>
+    invoke('launch_video_studio'),
+  /** 手动选择 CY Video Studio.exe 并保存到应用设置 */
+  pickVideoStudioExecutable: (): Promise<string> => invoke('pick_video_studio_executable'),
   selectDirectory: (): Promise<string | null> => invoke('select_directory'),
   selectImageFile: (): Promise<string | null> => invoke('select_image_file'),
   onTaskUpdated: (handler: (taskId: string) => void) =>
@@ -88,7 +122,36 @@ export const api = {
   chatGenerateImage: (prompt: string, model: string): Promise<string> => invoke('chat_generate_image', { prompt, model }),
   chatEditImage: (prompt: string, model: string, imagePath: string): Promise<string> => invoke('chat_edit_image', { prompt, model, imagePath }),
   runAgentRequest: (payload: any): Promise<any> => invoke('run_agent_request', { payload }),
+  listProviderModels: (payload: { base_url: string; token: string }): Promise<{
+    ok: boolean;
+    status?: number;
+    models: string[];
+    error_kind?: string;
+    error_message?: string;
+  }> => invoke('list_provider_models', { payload }),
   understandChatImages: (payload: VisionUnderstandPayload): Promise<VisionUnderstandResult> => invoke('understand_chat_images', { payload }),
   checkAgentEndpoints: (agentBaseUrl: string, agentModel: string, agentToken: string, officialToken: string, visionModel: string): Promise<AgentEndpointCheckResult> =>
     invoke('check_agent_endpoints', { agentBaseUrl, agentModel, agentToken, officialToken, visionModel }),
+  setRuntimeAuthConfig: (config: {
+    imageToken?: string;
+    imageBaseUrl?: string;
+    agentToken?: string;
+    agentBaseUrl?: string;
+    postprocessToken?: string;
+    postprocessBaseUrl?: string;
+  }): Promise<void> => invoke('set_runtime_auth_config', {
+    config: {
+      image_token: config.imageToken ?? '',
+      image_base_url: config.imageBaseUrl ?? '',
+      agent_token: config.agentToken ?? '',
+      agent_base_url: config.agentBaseUrl ?? '',
+      postprocess_token: config.postprocessToken ?? '',
+      postprocess_base_url: config.postprocessBaseUrl ?? '',
+    }
+  }),
+  clearRuntimeAuthConfig: (): Promise<void> => invoke('clear_runtime_auth_config'),
+  getRuntimeAuthStatus: (): Promise<{ has_image_token: boolean; has_agent_token: boolean; has_postprocess_token: boolean; image_base_url: string; agent_base_url: string; postprocess_base_url: string }> =>
+    invoke('get_runtime_auth_status'),
+  checkEnvironment: (): Promise<EnvCheckResult> => invoke('check_environment'),
+  generateTestImage: (): Promise<GenerateTestImageResult> => invoke('generate_test_image'),
 };

@@ -1,0 +1,695 @@
+.image-studio-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  /* 2K/超宽屏：主体 + 最近任务双栏可铺到 1600，避免右侧大片空白 */
+  max-width: 1600px;
+}
+
+.studio-mode-bar {
+  display: flex;
+  align-items: flex-end;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+
+.studio-mode-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.studio-mode-label {
+  font-size: 11px;
+  color: var(--text-faint);
+  letter-spacing: 0.04em;
+}
+
+.studio-tabs {
+  display: inline-flex;
+  gap: 6px;
+  padding: 4px;
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  background: var(--bg-card);
+}
+
+.studio-tab {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  padding: 6px 14px;
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.studio-tab:hover {
+  color: var(--text-primary);
+}
+
+.studio-tab.active {
+  background: var(--accent-primary, #6366f1);
+  color: #fff;
+}
+
+.studio-field-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 22px;
+}
+
+.studio-char-count {
+  font-size: 11px;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+.studio-field-copy {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.studio-field-copy:hover {
+  background: var(--bg-inset);
+  color: var(--text-primary);
+}
+
+.studio-optimizer-row {
+  margin-top: 8px;
+  align-items: center;
+}
+
+.studio-optimizer-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.studio-optimizer-meta.none {
+  color: var(--accent-danger);
+}
+
+.studio-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 16px;
+  align-items: start;
+}
+
+.studio-main {
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* 小窗口（约 1366×768 / 125% 缩放）切为上下布局，禁止横向滚动 */
+@media (max-width: 1200px) {
+  .studio-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.studio-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.studio-card .form-group {
+  margin-bottom: 12px;
+}
+
+.studio-submit-btn {
+  align-self: flex-start;
+  margin-top: 8px;
+  padding: 10px 28px;
+  font-size: 14px;
+}
+
+.studio-submit-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.studio-submit-meta {
+  margin: 0;
+}
+
+.studio-mode-group-meta {
+  justify-content: flex-end;
+}
+
+.studio-item-list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+/* 批量任务列表标题（左）+ 一键 AI 操作（右） */
+.studio-list-title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.studio-list-title h3 {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+.studio-list-title .form-hint {
+  margin: 0;
+}
+
+/* 批量工具栏：批量粘贴 / 新增需求 / 恢复全部原文（弱化） */
+.studio-item-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+/* 单张模式：原单页表单布局（create-layout 来自 CreateTask.css） */
+.studio-single-layout {
+  width: 100%;
+}
+
+.studio-single-layout .create-form textarea,
+.studio-single-layout .create-form select,
+.studio-single-layout .create-form .form-group > input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.studio-bulk-paste {
+  border: 1px dashed var(--border-light);
+  border-radius: 10px;
+  padding: 12px;
+  margin-bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.studio-item-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.studio-batch-item {
+  display: flex;
+  gap: 10px;
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  padding: 12px;
+  align-items: flex-start;
+}
+
+.studio-batch-index {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--bg-secondary, rgba(128, 128, 128, 0.15));
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  flex-shrink: 0;
+  margin-top: 4px;
+}
+
+/* Prompt 卡片头部：编号 + 右上角快捷操作（复制 / 删除） */
+.studio-batch-item-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 28px;
+}
+
+.studio-batch-item-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-faint);
+}
+
+.studio-batch-item-quick {
+  display: inline-flex;
+  gap: 6px;
+  flex: none;
+}
+
+.studio-batch-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.studio-batch-body textarea,
+.studio-batch-body input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* 多 Prompt 卡片：这些字段不在 .form-group 内，必须补齐表单基础样式，
+   否则回落到 UA 默认外观（表现为挤成一行的窄条） */
+.studio-batch-body textarea,
+.studio-batch-body input,
+.studio-bulk-paste textarea {
+  padding: 9px 12px;
+  border: 1px solid var(--border-input);
+  border-radius: 8px;
+  font-size: 14px;
+  font-family: inherit;
+  line-height: 1.55;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.studio-batch-body textarea:focus,
+.studio-batch-body input:focus,
+.studio-bulk-paste textarea:focus {
+  border-color: var(--accent-primary);
+}
+
+/* 主 Prompt 多行编辑区：默认约 3 行，长文本先自动撑高、超过上限后内部滚动，
+   绝不让超长中文/URL/无空格串横向溢出 */
+.studio-batch-body textarea,
+.studio-bulk-paste textarea {
+  resize: vertical;
+  min-height: 76px;
+  max-height: 260px;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+/* ===== 需求任务卡片（统一生成模型） ===== */
+
+.studio-req-field {
+  margin: 0;
+}
+
+.studio-req-textarea {
+  min-height: 80px;
+}
+
+.studio-req-prompt-textarea {
+  min-height: 110px;
+}
+
+.studio-req-negative-textarea {
+  min-height: 72px;
+}
+
+.studio-req-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 0;
+}
+
+.studio-req-result {
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--bg-secondary, rgba(128, 128, 128, 0.05));
+  min-width: 0;
+}
+
+.studio-req-result-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.studio-req-result-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.studio-req-adopted {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--accent-primary, #6366f1);
+  background: rgba(99, 102, 241, 0.1);
+  border-radius: 999px;
+  padding: 2px 10px;
+  white-space: nowrap;
+}
+
+.studio-req-result-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* 生成数量步进器（每条需求独立）：label + [-][1][+] + 单位 固定一行，小屏才换行 */
+.studio-count-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: nowrap;
+}
+
+.studio-count-label {
+  font-size: 13px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.studio-count-stepper {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: nowrap;
+}
+
+.studio-count-stepper .studio-count-input {
+  flex-shrink: 0;
+}
+
+@media (max-width: 1200px) {
+  .studio-count-row,
+  .studio-count-stepper {
+    flex-wrap: wrap;
+  }
+}
+
+.studio-count-btn {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border-input);
+  border-radius: 7px;
+  background: var(--bg-card);
+  color: var(--text-primary);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+
+.studio-count-btn:hover:not(:disabled) {
+  border-color: var(--accent-primary);
+}
+
+.studio-count-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.studio-count-input {
+  width: 56px;
+  text-align: center;
+  padding: 4px 6px;
+  border: 1px solid var(--border-input);
+  border-radius: 7px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 13px;
+  -moz-appearance: textfield;
+}
+
+.studio-count-input::-webkit-outer-spin-button,
+.studio-count-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.studio-count-unit {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.studio-source-hint {
+  display: block;
+  margin-bottom: 6px;
+}
+
+/* ===== 参考图选择 ===== */
+
+.studio-source-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.studio-source-grid {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.studio-source-thumb {
+  position: relative;
+  width: 88px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.studio-source-thumb img {
+  width: 88px;
+  height: 88px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid var(--border-light);
+}
+
+.studio-source-placeholder {
+  width: 88px;
+  height: 88px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  border: 1px dashed var(--border-light);
+  color: var(--text-muted);
+  box-sizing: border-box;
+}
+
+.studio-source-remove {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: none;
+  background: #ef4444;
+  color: #fff;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.studio-source-name {
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.studio-gallery-modal {
+  max-width: 720px;
+}
+
+.studio-gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 10px;
+}
+
+.studio-gallery-cell {
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: center;
+}
+
+.studio-gallery-cell:hover {
+  border-color: var(--accent-primary, #6366f1);
+}
+
+.studio-gallery-cell img {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  border-radius: 6px;
+}
+
+.studio-gallery-cell span {
+  font-size: 11px;
+  color: var(--text-muted);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ===== 最近任务 ===== */
+
+.studio-recent {
+  border: 1px solid var(--border-light);
+  border-radius: 12px;
+  background: var(--bg-card);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  position: sticky;
+  top: 12px;
+}
+
+.studio-recent-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.studio-recent-head h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.studio-recent-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  padding: 8px 6px;
+  border-radius: 8px;
+  text-align: left;
+  width: 100%;
+}
+
+.studio-recent-item:hover {
+  background: var(--bg-secondary, rgba(128, 128, 128, 0.1));
+}
+
+.studio-recent-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.studio-recent-item .agent-dot {
+  flex-shrink: 0;
+}
+
+.studio-recent-item .form-hint {
+  flex-shrink: 0;
+  margin: 0;
+}
+
+/* ===== 意图提示 / 数量来源 / 优化状态（v3.0.6 批量语义修复） ===== */
+
+.studio-intent-hint {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(59, 130, 246, 0.35);
+  background: rgba(59, 130, 246, 0.08);
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.studio-intent-hint span {
+  flex: 1;
+  min-width: 200px;
+}
+
+.studio-count-source {
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--bg-secondary, rgba(128, 128, 128, 0.12));
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+/* ===== 最近任务：标题 + 时间/进度两行 ===== */
+
+.studio-recent-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.studio-recent-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.studio-recent-time {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.studio-recent-progress {
+  font-size: 11px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.studio-recent-main .studio-recent-name {
+  flex: none;
+}

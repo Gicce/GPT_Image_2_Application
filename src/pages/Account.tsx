@@ -1,10 +1,14 @@
-import { lazy, Suspense, useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuthStore, setGroupTypeMap, isImageGroup, getGroupTypeMap } from '../store/useAuthStore';
 import { useSettingsStore } from '../store/useSettingsStore';
+import { useAccountStore } from '../store/useAccountStore';
 import { serverApi, type ServerModel, type UserToken, type PayLimits, type UserOrder, type UsageRecord } from '../services/serverApi';
 import { api } from '../services/api';
+import { SERVICE_FEATURES, isServiceFeatureEnabled } from '../config/serviceFeatures';
+import { setAsAvatarFromPath, clearAvatar } from '../services/avatarService';
 import TokenField from '../components/TokenField';
 import TokenInfoDialog from '../components/TokenInfoDialog';
+import AccountUsagePanel from '../components/AccountUsagePanel';
 import { explainError } from '../utils/errors';
 import './Account.css';
 
@@ -17,9 +21,6 @@ interface PendingOrder {
 }
 
 type AllocStatus = 'pending' | 'paid' | 'allocated' | 'closed' | 'unknown';
-type UsageChartTab = 'line' | 'pie' | 'bar';
-
-const AccountUsageCharts = lazy(() => import('../components/AccountUsageCharts'));
 
 let qrCodeModulePromise: Promise<typeof import('qrcode')> | null = null;
 
@@ -42,9 +43,15 @@ function getInitials(name?: string | null): string {
 
 export default function Account() {
   const { user, isLoggedIn, refreshUser, logout, upgradeTrial, showAuthPrompt } = useAuthStore();
-  const { settings, saveSettings } = useSettingsStore();
+  const { settings } = useSettingsStore();
+  // 账户权益
+  const {
+    balances,
+    enabledModels,
+    fetchEntitlements,
+    getFeatureStatus,
+  } = useAccountStore();
   const [trialLoading, setTrialLoading] = useState(false);
-  const [usage, setUsage] = useState<UsageRecord[]>([]);
   const [models, setModels] = useState<ServerModel[]>([]);
   const [exchangeRate, setExchangeRate] = useState<number>(0);
   const [groupDescs, setGroupDescs] = useState<Record<string, string>>({});
@@ -55,8 +62,6 @@ export default function Account() {
   const [allocMap, setAllocMap] = useState<Record<string, AllocStatus>>({});
   const [polling, setPolling] = useState(false);
   const [statusMsg, setStatusMsg] = useState('');
-  const [loadingUsage, setLoadingUsage] = useState(false);
-  const [usageChartTab, setUsageChartTab] = useState<UsageChartTab>('line');
   const [qrCodeUrl, setQrCodeUrl] = useState<string>('');
   const [qrCodeLink, setQrCodeLink] = useState<string>('');
   const [showTokenDialog, setShowTokenDialog] = useState(false);
@@ -68,33 +73,21 @@ export default function Account() {
   const [refundConfirmId, setRefundConfirmId] = useState<string | null>(null);
   const [refundPollingId, setRefundPollingId] = useState<string | null>(null);
   const [refundStatusMsg, setRefundStatusMsg] = useState('');
-  const [rechargeFocus, setRechargeFocus] = useState<string | null>(null);
   const allocTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const refundTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     if (!isLoggedIn) return;
     refreshUser();
+    fetchEntitlements(); // 获取账户权益
     loadModels();
     loadPackages();
-    loadUsage();
     loadOrders();
   }, [isLoggedIn]);
 
   useEffect(() => () => {
     if (allocTimerRef.current) clearInterval(allocTimerRef.current);
     if (refundTimerRef.current) clearInterval(refundTimerRef.current);
-  }, []);
-
-  useEffect(() => {
-    const focus = localStorage.getItem('cy_recharge_focus');
-    if (!focus) return;
-    localStorage.removeItem('cy_recharge_focus');
-    setRechargeFocus(focus);
-    setTimeout(() => {
-      document.querySelector('.recharge-card.highlight')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }, 100);
-    setTimeout(() => setRechargeFocus(null), 8000);
   }, []);
 
   async function loadOrders() {
@@ -104,15 +97,18 @@ export default function Account() {
       // 兼容服务端字段名：total_usd / amount_usd
       const data: UserOrder[] = raw.map((o: any) => ({
         out_trade_no: o.out_trade_no,
+        group: o.group ?? '',
+        amount_usd: Number(o.amount_usd ?? o.total_usd ?? 0),
+        amount_cny: Number(o.amount_cny ?? o.total_cny ?? 0),
         total_usd: Number(o.total_usd ?? o.amount_usd ?? 0),
         total_cny: Number(o.total_cny ?? o.amount_cny ?? 0),
+        exchange_rate: o.exchange_rate ?? null,
         status: o.status === 'assigned' ? 'allocated' : o.status,
+        pay_type: o.pay_type ?? '',
         items: Array.isArray(o.items) ? o.items : [],
         created_at: o.created_at ?? '',
-        paid_at: o.paid_at,
-        allocated_at: o.allocated_at,
-        amount_cny: o.amount_cny != null ? Number(o.amount_cny) : undefined,
-        amount_usd: o.amount_usd != null ? Number(o.amount_usd) : undefined,
+        paid_at: o.paid_at ?? null,
+        allocated_at: o.allocated_at ?? null,
       }));
       setOrders(data);
     } catch {} finally {
@@ -198,7 +194,6 @@ export default function Account() {
   async function loadModels() {
     try {
       const list = await serverApi.getModels();
-      console.log('[loadModels] 获取到模型列表:', list.length, list.map(m => `${m.name}(${m.model_type},group=${m.group})`));
       setModels(list);
       const map: Record<string, 'image' | 'agent' | 'postprocess' | 'chat'> = {};
       for (const m of list) if (m.group) map[m.group] = m.model_type;
@@ -223,96 +218,70 @@ export default function Account() {
     }
   }
 
-  async function loadUsage() {
-    setLoadingUsage(true);
-    try {
-      const data = await serverApi.getUsageRecords();
-      setUsage(data.slice(0, 15));
-    } catch {} finally {
-      setLoadingUsage(false);
-    }
-  }
-
-  // 按 model_type 分类的模型清单（去重 group）
-  const groupsByType: { image: { name: string }[]; agent: { name: string }[]; postprocess: { name: string }[]; chat: { name: string }[] } = (() => {
-    const seenImg = new Set<string>();
-    const seenAgent = new Set<string>();
-    const seenPost = new Set<string>();
+  // 按 model_type 分类的可充值服务清单（去重 group）。
+  // V3.0.6：AI 智能体已全面 BYOK，不再作为充值业务 —— agent/chat 分组
+  // 不进入充值区（历史余额与订单记录仍可在订单/用量中查询）。
+  const groupsByType: { image: { name: string }[]; postprocess: { name: string }[] } = (() => {
+    const seen = new Set<string>();
     const img: { name: string }[] = [];
-    const agent: { name: string }[] = [];
     const postprocess: { name: string }[] = [];
     for (const m of models) {
-      if (!m.group) continue;
-      if (m.model_type === 'image' && !seenImg.has(m.group)) {
-        seenImg.add(m.group);
-        img.push({ name: m.group });
-      } else if ((m.model_type === 'agent' || m.model_type === 'chat') && !seenAgent.has(m.group)) {
-        seenAgent.add(m.group);
-        agent.push({ name: m.group });
-      } else if (m.model_type === 'postprocess' && !seenPost.has(m.group)) {
-        seenPost.add(m.group);
-        postprocess.push({ name: m.group });
-      }
+      if (!m.group || seen.has(m.group)) continue;
+      if (m.model_type === 'agent' || m.model_type === 'chat') continue;
+      if (m.rechargeable === false) continue;
+      seen.add(m.group);
+      if (m.model_type === 'image') img.push({ name: m.group });
+      else if (m.model_type === 'postprocess') postprocess.push({ name: m.group });
     }
-    // 防御：models API 未返回 agent 分组，但用户已有旧版 chat token
-    const gMap = getGroupTypeMap();
-    if (agent.length === 0) {
-      for (const t of (user?.tokens ?? [])) {
-        if (seenAgent.has(t.group)) continue;
-        if (gMap[t.group]) {
-          if (gMap[t.group] === 'agent' || gMap[t.group] === 'chat') {
-            seenAgent.add(t.group);
-            agent.push({ name: t.group });
-          }
-        } else if (!isImageGroup(t.group)) {
-          seenAgent.add(t.group);
-          agent.push({ name: t.group });
-        }
-      }
-    }
+    // 防御：models API 失败时从用户已有 token 回落 image 分组
     if (img.length === 0) {
+      const gMap = getGroupTypeMap();
       for (const t of (user?.tokens ?? [])) {
-        if (seenImg.has(t.group)) continue;
-        if (gMap[t.group]) {
-          if (gMap[t.group] === 'image') {
-            seenImg.add(t.group);
-            img.push({ name: t.group });
-          }
-        } else if (isImageGroup(t.group)) {
-          seenImg.add(t.group);
+        if (seen.has(t.group)) continue;
+        if (gMap[t.group] === 'image' || (!gMap[t.group] && isImageGroup(t.group))) {
+          seen.add(t.group);
           img.push({ name: t.group });
         }
       }
     }
-    return { image: img, agent, postprocess, chat: agent };
+    return { image: img, postprocess };
   })();
 
   const imageModels = models.filter(m => m.model_type === 'image');
-  const agentModels = models.filter(m => m.model_type === 'agent' || m.model_type === 'chat');
-  const chatModels = agentModels;
   const postprocessModels = models.filter(m => m.model_type === 'postprocess');
 
-  const totalUsd = Object.values(groupAmounts).reduce((s, v) => s + (parseFloat(v) || 0), 0);
-  const totalCny = exchangeRate ? totalUsd * exchangeRate : 0;
   const minUsdPerGroup = payLimits?.min_per_item_usd ?? (exchangeRate > 0 ? 0.01 / exchangeRate : 0.01);
   const minUsdTotal = payLimits?.min_total_usd ?? 1;
   const maxUsdTotal = payLimits?.max_total_usd ?? 1000;
 
+  // 禁用业务（如图片后处理开发中）的分组集合：不可输入金额、不计入合计、不可下单
+  const disabledGroups = new Set(
+    !isServiceFeatureEnabled('postprocess') ? groupsByType.postprocess.map(g => g.name) : []
+  );
+
   function setAmount(group: string, value: string) {
+    if (disabledGroups.has(group)) return;
     if (!/^\d{0,4}(\.\d{0,2})?$/.test(value) && value !== '') return;
     setGroupAmounts(prev => ({ ...prev, [group]: value }));
   }
 
   function setPresetAmount(group: string, amount: number) {
+    if (disabledGroups.has(group)) return;
     setGroupAmounts(prev => ({ ...prev, [group]: amount.toFixed(2) }));
   }
 
+  // 仅统计可用业务的金额（防御：HMR/状态残留也不会把禁用分组算进合计/下单）
   const selectedItems = Object.entries(groupAmounts)
+    .filter(([group]) => !disabledGroups.has(group))
     .map(([group, v]) => ({ group, amount_usd: parseFloat(v) || 0 }))
     .filter(i => i.amount_usd > 0);
 
+  const totalUsd = selectedItems.reduce((s, i) => s + i.amount_usd, 0);
+  const totalCny = exchangeRate ? totalUsd * exchangeRate : 0;
+
   async function handleBuy() {
     const items = Object.entries(groupAmounts)
+      .filter(([group]) => !disabledGroups.has(group))
       .map(([group, v]) => ({ group, amount_usd: parseFloat(v) || 0 }))
       .filter(i => i.amount_usd >= minUsdPerGroup && i.amount_usd <= maxUsdTotal);
     if (items.length === 0) {
@@ -331,7 +300,7 @@ export default function Account() {
     setOrdering(true);
     setStatusMsg('正在创建订单...');
     try {
-      const r = await serverApi.createOrder(items, 'wxpay');
+      const r = await serverApi.createOrder(items);
       const orders: PendingOrder[] = [{
         out_trade_no: r.out_trade_no,
         group: r.group,
@@ -472,49 +441,26 @@ export default function Account() {
   async function handleSelectUserAvatar() {
     const path = await api.selectImageFile();
     if (!path) return;
-    const dataUrl = await api.readImageData(path);
-    await saveSettings({ user_avatar_data_url: dataUrl });
+    try {
+      await setAsAvatarFromPath(path);
+    } catch (e: any) {
+      alert(e?.message || '头像设置失败，请重试');
+    }
   }
   const trialExpired = user?.trial_expired;
   const userTokens: UserToken[] = user?.tokens ?? [];
   const tokenByGroup = (g: string) => userTokens.find(t => t.group === g);
 
-  const dailyCost = useMemo(() => {
-    const map: Record<string, number> = {};
-    for (const u of usage) {
-      const day = u.created_at?.slice(0, 10) ?? 'unknown';
-      map[day] = (map[day] ?? 0) + Number(u.cost_usd);
-    }
-    return Object.entries(map)
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([date, cost]) => ({ date, cost: parseFloat(cost.toFixed(4)) }));
-  }, [usage]);
-
-  const typeCost = useMemo(() => {
-    const img = usage.filter(u => u.type === 'image').reduce((s: number, u) => s + Number(u.cost_usd), 0);
-    const chat = usage.filter(u => u.type === 'chat' || u.type === 'agent').reduce((s: number, u) => s + Number(u.cost_usd), 0);
-    const postprocess = usage.filter(u => u.type === 'postprocess').reduce((s: number, u) => s + Number(u.cost_usd), 0);
-    return [
-      { name: '图片生成', value: parseFloat(img.toFixed(4)), fill: 'var(--accent-primary)' },
-      { name: 'AI 智能体', value: parseFloat(chat.toFixed(4)), fill: 'var(--accent-success)' },
-      { name: '后处理', value: parseFloat(postprocess.toFixed(4)), fill: 'var(--accent-warning)' },
-    ].filter(d => d.value > 0);
-  }, [usage]);
-
-  const modelCount = useMemo(() => {
-    const map: Record<string, number> = {};
-    for (const u of usage) {
-      map[u.model] = (map[u.model] ?? 0) + (u.quantity || 1);
-    }
-    return Object.entries(map)
-      .sort(([, a], [, b]) => b - a)
-      .map(([model, count]) => ({ model, count }));
-  }, [usage]);
+  // 顶部余额卡：优先权益接口，回落到 token 求和（历史 agent 余额不展示）
+  const sumGroupBalance = (groups: { name: string }[]) =>
+    groups.reduce((s, g) => s + (Number(tokenByGroup(g.name)?.balance_usd) || 0), 0);
+  const imageBalance = balances.image ?? sumGroupBalance(groupsByType.image);
+  const postprocessBalance = balances.postprocess ?? sumGroupBalance(groupsByType.postprocess);
 
   // 未登录：显示登录入口
   if (!isLoggedIn || !user) {
     return (
-      <div className="page">
+      <div className="page account-page">
         <div className="page-header">
           <h2>我的账户</h2>
         </div>
@@ -528,7 +474,7 @@ export default function Account() {
     );
   }
 
-  const hasGroups = groupsByType.image.length + groupsByType.agent.length + groupsByType.postprocess.length > 0;
+  const hasGroups = groupsByType.image.length + groupsByType.postprocess.length > 0;
 
   const statusMap: Record<string, { label: string; cls: string }> = {
     pending:       { label: '待支付',   cls: 'pending' },
@@ -542,7 +488,7 @@ export default function Account() {
   };
 
   return (
-    <div className="page">
+    <div className="page account-page">
       <div className="page-header">
         <h2>我的账户</h2>
       </div>
@@ -554,7 +500,7 @@ export default function Account() {
         </div>
       )}
 
-      {/* 用户信息卡 */}
+      {/* 用户信息卡：头像 + 身份 + 双业务余额 */}
       <div className="account-card">
         <div className="account-avatar-panel">
           <div className="account-avatar">
@@ -562,27 +508,30 @@ export default function Account() {
           </div>
           <div className="account-avatar-actions">
             <button className="account-avatar-btn" onClick={handleSelectUserAvatar}>更换头像</button>
-            <button className="account-avatar-btn secondary" onClick={() => saveSettings({ user_avatar_data_url: '' })} disabled={!settings.user_avatar_data_url}>清除</button>
+            <button className="account-avatar-btn secondary" onClick={() => { void clearAvatar(); }} disabled={!settings.user_avatar_data_url}>清除</button>
             <span className="account-avatar-hint">头像仅保存在本机</span>
           </div>
         </div>
-        <div className="account-info-row">
-          <div className="account-info-item">
-            <span className="info-label">用户名</span>
-            <span className="info-value">{user.username}</span>
-          </div>
-          <div className="account-info-item">
-            <span className="info-label">账户类型</span>
+        <div className="account-identity">
+          <div className="account-identity-row">
+            <span className="account-username">{user.username}</span>
             <span className={`info-badge ${user.account_type}`}>{typeLabel}</span>
           </div>
           {user.account_type === 'trial' && user.trial_expires_at && (
-            <div className="account-info-item">
-              <span className="info-label">试用到期</span>
-              <span className={`info-value ${trialExpired ? 'expired' : ''}`}>
-                {trialExpired ? '已过期' : user.trial_expires_at.replace('T', ' ').slice(0, 16)}
-              </span>
-            </div>
+            <span className={`account-trial-expire ${trialExpired ? 'expired' : ''}`}>
+              试用到期：{trialExpired ? '已过期' : user.trial_expires_at.replace('T', ' ').slice(0, 16)}
+            </span>
           )}
+          <div className="account-balances">
+            <div className="account-balance-item">
+              <span className="account-balance-label">🎨 图片余额</span>
+              <span className="account-balance-value">${imageBalance.toFixed(2)}</span>
+            </div>
+            <div className="account-balance-item">
+              <span className="account-balance-label">✂ 图片后处理余额</span>
+              <span className="account-balance-value">${postprocessBalance.toFixed(2)}</span>
+            </div>
+          </div>
         </div>
         <div className="account-actions">
           {user.account_type === 'normal' && (
@@ -601,56 +550,47 @@ export default function Account() {
           <p className="balance-empty">暂无可用分组（请确认服务器地址正确）</p>
         ) : (
           <>
-            {/* 图文模型 */}
-            {groupsByType.image.length > 0 && (
-              <RechargeSection
-                icon="🎨"
-                title="图片生成"
-                description="用于文生图、图生图等图片生成任务。"
-                modelChips={imageModels.map(m => m.display_name || m.name)}
-                groups={groupsByType.image}
-                groupDescs={groupDescs}
-                tokenByGroup={tokenByGroup}
-                groupAmounts={groupAmounts}
-                onAmountChange={setAmount}
-                onPresetClick={setPresetAmount}
-                onInfoClick={() => setShowPricingDialog(true)}
-              />
-            )}
+            {/* 充值业务：图片生成 + 图片后处理（AI 智能体已 BYOK，不再提供充值） */}
+            <div className="recharge-grid">
+              {groupsByType.image.length > 0 && (
+                <RechargeSection
+                  icon="🎨"
+                  title="图片生成"
+                  description="用于文生图、图生图等图片生成任务。"
+                  modelChips={imageModels.map(m => m.display_name || m.name)}
+                  groups={groupsByType.image}
+                  groupDescs={groupDescs}
+                  tokenByGroup={tokenByGroup}
+                  groupAmounts={groupAmounts}
+                  onAmountChange={setAmount}
+                  onPresetClick={setPresetAmount}
+                  onInfoClick={() => setShowPricingDialog(true)}
+                  featureStatus={getFeatureStatus('image')}
+                  enabledModels={enabledModels['image'] || []}
+                />
+              )}
 
-            {/* 智能体模型 */}
-            {groupsByType.chat.length > 0 && (
-              <RechargeSection
-                icon="🤖"
-                title="AI 智能体"
-                description="用于 Agent 对话、任务规划、图库理解、工具调度。"
-                modelChips={chatModels.map(m => m.display_name || m.name)}
-                groups={groupsByType.chat}
-                groupDescs={groupDescs}
-                tokenByGroup={tokenByGroup}
-                groupAmounts={groupAmounts}
-                onAmountChange={setAmount}
-                onPresetClick={setPresetAmount}
-                highlight={rechargeFocus === 'agent'}
-                onInfoClick={() => setShowPricingDialog(true)}
-              />
-            )}
-
-            {groupsByType.postprocess.length > 0 && (
-              <RechargeSection
-                icon="✂"
-                title="图片后处理"
-                description="用于透明背景、高清放大等第三方处理工具。"
-                modelChips={postprocessModels.map(m => m.display_name || m.name)}
-                groups={groupsByType.postprocess}
-                groupDescs={groupDescs}
-                tokenByGroup={tokenByGroup}
-                groupAmounts={groupAmounts}
-                onAmountChange={setAmount}
-                onPresetClick={setPresetAmount}
-                onInfoClick={() => setShowPricingDialog(true)}
-              />
-            )}
+              {groupsByType.postprocess.length > 0 && (
+                <RechargeSection
+                  icon="✂"
+                  title="图片后处理"
+                  description="用于透明背景、高清放大等第三方处理工具。"
+                  modelChips={postprocessModels.map(m => m.display_name || m.name)}
+                  groups={groupsByType.postprocess}
+                  groupDescs={groupDescs}
+                  tokenByGroup={tokenByGroup}
+                  groupAmounts={groupAmounts}
+                  onAmountChange={setAmount}
+                  onPresetClick={setPresetAmount}
+                  onInfoClick={() => setShowPricingDialog(true)}
+                  featureStatus={getFeatureStatus('postprocess')}
+                  enabledModels={enabledModels['postprocess'] || []}
+                  disabled={!isServiceFeatureEnabled('postprocess')
+                    ? { statusText: SERVICE_FEATURES.postprocess.statusText, hint: SERVICE_FEATURES.postprocess.hint }
+                    : undefined}
+                />
+              )}
+            </div>
 
             <div className="recharge-summary">
               {selectedItems.length > 0 && (
@@ -731,48 +671,10 @@ export default function Account() {
         )}
       </div>
 
-      {/* 用量记录 */}
+      {/* 用量统计：趋势 / 模型 / 明细（数据全部来自服务器 usage 聚合接口） */}
       <div className="account-section">
         <h3>最近用量</h3>
-        {loadingUsage ? (
-          <p className="usage-loading">加载中...</p>
-        ) : usage.length === 0 ? (
-          <p className="usage-empty">暂无用量记录</p>
-        ) : (
-          <>
-            <Suspense fallback={<p className="usage-loading">加载图表中...</p>}>
-              <AccountUsageCharts
-                dailyCost={dailyCost}
-                modelCount={modelCount}
-                typeCost={typeCost}
-                usageChartTab={usageChartTab}
-                onTabChange={setUsageChartTab}
-              />
-            </Suspense>
-            <table className="usage-table">
-              <thead>
-                <tr>
-                  <th>模型</th>
-                  <th>类型</th>
-                  <th>数量</th>
-                  <th>费用</th>
-                  <th>时间</th>
-                </tr>
-              </thead>
-              <tbody>
-                {[...usage].sort((a, b) => (b.created_at || '').localeCompare(a.created_at || '')).map((u, i) => (
-                  <tr key={i}>
-                    <td>{u.model}</td>
-                    <td>{u.type === 'image' ? '图片' : '对话'}</td>
-                    <td>{u.type === 'image' ? `${u.quantity} 张` : `${u.quantity} tokens`}</td>
-                    <td>${Number(u.cost_usd).toFixed(4)}</td>
-                    <td>{u.created_at?.replace('T', ' ').slice(0, 16)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </>
-        )}
+        <AccountUsagePanel />
       </div>
 
       {showTokenDialog && (
@@ -787,8 +689,8 @@ export default function Account() {
           onLoadRecords={async () => {
             try {
               const data = await serverApi.getUsageRecords();
-              setUsageRecords(data);
-              return data;
+              setUsageRecords(data.records);
+              return data.records;
             } catch { return []; }
           }}
           onClose={() => setShowPricingDialog(false)}
@@ -857,7 +759,7 @@ export default function Account() {
               <h3>申请退款</h3>
               <p className="refund-confirm-hint">
                 {ro
-                  ? <>订单 <strong>{ro.out_trade_no}</strong>，金额 <strong>${Number(ro.total_usd).toFixed(2)}</strong>{ro.total_cny > 0 && <>（¥{Number(ro.total_cny).toFixed(2)}）</>}<br />提交退款申请后需等待管理员确认，确认后余额将返还。是否提交退款申请？</>
+                  ? <>订单 <strong>{ro.out_trade_no}</strong>，金额 <strong>${Number(ro.total_usd ?? ro.amount_usd).toFixed(2)}</strong>{(ro.total_cny ?? ro.amount_cny ?? 0) > 0 && <>（¥{Number(ro.total_cny ?? ro.amount_cny).toFixed(2)}）</>}<br />提交退款申请后需等待管理员确认，确认后余额将返还。是否提交退款申请？</>
                   : '提交退款申请后需等待管理员确认，确认后余额将返还。是否提交退款申请？'}
               </p>
               <div className="refund-confirm-actions">
@@ -891,18 +793,41 @@ interface RechargeSectionProps {
   onPresetClick: (group: string, amount: number) => void;
   highlight?: boolean;
   onInfoClick?: () => void;
+  // 新增：账户权益相关
+  featureStatus?: {
+    enabled: boolean;
+    balance: number;
+    hasBalance: boolean;
+    statusText: string;
+  };
+  enabledModels?: string[];
+  /** 业务能力开关：传入即禁用（功能开发中，Card 保留展示但不可选/不可输/不可充值） */
+  disabled?: { statusText: string; hint: string };
 }
 
 function RechargeSection({
   icon, title, description, modelChips, groups, groupDescs,
   tokenByGroup, groupAmounts, onAmountChange, onPresetClick, highlight, onInfoClick,
+  featureStatus, enabledModels, disabled,
 }: RechargeSectionProps) {
   const presets = [5, 10, 20, 50];
+  const isDisabled = !!disabled;
   return (
-    <div className={`recharge-card ${highlight ? 'highlight' : ''}`}>
+    <div
+      className={`recharge-card ${highlight ? 'highlight' : ''} ${isDisabled ? 'disabled' : ''}`}
+      title={isDisabled ? (disabled!.hint || '该功能暂不可用') : undefined}
+      aria-disabled={isDisabled}
+    >
       <div className="recharge-card-header">
         <span className="recharge-card-icon">{icon}</span>
         <span className="recharge-card-title">{title}</span>
+        {isDisabled ? (
+          <span className="recharge-status-badge dev">{disabled!.statusText}</span>
+        ) : featureStatus && (
+          <span className={`recharge-status-badge ${featureStatus.enabled ? (featureStatus.hasBalance ? 'active' : 'no-balance') : 'inactive'}`}>
+            {featureStatus.statusText}
+          </span>
+        )}
         {onInfoClick && (
           <button className="recharge-card-info-btn" title="查看扣费标准" onClick={onInfoClick}>
             !
@@ -918,18 +843,28 @@ function RechargeSection({
           ))}
         </div>
       )}
+      {enabledModels && enabledModels.length > 0 && (
+        <div className="recharge-card-models">
+          <span className="recharge-card-models-label">已开通</span>
+          {enabledModels.map(n => (
+            <span key={n} className="recharge-card-model-chip active">{n}</span>
+          ))}
+        </div>
+      )}
       <div className="recharge-card-body">
         {groups.map(g => {
           const cur = tokenByGroup(g.name);
           const desc = groupDescs[g.name];
           const selected = parseFloat(groupAmounts[g.name] || '0') || 0;
+          // 使用权益数据中的余额（如果有）
+          const displayBalance = featureStatus ? featureStatus.balance : (cur ? Number(cur.balance_usd) : 0);
           return (
             <div key={g.name} className="recharge-card-row">
               <div className="recharge-card-balance">
                 <span className="recharge-card-balance-icon">💰</span>
                 <span className="recharge-card-balance-label">当前额度</span>
                 <span className="recharge-card-balance-amount">
-                  ${cur ? Number(cur.balance_usd).toFixed(2) : '0.00'}
+                  ${displayBalance.toFixed(2)}
                 </span>
                 {cur?.is_trial && <span className="balance-trial-tag">试用</span>}
               </div>
@@ -939,7 +874,9 @@ function RechargeSection({
                   <button
                     key={amount}
                     className={`recharge-preset-btn ${selected === amount ? 'active' : ''}`}
-                    onClick={() => onPresetClick(g.name, amount)}
+                    disabled={isDisabled}
+                    aria-disabled={isDisabled}
+                    onClick={() => { if (isDisabled) return; onPresetClick(g.name, amount); }}
                   >
                     ${amount}
                   </button>
@@ -955,7 +892,10 @@ function RechargeSection({
                     step="0.01"
                     placeholder="0.00"
                     value={groupAmounts[g.name] || ''}
-                    onChange={e => onAmountChange(g.name, e.target.value)}
+                    disabled={isDisabled}
+                    readOnly={isDisabled}
+                    tabIndex={isDisabled ? -1 : 0}
+                    onChange={e => { if (isDisabled) return; onAmountChange(g.name, e.target.value); }}
                   />
                 </div>
               </div>
@@ -1054,15 +994,19 @@ function PricingDialog({ models, usageRecords, onLoadRecords, onClose }: Pricing
               </tr>
             </thead>
             <tbody>
-              {records.slice(0, 50).map((r, i) => (
+              {records.slice(0, 50).map((r, i) => {
+                const qty = r.image_count ?? r.input_tokens ?? 0;
+                const isImage = r.usage_type === 'image';
+                return (
                 <tr key={i}>
                   <td>{r.model}</td>
-                  <td>{r.type === 'image' ? '图片' : '对话'}</td>
-                  <td>{r.type === 'image' ? `${r.quantity} 张` : `${r.quantity} tokens`}</td>
+                  <td>{isImage ? '图片' : '对话'}</td>
+                  <td>{isImage ? `${qty} 张` : `${qty} tokens`}</td>
                   <td>${Number(r.cost_usd).toFixed(4)}</td>
                   <td>{r.created_at?.replace('T', ' ').slice(0, 16)}</td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         )}

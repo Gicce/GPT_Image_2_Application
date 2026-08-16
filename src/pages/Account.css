@@ -2,6 +2,12 @@
    Account Page — Functional Card Layout
    ═══════════════════════════════════════════ */
 
+/* 账户页内容宽度：宽屏合理利用（1100~1400），不铺满整屏也不锁死左侧 */
+/* 2K/超宽屏：账户页铺到 1600，与图片生成页统一，避免右侧大片空白 */
+.page.account-page {
+  max-width: 1600px;
+}
+
 .account-card {
   background: var(--bg-card);
   border: 1px solid var(--border-default);
@@ -10,8 +16,73 @@
   margin-bottom: 24px;
   display: flex;
   align-items: center;
-  gap: 0;
+  gap: 24px;
   flex-wrap: wrap;
+}
+
+/* ─── 身份区：用户名 + 类型 + 双业务余额 ─── */
+
+.account-identity {
+  flex: 1;
+  min-width: 260px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.account-identity-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.account-username {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.account-trial-expire {
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+.account-trial-expire.expired {
+  color: var(--accent-danger);
+}
+
+.account-balances {
+  display: flex;
+  gap: 32px;
+  flex-wrap: wrap;
+}
+
+.account-balance-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.account-balance-label {
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+.account-balance-value {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--accent-success);
+}
+
+/* ─── 充值区：宽屏两列，窄屏自动一列 ─── */
+
+.recharge-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+  gap: 16px;
+  margin-bottom: 16px;
 }
 
 .account-avatar-panel {
@@ -75,44 +146,6 @@
   width: 100%;
   font-size: 11px;
   color: var(--text-faint);
-}
-
-.account-info-row {
-  display: flex;
-  gap: 32px;
-  flex: 1;
-  flex-wrap: wrap;
-}
-
-.account-info-item {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.info-label {
-  font-size: 12px;
-  color: var(--text-faint);
-}
-
-.info-value {
-  font-size: 15px;
-  font-weight: 500;
-  color: var(--text-primary);
-}
-
-.info-value.balance {
-  font-size: 18px;
-  font-weight: 700;
-  color: var(--accent-success);
-}
-
-.info-value.balance.chat {
-  color: var(--accent-primary-text);
-}
-
-.info-value.expired {
-  color: var(--accent-danger);
 }
 
 .info-badge {
@@ -274,6 +307,34 @@
   border-color: var(--accent-primary);
 }
 
+/* 功能开发中：整体禁用但保留展示（灰化、不可交互） */
+.recharge-card.disabled {
+  background: var(--bg-subtle);
+  border-color: var(--border-subtle);
+  opacity: 0.62;
+  cursor: not-allowed;
+}
+
+.recharge-card.disabled:hover {
+  border-color: var(--border-subtle);
+}
+
+.recharge-card.disabled .recharge-preset-btn,
+.recharge-card.disabled .recharge-input-wrap,
+.recharge-card.disabled .recharge-input-wrap input {
+  cursor: not-allowed;
+  opacity: 0.75;
+}
+
+.recharge-card.disabled .recharge-preset-btn:hover {
+  border-color: var(--border-subtle);
+  color: var(--text-secondary);
+}
+
+.recharge-card.disabled .recharge-input-wrap:focus-within {
+  border-color: var(--border-subtle);
+}
+
 .recharge-card-header {
   display: flex;
   align-items: center;
@@ -290,6 +351,36 @@
   font-size: 16px;
   font-weight: 700;
   color: var(--text-primary);
+}
+
+/* 开通状态徽章 */
+.recharge-status-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-weight: 500;
+  margin-left: 8px;
+}
+
+.recharge-status-badge.active {
+  background: var(--accent-success-light, #d4edda);
+  color: var(--accent-success, #155724);
+}
+
+.recharge-status-badge.no-balance {
+  background: var(--accent-warning-light, #fff3cd);
+  color: var(--accent-warning, #856404);
+}
+
+.recharge-status-badge.inactive {
+  background: var(--bg-subtle);
+  color: var(--text-muted);
+}
+
+/* 功能开发中徽章 */
+.recharge-status-badge.dev {
+  background: var(--accent-warning-light, #fff3cd);
+  color: var(--accent-warning, #856404);
 }
 
 .recharge-card-desc {
@@ -320,6 +411,11 @@
   background: var(--accent-primary-light);
   color: var(--accent-primary-text);
   font-weight: 500;
+}
+
+.recharge-card-model-chip.active {
+  background: var(--accent-success-light, #d4edda);
+  color: var(--accent-success, #155724);
 }
 
 /* ─── Recharge Card Body ─── */
@@ -692,12 +788,14 @@
   color: var(--text-muted);
   font-weight: 500;
   border-bottom: 1px solid var(--border-default);
+  white-space: nowrap;
 }
 
 .usage-table td {
   padding: 9px 12px;
   border-bottom: 1px solid var(--bg-inset);
   color: var(--text-secondary);
+  overflow-wrap: anywhere;
 }
 
 .usage-table tr:last-child td {
@@ -710,39 +808,278 @@
   padding: 12px 0;
 }
 
-.usage-charts {
-  margin-bottom: 20px;
-}
-
-.usage-chart-tabs {
+/* 用量面板：Segmented Tabs + 时间范围 + 指标/筛选 + 图表/表格 */
+.usage-panel {
   display: flex;
-  gap: 6px;
-  margin-bottom: 10px;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
 }
 
-.usage-tab {
-  width: 36px;
-  height: 36px;
-  border: 1px solid var(--border-default);
-  border-radius: 8px;
-  background: var(--bg-card);
-  font-size: 18px;
-  cursor: pointer;
+.usage-panel-toolbar {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.usage-segmented {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  background: var(--bg-card);
+}
+
+.usage-segmented-item {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-family: inherit;
+  padding: 6px 18px;
+  border-radius: 7px;
+  cursor: pointer;
+  white-space: nowrap;
+  min-height: 32px;
+}
+
+.usage-segmented-item:hover {
+  color: var(--text-primary);
+}
+
+.usage-segmented-item.active {
+  background: var(--accent-primary, #6366f1);
+  color: #fff;
+}
+
+.usage-range-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.usage-range-chip {
+  border: 1px solid var(--border-default);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-family: inherit;
+  padding: 5px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.usage-range-chip:hover {
+  color: var(--text-primary);
+  border-color: var(--accent-primary);
+}
+
+.usage-range-chip.active {
+  border-color: var(--accent-primary);
+  background: var(--accent-primary-light);
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.usage-custom-range {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.usage-custom-range input {
+  padding: 5px 8px;
+  border: 1px solid var(--border-input);
+  border-radius: 8px;
+  font-size: 12px;
+  font-family: inherit;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  box-sizing: border-box;
+}
+
+.usage-stat-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+}
+
+.usage-stat-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 14px;
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  background: var(--bg-subtle);
+  min-width: 0;
+}
+
+.usage-stat-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.usage-stat-value {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.usage-metric-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.usage-metric-row select {
+  padding: 5px 10px;
+  border: 1px solid var(--border-input);
+  border-radius: 8px;
+  font-size: 12px;
+  font-family: inherit;
+  background: var(--bg-input);
+  color: var(--text-primary);
+}
+
+.usage-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.usage-filter-row select,
+.usage-filter-keyword {
+  padding: 6px 10px;
+  border: 1px solid var(--border-input);
+  border-radius: 8px;
+  font-size: 12px;
+  font-family: inherit;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  box-sizing: border-box;
+  min-width: 0;
+}
+
+.usage-filter-keyword {
+  flex: 1;
+  min-width: 160px;
+}
+
+.usage-chart-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   justify-content: center;
-  transition: all 0.15s;
+  gap: 8px;
+  min-height: 160px;
+  color: var(--text-faint);
+  font-size: 13px;
 }
 
-.usage-tab:hover {
-  border-color: var(--accent-primary);
-  background: var(--accent-primary-light);
+.usage-state-error {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 14px;
+  border: 1px solid var(--accent-danger);
+  border-radius: 10px;
+  color: var(--accent-danger);
+  font-size: 13px;
 }
 
-.usage-tab.active {
-  border-color: var(--accent-primary);
-  background: var(--accent-primary-light);
-  box-shadow: 0 0 0 1px var(--accent-primary);
+.usage-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.usage-skeleton-row {
+  height: 56px;
+  border-radius: 10px;
+  background: linear-gradient(90deg, var(--bg-inset) 25%, var(--bg-subtle) 50%, var(--bg-inset) 75%);
+  background-size: 200% 100%;
+  animation: usage-skeleton-shimmer 1.4s infinite;
+}
+
+.usage-skeleton-block {
+  height: 220px;
+  border-radius: 10px;
+  background: linear-gradient(90deg, var(--bg-inset) 25%, var(--bg-subtle) 50%, var(--bg-inset) 75%);
+  background-size: 200% 100%;
+  animation: usage-skeleton-shimmer 1.4s infinite;
+}
+
+@keyframes usage-skeleton-shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+
+.usage-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.usage-pagination-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.usage-pagination-controls button {
+  border: 1px solid var(--border-default);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-family: inherit;
+  padding: 5px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.usage-pagination-controls button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.usage-pagination-page {
+  min-width: 64px;
+  text-align: center;
+  color: var(--text-primary);
+}
+
+.usage-pagination-size {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.usage-pagination-size select {
+  padding: 4px 8px;
+  border: 1px solid var(--border-input);
+  border-radius: 8px;
+  font-size: 12px;
+  font-family: inherit;
+  background: var(--bg-input);
+  color: var(--text-primary);
 }
 
 .usage-chart-card {
@@ -759,6 +1096,18 @@
   text-transform: uppercase;
   letter-spacing: 0.05em;
   margin-bottom: 8px;
+}
+
+/* 小窗口：统计卡降为两列，筛选换行 */
+@media (max-width: 900px) {
+  .usage-stat-cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .usage-panel-toolbar {
+    flex-direction: column;
+    align-items: flex-start;
+  }
 }
 
 /* ─── Info Button ─── */

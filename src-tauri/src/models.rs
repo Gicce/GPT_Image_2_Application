@@ -47,12 +47,25 @@ pub struct Settings {
     pub notice_enabled: bool,
     #[serde(default = "default_theme")]
     pub theme: String,
+    #[serde(default)]
+    pub device_id: String,
+    /// 用户手动选择并保存的 CY Video Studio 可执行文件路径（同步素材用；空 = 未配置）
+    #[serde(default)]
+    pub video_studio_executable: String,
 }
 
-fn default_true() -> bool { true }
-fn default_context_window() -> usize { 32768 }
-fn default_theme() -> String { "system".to_string() }
-fn default_agent_name() -> String { "CyImage Agent".to_string() }
+fn default_true() -> bool {
+    true
+}
+fn default_context_window() -> usize {
+    32768
+}
+fn default_theme() -> String {
+    "system".to_string()
+}
+fn default_agent_name() -> String {
+    "CyImage Agent".to_string()
+}
 
 impl Default for Settings {
     fn default() -> Self {
@@ -79,9 +92,11 @@ impl Default for Settings {
             chat_model: "gpt-4o".to_string(),
             chat_base_url: "https://www.packyapi.com/v1".to_string(),
             chat_system_prompt: String::new(),
-            server_url: String::new(),
+            server_url: "http://localhost:4001".to_string(),
             notice_enabled: true,
             theme: default_theme(),
+            device_id: String::new(),
+            video_studio_executable: String::new(),
         }
     }
 }
@@ -104,12 +119,53 @@ pub struct TaskBatchItem {
     pub prompt_delta: String,
     #[serde(default)]
     pub prompt_override: String,
+    /// 该子任务独立的负面提示词（需求任务模型：每条需求可有自己的负面词）。
+    /// 为空时回落任务级 final_negative_prompt / negative_prompt。
+    #[serde(default)]
+    pub negative_override: String,
     #[serde(default)]
     pub negative_delta: String,
     #[serde(default)]
     pub source_images: Vec<String>,
     #[serde(default = "default_true")]
     pub enabled: bool,
+    /// 方案元数据快照（新版批量方案任务创建时冻结，历史详情只读；旧 tasks.json 缺失时为空）。
+    #[serde(default)]
+    pub plan_title: String,
+    #[serde(default)]
+    pub plan_summary: String,
+    #[serde(default)]
+    pub plan_tags: Vec<String>,
+    #[serde(default)]
+    pub plan_description: String,
+}
+
+/// 单张复合构图布局（一张图内部的分格结构），与 batch 互斥。
+/// 字段名与 TS 侧 TaskCompositeLayout 对齐（type / panelCount）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskCompositeLayout {
+    #[serde(rename = "type")]
+    pub layout_type: String,
+    #[serde(rename = "panelCount", alias = "panel_count")]
+    pub panel_count: usize,
+}
+
+/// 提示词优化结构化快照 —— 任务创建时冻结（provider/model/时间），
+/// 历史记录只读这里；旧 tasks.json 没有该字段，serde default 兼容。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PromptOptimizationSnapshot {
+    #[serde(default)]
+    pub applied: bool,
+    #[serde(default)]
+    pub provider_name: String,
+    #[serde(default)]
+    pub model_name: String,
+    #[serde(default)]
+    pub original_prompt: String,
+    #[serde(default)]
+    pub optimized_at: String,
+    #[serde(default)]
+    pub manually_edited_after: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -126,6 +182,8 @@ pub struct Task {
     #[serde(default)]
     pub prompt_optimized: bool,
     #[serde(default)]
+    pub prompt_optimization: Option<PromptOptimizationSnapshot>,
+    #[serde(default)]
     pub agent_intent: String,
     #[serde(default)]
     pub task_source: String,
@@ -135,6 +193,10 @@ pub struct Task {
     pub count: usize,
     pub status: String,
     pub created_at: String,
+    #[serde(default)]
+    pub started_at: Option<String>,
+    #[serde(default)]
+    pub completed_at: Option<String>,
     pub output_dir: String,
     pub success_count: usize,
     pub failed_count: usize,
@@ -151,6 +213,10 @@ pub struct Task {
     pub task_plan_summary: String,
     #[serde(default)]
     pub batch_items: Vec<TaskBatchItem>,
+    #[serde(default)]
+    pub composite_layout: Option<TaskCompositeLayout>,
+    #[serde(default)]
+    pub subject_entities: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -193,6 +259,27 @@ pub struct ChatMessage {
     #[serde(default)]
     pub generated_image: String,
     pub created_at: String,
+    // ====== 结构化任务消息（TaskMessageCard）======
+    // 关键修复：以前 Rust 端 ChatMessage 没有 task_message 字段，导致 serde 在
+    // save_conversation 时把整个 TaskMessageState 静默丢掉。重新加载后只剩 content 文本，
+    // TaskMessageCard 无法渲染。这里以 serde_json::Value 透传整个结构化 payload，
+    // 让前端自己负责 schema/version 校验。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_message: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_proposal: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gallery_search: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attachments: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_image: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_tokens: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -213,6 +300,15 @@ pub struct ChatConversation {
     pub conversation_mode: String,
     #[serde(default)]
     pub active_task_draft: Option<serde_json::Value>,
+    // ====== 会话级状态字段透传（同样修复持久化丢失问题）======
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_task_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_image_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_image_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat_mode: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -227,6 +323,8 @@ pub struct CreateTaskParams {
     pub final_negative_prompt: String,
     #[serde(default)]
     pub prompt_optimized: bool,
+    #[serde(default)]
+    pub prompt_optimization: Option<PromptOptimizationSnapshot>,
     #[serde(default)]
     pub agent_intent: String,
     #[serde(default)]
@@ -248,6 +346,10 @@ pub struct CreateTaskParams {
     pub task_plan_summary: String,
     #[serde(default)]
     pub batch_items: Vec<TaskBatchItem>,
+    #[serde(default)]
+    pub composite_layout: Option<TaskCompositeLayout>,
+    #[serde(default)]
+    pub subject_entities: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -506,7 +608,31 @@ pub struct AgentTemplateImportPayload {
     pub style_templates: Vec<AgentStyleTemplate>,
 }
 
-fn default_template_priority() -> i32 { 100 }
-fn default_match_mode() -> String { "hybrid".to_string() }
-fn default_template_version() -> u32 { 1 }
-fn default_draft_mode() -> String { "agent_editable".to_string() }
+fn default_template_priority() -> i32 {
+    100
+}
+fn default_match_mode() -> String {
+    "hybrid".to_string()
+}
+fn default_template_version() -> u32 {
+    1
+}
+fn default_draft_mode() -> String {
+    "agent_editable".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RuntimeAuthConfig {
+    #[serde(default)]
+    pub image_token: String,
+    #[serde(default)]
+    pub image_base_url: String,
+    #[serde(default)]
+    pub agent_token: String,
+    #[serde(default)]
+    pub agent_base_url: String,
+    #[serde(default)]
+    pub postprocess_token: String,
+    #[serde(default)]
+    pub postprocess_base_url: String,
+}

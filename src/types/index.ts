@@ -24,6 +24,9 @@
   server_url: string;
   notice_enabled: boolean;
   theme: 'light' | 'dark' | 'system';
+  device_id: string;
+  /** 用户手动选择并保存的 CY Video Studio 可执行文件路径（同步素材用；空 = 未配置） */
+  video_studio_executable: string;
 }
 
 export interface SubTask {
@@ -37,14 +40,40 @@ export interface SubTask {
 export type TaskExecutionMode = 'single' | 'batch';
 export type TaskBatchStrategy = 'repeat_same' | 'variant_set' | 'multi_input';
 
+/**
+ * 提示词优化结构化快照 —— 任务创建时冻结，历史记录只读这里，
+ * 禁止用 originalPrompt !== finalPrompt 之类的字符串比较推断。
+ * applied 一旦为 true 不因用户后续手动微调提示词而重置。
+ */
+export interface PromptOptimizationSnapshot {
+  applied: boolean;
+  /** 优化服务显示名（例如 智谱）。 */
+  provider_name?: string;
+  /** 优化模型显示名（例如 GLM-5.2）。 */
+  model_name?: string;
+  /** 用户第一次点击优化时的原始需求（跨多次重优化保留）。 */
+  original_prompt?: string;
+  /** 本次采用优化的时间（ISO）。 */
+  optimized_at?: string;
+  /** 采用后用户又手动编辑过最终提示词。 */
+  manually_edited_after?: boolean;
+}
+
 export interface TaskBatchItem {
   id: string;
   label: string;
   prompt_delta: string;
   prompt_override?: string;
+  /** 该子任务独立的负面提示词（需求任务模型）；为空回落任务级 negative_prompt。 */
+  negative_override?: string;
   negative_delta?: string;
   source_images?: string[];
   enabled?: boolean;
+  /** 方案元数据快照（新版批量方案任务创建时冻结，历史详情只读；旧任务缺失走 fallback）。 */
+  plan_title?: string;
+  plan_summary?: string;
+  plan_tags?: string[];
+  plan_description?: string;
 }
 
 export interface Task {
@@ -55,6 +84,8 @@ export interface Task {
   final_prompt?: string;
   final_negative_prompt?: string;
   prompt_optimized?: boolean;
+  /** 结构化优化快照；旧任务可能缺失（由 UI 兼容映射）。 */
+  prompt_optimization?: PromptOptimizationSnapshot | null;
   agent_intent?: string;
   task_source?: 'manual' | 'agent';
   size: string;
@@ -63,6 +94,10 @@ export interface Task {
   count: number;
   status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
   created_at: string;
+  /** 正式开始执行时间（首次进入 running）。 */
+  started_at?: string | null;
+  /** 所有子任务进入最终状态的时间。 */
+  completed_at?: string | null;
   output_dir: string;
   success_count: number;
   failed_count: number;
@@ -98,6 +133,13 @@ export interface ImageMeta {
   file_size: number;
 }
 
+/** 图库图片同步到 CY Video Studio（CY_VIDEO_BRIDGE_V1）的结果 */
+export interface VideoSyncResult {
+  assetId: string;
+  message: string;
+  alreadySynced: boolean;
+}
+
 export interface CreateTaskParams {
   prompt: string;
   negative_prompt: string;
@@ -105,6 +147,7 @@ export interface CreateTaskParams {
   final_prompt?: string;
   final_negative_prompt?: string;
   prompt_optimized?: boolean;
+  prompt_optimization?: PromptOptimizationSnapshot | null;
   agent_intent?: string;
   task_source?: 'manual' | 'agent';
   size: string;
@@ -118,9 +161,19 @@ export interface CreateTaskParams {
   batch_strategy?: TaskBatchStrategy;
   task_plan_summary?: string;
   batch_items?: TaskBatchItem[];
+  /** 单张复合构图的结构化表达（三分镜 / 宫格 / 分屏），与 batch 互斥。 */
+  composite_layout?: TaskCompositeLayout;
+  /** 复合构图的每格主体（例如 ["泰山","黄山","华山"]）。 */
+  subject_entities?: string[];
 }
 
-export type PageType = 'agent' | 'queue' | 'gallery' | 'history' | 'settings' | 'about' | 'account';
+/** 单张复合构图布局（一张图内部的分格结构）。 */
+export interface TaskCompositeLayout {
+  type: 'triptych' | 'grid' | 'split_screen';
+  panelCount: number;
+}
+
+export type PageType = 'agent' | 'imagestudio' | 'queue' | 'gallery' | 'history' | 'settings' | 'about' | 'account';
 
 export interface ChatAttachment {
   id: string;
@@ -188,8 +241,15 @@ export interface AgentProposal {
   batch_strategy?: TaskBatchStrategy;
   task_plan_summary?: string;
   batch_items?: TaskBatchItem[];
+  composite_layout?: TaskCompositeLayout;
+  subject_entities?: string[];
   used_local_fallback?: boolean;
   linked_task_id?: string;
+  /** 生成该提案时 Planner 所用的 AI 智能体 / 模型快照 */
+  planner_provider_profile_id?: string;
+  planner_provider_name_snapshot?: string;
+  planner_model_id?: string;
+  planner_model_display_name_snapshot?: string;
 }
 
 export type AgentTaskKind =
@@ -244,6 +304,8 @@ export interface AgentTaskDraft {
   final_negative_prompt: string;
   recommended_action: string;
   api_kind?: 'generation' | 'edit' | 'remove_background' | 'upscale';
+  composite_layout?: TaskCompositeLayout;
+  subject_entities?: string[];
   variant_plan?: {
     target_count: number;
     variation_axis?: string;
@@ -252,8 +314,384 @@ export interface AgentTaskDraft {
   confidence: number;
   used_local_fallback: boolean;
   linked_task_id?: string;
+  planner_provider_profile_id?: string;
+  planner_provider_name_snapshot?: string;
+  planner_model_id?: string;
+  planner_model_display_name_snapshot?: string;
   created_at: string;
   updated_at: string;
+}
+
+export type ChatMode = 'chat' | 'task';
+
+export type TaskStage =
+  | 'planning'
+  | 'planning_failed'
+  | 'needs_clarification'
+  | 'waiting_confirm'
+  | 'queued'
+  | 'analyzing'
+  | 'running'
+  | 'saving'
+  | 'success'
+  | 'failed'
+  | 'cancelled'
+  | 'interrupted';
+
+/**
+ * Planner 明确返回 needs_clarification 时挂载的补充信息上下文。
+ *
+ * 关键约束（spec）：
+ *   - stage='needs_clarification' 和 stage='waiting_confirm' 必须互斥。
+ *   - needs_clarification 是合法的中间业务态，不是 Planner failure，
+ *     也不是可执行态。UI 必须禁止"确认执行"，只能"补充信息 / 修改任务 / 取消"。
+ *   - 用户下一条消息（在澄清场景里）会被路由为对同一任务的补充回答，
+ *     而不是创建一条全新的任务卡。
+ */
+export interface TaskClarificationContext {
+  /** Planner 给出的补充问题，例如"请指定《死神》中的具体角色"。 */
+  question: string;
+  /** 触发本次澄清的原始用户需求（Planner 当时看到的文本）。 */
+  originalRequest?: string;
+  /** Planner / 上层标记的可能缺失字段（仅用于诊断 / UI）。 */
+  missingFields?: string[];
+  /**
+   * 第几轮澄清。第一次澄清 = 1；用户补充后再调用 Planner 又得到澄清 = 2。
+   * 用于 maxClarificationRounds 保护，避免 Planner 反复追问同一字段。
+   */
+  attempt?: number;
+}
+
+/**
+ * 终态集合：一旦真实 Task 进入这些状态，必须立即覆盖 TaskMessage 的执行阶段，
+ * 终态永远优先于 running / queued / saving 等中间态。
+ */
+export const TERMINAL_TASK_STATUSES: ReadonlySet<Task['status']> = new Set([
+  'completed',
+  'failed',
+  'cancelled',
+]);
+
+/**
+ * 终态对应的 TaskMessage.stage。
+ * interrupted 没有真实 Task 侧状态，由前端在 Task 不存在时推断，因此单独处理。
+ */
+export const TERMINAL_MESSAGE_STAGES: ReadonlySet<TaskStage> = new Set([
+  'success',
+  'failed',
+  'cancelled',
+  'interrupted',
+]);
+
+/**
+ * 规划失败阶段标签 —— 与后端 error_kind 一一对应。
+ * 用于 TaskMessageState.plannerDiagnostic.errorKind 以及 UI 失败卡显示。
+ */
+export type PlannerErrorKind =
+  | 'transport'
+  | 'connect'
+  | 'timeout'
+  | 'auth'
+  | 'rate_limit'
+  | 'server'
+  | 'invalid_request'
+  | 'model_error'
+  | 'model_incompatible'
+  | 'response_text_missing'
+  | 'response_incomplete'
+  | 'upstream_error'
+  | 'planner_json_parse_failed'
+  | 'planner_schema_invalid'
+  | 'provider_response_payload_missing';
+
+/**
+ * Responses API body 的结构化诊断摘要。
+ * 由 Rust 端 build_responses_diagnostic 透传，无论成功 / 失败都会回填。
+ * 用于 "查看规划详情" 展示 HTTP Status / Responses Status / Output Types /
+ * Content Types / Extracted Text Length 等关键 shape 信息。
+ */
+export interface ResponsesShapeDiagnostic {
+  httpStatus?: number | null;
+  responseStatus?: string;
+  topLevelKeys?: string[];
+  outputCount?: number;
+  outputTypes?: string[];
+  contentTypes?: string[];
+  hasTopLevelOutputText?: boolean;
+  hasChoices?: boolean;
+  hasError?: boolean;
+  extractedTextLength?: number;
+  incompleteReason?: string;
+  /**
+   * 上游 body.error.message / last_error.message 的真实文本。
+   * 关键字段：HTTP 200 + body.error 时，这才是 gpt-5.6-luna 真正的失败原因。
+   * 由 Rust build_responses_diagnostic 提取。
+   */
+  upstreamErrorMessage?: string;
+  /** 上游 body.error.type，例如 invalid_request_error / rate_limit_error / server_error。 */
+  upstreamErrorType?: string;
+  /** 上游 body.error.code，例如 unsupported_parameter / model_not_found / server_error。 */
+  upstreamErrorCode?: string;
+  /** 上游 body.error.param，unsupported_parameter 时通常带具体参数名（text.format / reasoning.effort ...）。 */
+  upstreamErrorParam?: string;
+  /** Responses 顶层 `id` 字段（resp_xxx）。Payload Recovery Retrieve 阶段需要它。 */
+  responseId?: string;
+  /** Responses body.usage.output_tokens。**null/undefined** 表示上游没填该字段；
+   * 注意这与 `0`（明确告知本轮没产生 output token）语义不同。
+   * `provider_response_payload_missing` 判定要求 output_tokens > 0。 */
+  outputTokens?: number | null;
+}
+
+/**
+ * Responses Payload Recovery 执行轨迹。
+ *
+ * 当 Primary 命中 `provider_response_payload_missing`（HTTP 2xx + completed
+ * + output_tokens>0 + extract 返回 None）时启动两阶段恢复：
+ *   1. Retrieve：GET /v1/responses/{id}（不消耗模型 token）
+ *   2. SSE Streaming：POST /v1/responses + stream=true
+ *
+ * 前端"查看规划详情"据此展示 Primary / Retrieve / Streaming 各自结果。
+ */
+export interface ResponsesRecoveryTrace {
+  attempted: boolean;
+  /** Retrieve 阶段结果：recovered / empty / unsupported / failed / skipped。 */
+  retrieveResult?: 'recovered' | 'empty' | 'unsupported' | 'failed' | 'skipped' | string;
+  retrieveHttpStatus?: number | null;
+  /** SSE Streaming 阶段结果。 */
+  streamResult?: 'recovered' | 'empty' | 'unsupported' | 'failed' | 'skipped' | string;
+  streamHttpStatus?: number | null;
+  streamEventCount?: number;
+  streamTextDeltaCount?: number;
+  /** 最终恢复文本来源：retrieve / StreamingDelta / StreamingOutputTextDone / StreamingCompletedResponse。 */
+  textSource?: string;
+  /** Primary 响应 usage.output_tokens 的回显。 */
+  providerOutputTokens?: number | null;
+  /** Primary 响应的 response_id 回显。 */
+  providerResponseId?: string;
+}
+
+export interface PlannerDiagnostic {
+  /** 规划使用的模型，例如 gpt-5.6-luna */
+  model?: string;
+  /** 调用通道：responses / chat_completions。前端目前不可知，仅作展示用，可缺省。 */
+  transport?: 'responses' | 'chat_completions';
+  /** 后端 error_kind（response_text_missing / planner_json_parse_failed / ...） */
+  errorKind?: PlannerErrorKind | string;
+  /** 失败阶段的人类可读中文标签，例如 "规划结果解析" */
+  errorStage?: string;
+  /** 失败原因的简短中文文案，UI 主卡展示用 */
+  reason?: string;
+  /** HTTP 状态码（如果失败发生在 HTTP 层） */
+  httpStatus?: number | null;
+  /** Planner 真正返回的原始文本（已截断、已脱敏）。仅在解析失败时填入。 */
+  rawOutput?: string;
+  /** 后端 JSON parser 抛出的错误描述（例如 "expected value at line ..."） */
+  parserError?: string;
+  /** Responses body 结构化诊断 —— UI 展开时显示具体 shape 信息。 */
+  responsesShape?: ResponsesShapeDiagnostic;
+  /**
+   * 上游真实错误文本（body.error.message）。当 errorKind=upstream_error 时必须显示，
+   * 让用户看到 "gpt-5.6-luna 不支持 text.format" 这种具体原因，而不是 "上游返回错误"。
+   * 从 responsesShape.upstreamErrorMessage 镜像过来，方便 UI 直接读 diagnostic 根字段。
+   */
+  upstreamErrorMessage?: string;
+  upstreamErrorType?: string;
+  upstreamErrorCode?: string;
+  upstreamErrorParam?: string;
+  /** Responses Payload Recovery 轨迹。仅在 Primary 命中 payload_missing 时填入。 */
+  recovery?: ResponsesRecoveryTrace;
+}
+
+export interface TaskMessageImage {
+  id: string;
+  url: string;
+  thumbnailUrl?: string;
+  localPath?: string;
+  width?: number | null;
+  height?: number | null;
+  file_name?: string;
+  imageId?: string;
+}
+
+export interface TaskMessageState {
+  taskId: string;
+  status: Task['status'];
+  stage: TaskStage;
+  title: string;
+  prompt?: string;
+  finalPrompt?: string;
+  finalNegativePrompt?: string;
+  /** @deprecated use agentModel + executionModel */
+  model?: string;
+  agentModel?: string;
+  executionModel?: string;
+  /** 规划该任务时使用的 AI 智能体快照（多智能体体系） */
+  plannerProviderProfileId?: string;
+  plannerProviderNameSnapshot?: string;
+  size?: string;
+  count?: number;
+  error?: string;
+  images?: TaskMessageImage[];
+  resultImageIds?: string[];
+  createdAt: string;
+  updatedAt: string;
+  taskType?: 'generate' | 'edit' | 'remove_background' | '';
+  apiKind?: 'generation' | 'edit' | 'remove_background' | 'upscale';
+  sourceImageCount?: number;
+  sourceImageId?: string;
+  /** 本地路径形式的源图（编辑任务的 active image path）。重新规划时用它来还原编辑上下文。 */
+  sourceImagePath?: string;
+  sourceImagePreviewUrl?: string;
+  sourceImageFileName?: string;
+  pendingParams?: CreateTaskParams;
+  confirming?: boolean;
+  cancelling?: boolean;
+  /**
+   * 重新规划专用：指向当前任务卡对应的用户原始消息 id。
+   * 重新规划时复用此 id 对应的消息，绝不再次 append 一条用户消息。
+   */
+  sourceUserMessageId?: string;
+  /** 重新规划次数（仅用于日志/诊断），UI 始终只有一张任务卡。 */
+  planningAttempt?: number;
+  /**
+   * 每次发起 Planner 调用时生成的唯一 requestId。
+   * 异步返回后只有 requestId 仍然等于当前卡片上的值才允许写入，
+   * 用来防止快速连点"重新规划"导致旧响应覆盖新请求。
+   */
+  planningRequestId?: string;
+  /**
+   * 应用级 PlannerJob Registry 的 job id（PJ_xxx）。
+   * 页面切换 / 会话切换时，loadConversations 会读这个字段去 Registry 查 job 是否还活着，
+   * 不再无脑把 stage=planning 降级成 planning_failed。
+   * 只有 planningSessionId 与当前 app session 不一致（说明进程重启过）才判中断。
+   */
+  plannerJobId?: string;
+  /**
+   * 发起本次规划时所属的 App Session ID（sess_xxx）。
+   * App 进程重启后会换一个新的 session id；用它区分"页面切换"和"应用重启"。
+   */
+  planningSessionId?: string;
+  /**
+   * 规划失败诊断信息。仅在 stage='planning_failed' 时有意义；
+   * 成功进入 waiting_confirm / 执行阶段时应被清空，避免旧错误残留。
+   */
+  plannerDiagnostic?: PlannerDiagnostic;
+  /**
+   * 执行阶段失败诊断信息（来自真实 Task.error / sub_tasks 错误聚合）。
+   * 仅在 stage='failed' / 'interrupted' 时有意义。
+   */
+  executionDiagnostic?: {
+    httpStatus?: number | null;
+    errorKind?: string;
+    summary?: string;
+    requestId?: string;
+    subTaskErrors?: string[];
+  };
+
+  // ====== 任务语义层（多轮上下文继承 + 附件识别）======
+  /**
+   * 本地推断的细粒度任务类型。
+   * 用于 UI 展示（"图片编辑 / 参考图生成 / 文生图 / 图片分析"），
+   * 避免把"用户已上传图片"的任务错误显示成"文生图"。
+   * 与 taskType 字段互补：taskType 由 Planner 决定，resolvedTaskKind 来自本地健康度检查。
+   */
+  resolvedTaskKind?: 'text_to_image' | 'image_edit' | 'image_reference_generation' | 'image_analysis' | 'unknown';
+  /**
+   * 用户当轮上传的附件文件名（或本地路径）。
+   * 持久化后用于在历史记录 / 任务详情中显示"用户当时传了哪些图"。
+   *
+   * 注意：此字段只是"真实文件名"的快照，用于调试 / 持久化。
+   * UI 展示与 Planner 引用必须改用 attachmentDescriptors 中的 label（图一 / 图二 / 图三）。
+   */
+  attachmentNames?: string[];
+  /**
+   * 任务提交时冻结的"有序附件"快照 —— 按用户选择顺序排列。
+   * 一旦写入即不可变；后续 Composer 增删图不能影响历史任务的展示。
+   * UI 在任务卡 / 历史详情中渲染"图一 / 图二"时必须读这个字段。
+   */
+  orderedAttachments?: Array<{
+    id: string;
+    source: string;
+    internalName?: string;
+    preview?: string;
+  }>;
+  /**
+   * Planner 端的附件描述符快照（label + id + source）。
+   * 任务提交时根据 orderedAttachments 生成。
+   * 用于 Planner Prompt 中的 "[图片附件语义映射]" 段落，让模型真正理解 "图一 / 图二"。
+   */
+  attachmentDescriptors?: Array<{
+    id: string;
+    label: string;
+    originalName?: string;
+    source: string;
+  }>;
+  /**
+   * 附件角色拆分：编辑目标图数量（待修改的原图）。
+   * 当只有 1 张图 + 编辑意图 → editTargetImageCount=1。
+   * 当有多张图 → 默认第一张为 edit target，其余为 reference。
+   */
+  editTargetImageCount?: number;
+  /** 附件角色拆分：参考图数量。 */
+  referenceImageCount?: number;
+  /**
+   * 任务级上下文继承摘要（仅用于 UI 展示和调试日志）。
+   * 让历史记录 / 任务详情能告诉用户"本任务继承了上一轮的 XXX"。
+   */
+  resolvedContext?: {
+    workTitle?: string;
+    primarySubject?: string;
+    inheritedFromPreviousTurn?: boolean;
+    augmentationDetected?: boolean;
+    pronounBindings?: Record<string, string>;
+  };
+
+  // ====== Clarification（Planner 明确要求补充信息）======
+  /**
+   * 仅在 stage='needs_clarification' 时填充。
+   * 业务态语义：当前任务尚未达到可执行条件，必须等用户补充信息后重新规划。
+   * UI 必须基于本字段隐藏"确认执行"，显示"补充信息 / 修改任务 / 取消"。
+   */
+  clarification?: TaskClarificationContext;
+  /**
+   * 当前会话中此任务链路累计发生的澄清轮数（持久化）。
+   * 每次用户补充后又得到 clarification 时 +1；用于 maxClarificationRounds 保护。
+   * 注意：与 clarification.attempt 含义一致，前者跨 stage 持续存在，
+   * 后者仅在 needs_clarification 阶段有意义。
+   */
+  clarificationRound?: number;
+
+  // ====== Chat Handoff 语义上下文（实体列表 / 布局）======
+  /**
+   * 九宫格等布局信息（Chat Handoff 解析出 "9宫格 / 3x3" 时写入）。
+   * cells 是 Planner 选定的每格主体（非持久化必需，可选）。
+   */
+  gridLayout?: {
+    rows: number;
+    columns: number;
+    cellCount: number;
+    cells?: Array<{ index: number; label: string }>;
+  };
+  /**
+   * 单张复合构图的结构化表达（三分镜 / 宫格 / 分屏）。
+   * 与批量结构互斥：compositeLayout 存在时 execution_mode 必须是 single、count 必须是 1。
+   */
+  compositeLayout?: TaskCompositeLayout;
+  /** 复合构图的每格主体（"前3个山"解析出的 [泰山, 黄山, 华山]）。 */
+  subjectEntities?: string[];
+  /** 上下文来源的人类可读标签，例如 "上一轮建筑列表"。仅 UI / 导出展示用。 */
+  contextSourceLabel?: string;
+
+  // ====== 执行耗时（区别于 Planning 耗时）======
+  /**
+   * 用户点击"确认执行"、任务真正进入执行阶段的时间点（ISO）。
+   * Planning / 等待确认的耗时绝不计入。
+   */
+  executionStartedAt?: string;
+  /** 执行终态（成功 / 失败 / 取消 / 中断）时间点（ISO）。 */
+  executionFinishedAt?: string;
+  /** 最终执行耗时（ms）。持久化字段 —— UI / 历史记录都从这里读取。 */
+  executionDurationMs?: number;
 }
 
 export interface ChatMessage {
@@ -271,6 +709,13 @@ export interface ChatMessage {
   is_image?: boolean;
   gallery_search?: GallerySearchState;
   agent_proposal?: AgentProposal;
+  task_message?: TaskMessageState;
+  chat_mode?: ChatMode;
+  /** 该消息生成时实际使用的 AI 智能体 / 模型快照（Profile 删除后历史仍可读） */
+  provider_profile_id?: string;
+  provider_name_snapshot?: string;
+  model_id?: string;
+  model_display_name_snapshot?: string;
 }
 
 export interface ChatConversation {
@@ -284,6 +729,13 @@ export interface ChatConversation {
   context_summary_updated_at?: string;
   conversation_mode?: 'free_chat' | 'task_flow';
   active_task_draft?: AgentTaskDraft | null;
+  active_task_id?: string | null;
+  active_image_id?: string | null;
+  active_image_path?: string | null;
+  chat_mode?: ChatMode;
+  /** 会话级 AI 智能体选择（profile_id + model_id，双 key 区分同 model_id 的不同 Provider） */
+  selected_agent_profile_id?: string;
+  selected_agent_model_id?: string;
 }
 
 export interface AgentTemplateClarificationRules {
@@ -435,6 +887,31 @@ export interface AgentEndpointCheckResult {
   edit: AgentEndpointStatus;
 }
 
+export interface EnvCheckItem {
+  key: string;
+  title: string;
+  status: 'ok' | 'warn' | 'error' | 'pending';
+  summary: string;
+  detail: string;
+  latency_ms?: number | null;
+}
+
+export interface EnvCheckResult {
+  items: EnvCheckItem[];
+  diagnostic_text: string;
+}
+
+export interface GenerateTestImageResult {
+  ok: boolean;
+  endpoint: string;
+  http_status?: number | null;
+  latency_ms: number;
+  saved_path?: string | null;
+  output_format: string;
+  error_kind?: string | null;
+  error_message?: string | null;
+}
+
 export interface VisionUnderstandPayload {
   prompt: string;
   images: string[];
@@ -465,10 +942,24 @@ export interface AgentRunRequestResult {
   reasoning?: string;
   prompt_tokens?: number;
   completion_tokens?: number;
-  error_kind?: 'connect' | 'timeout' | 'auth' | 'rate_limit' | 'server' | 'invalid_response' | 'upstream_api' | 'invalid_request' | 'model_error' | 'multimodal_unsupported' | 'json_output_unsupported';
+  error_kind?: 'connect' | 'timeout' | 'auth' | 'rate_limit' | 'server' | 'invalid_response' | 'upstream_api' | 'invalid_request' | 'model_error' | 'multimodal_unsupported' | 'json_output_unsupported' | 'response_text_missing' | 'response_incomplete' | 'upstream_error' | 'planner_json_parse_failed' | 'planner_schema_invalid' | 'provider_response_payload_missing';
   error_message?: string;
   status?: number | null;
   used_local_fallback?: boolean;
+  /**
+   * Planner 专用诊断：原始返回文本（已截断脱敏）。
+   * 仅在 plan_task 模式且发生 response_text_missing / planner_json_parse_failed /
+   * planner_schema_invalid 时返回。
+   */
+  planner_raw_output?: string;
+  /** Planner 专用诊断：后端 JSON parser 的报错描述。 */
+  planner_parser_error?: string;
+  /** Planner 专用诊断：使用的是 responses / chat_completions 通道。 */
+  planner_transport?: 'responses' | 'chat_completions';
+  /** Planner 专用诊断：Responses body 结构化 shape 摘要。 */
+  planner_diagnostic?: ResponsesShapeDiagnostic;
+  /** Planner 专用诊断：Responses Payload Recovery 轨迹（snake_case，对应 Rust 字段）。 */
+  planner_recovery?: ResponsesRecoveryTrace;
 }
 
 export const SIZES = ['1024x1024', '1792x1024', '1024x1792'] as const;

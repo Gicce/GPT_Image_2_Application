@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "provider_type": "glm_official",
+  "display_name": "智谱 GLM 官方 API",
+  "base_url": "https://open.bigmodel.cn/api/paas/v4",
+  "updated_at": "2026-08-15",
+  "billing_modes": [
+    {
+      "mode": "api",
+      "label": "API 按量计费",
+      "description": "使用智谱开放平台 API 余额或资源包计费",
+      "base_url": "https://open.bigmodel.cn/api/paas/v4",
+      "notes": [
+        "🔒 智谱官方 API 地址，由 CyImagePro 管理"
+      ]
+    },
+    {
+      "mode": "coding_plan",
+      "label": "Coding Plan 套餐",
+      "description": "月度订阅套餐，额度与普通 API 账户独立",
+      "base_url": "https://open.bigmodel.cn/api/coding/paas/v4",
+      "notes": [
+        "🔒 智谱 Coding Plan 官方地址，由 CyImagePro 管理",
+        "请使用 Coding Plan 对应的 API Key。Coding Plan 套餐额度与普通 API 余额独立。",
+        "Coding Plan 的可用场景受智谱官方服务规则限制，请确认当前客户端和使用场景符合官方要求。"
+      ]
+    }
+  ],
+  "models": [
+    { "model_id": "glm-5.3", "display_name": "GLM-5.3", "capabilities": ["text", "reasoning", "tools", "structured_output"], "lifecycle": "active", "recommended": true },
+    { "model_id": "glm-5.2", "display_name": "GLM-5.2", "capabilities": ["text", "reasoning", "tools", "structured_output"], "lifecycle": "active" },
+    { "model_id": "glm-5.1", "display_name": "GLM-5.1", "capabilities": ["text", "reasoning", "tools"], "lifecycle": "active" },
+    { "model_id": "glm-5", "display_name": "GLM-5", "capabilities": ["text", "reasoning", "tools"], "lifecycle": "active" },
+    { "model_id": "glm-5-turbo", "display_name": "GLM-5 Turbo", "capabilities": ["text"], "lifecycle": "active" },
+    { "model_id": "glm-4.7", "display_name": "GLM-4.7", "capabilities": ["text", "reasoning", "tools"], "lifecycle": "active" },
+    { "model_id": "glm-4.6", "display_name": "GLM-4.6", "capabilities": ["text", "reasoning", "tools"], "lifecycle": "active" },
+    { "model_id": "glm-4.5", "display_name": "GLM-4.5", "capabilities": ["text", "reasoning", "tools"], "lifecycle": "active" },
+    { "model_id": "glm-4.5-air", "display_name": "GLM-4.5 Air", "capabilities": ["text"], "lifecycle": "active" },
+    { "model_id": "glm-4-flash", "display_name": "GLM-4 Flash", "capabilities": ["text"], "lifecycle": "active" },
+    { "model_id": "glm-4v", "display_name": "GLM-4V（视觉）", "capabilities": ["text", "vision"], "lifecycle": "deprecated" },
+    { "model_id": "glm-4v-plus", "display_name": "GLM-4V Plus（视觉）", "capabilities": ["text", "vision"], "lifecycle": "deprecated" }
+  ]
+}

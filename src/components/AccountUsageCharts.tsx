@@ -1,119 +1,68 @@
 import {
-  Bar,
-  BarChart,
   CartesianGrid,
-  Cell,
-  Legend,
   Line,
   LineChart,
-  Pie,
-  PieChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from 'recharts';
-
-export type UsageChartTab = 'line' | 'pie' | 'bar';
-
-interface UsageCostPoint {
-  date: string;
-  cost: number;
-}
-
-interface UsageTypeCostPoint {
-  name: string;
-  value: number;
-  fill: string;
-}
-
-interface UsageModelCountPoint {
-  model: string;
-  count: number;
-}
+import type { UsageTrendMetric } from '../services/serverApi';
 
 interface Props {
-  dailyCost: UsageCostPoint[];
-  modelCount: UsageModelCountPoint[];
-  typeCost: UsageTypeCostPoint[];
-  usageChartTab: UsageChartTab;
-  onTabChange: (tab: UsageChartTab) => void;
+  points: { date: string; value: number }[];
+  metric: UsageTrendMetric;
 }
 
-export default function AccountUsageCharts({
-  dailyCost,
-  modelCount,
-  typeCost,
-  usageChartTab,
-  onTabChange,
-}: Props) {
+const METRIC_LABEL: Record<UsageTrendMetric, string> = {
+  image_count: '图片数量',
+  request_count: '生成次数',
+  cost: '消费金额',
+};
+
+function formatMetricValue(metric: UsageTrendMetric, value: number): string {
+  if (metric === 'cost') return `$${value.toFixed(2)}`;
+  return String(value);
+}
+
+/** 趋势图：数据完全来自后端 /api/usage/trend（已按天补零）。 */
+export default function AccountUsageCharts({ points, metric }: Props) {
+  const isCost = metric === 'cost';
+  const hasData = points.some(p => p.value > 0);
+
+  const yTickFormatter = (v: number) => (isCost ? `$${v.toFixed(2)}` : String(Math.round(v)));
+
   return (
-    <div className="usage-charts">
-      <div className="usage-chart-tabs">
-        <button className={`usage-tab ${usageChartTab === 'line' ? 'active' : ''}`} onClick={() => onTabChange('line')} title="每日费用趋势">
-          趋势
-        </button>
-        <button className={`usage-tab ${usageChartTab === 'pie' ? 'active' : ''}`} onClick={() => onTabChange('pie')} title="图片与对话占比">
-          占比
-        </button>
-        <button className={`usage-tab ${usageChartTab === 'bar' ? 'active' : ''}`} onClick={() => onTabChange('bar')} title="模型调用次数">
-          模型
-        </button>
-      </div>
-      <div className="usage-chart-card">
-        {usageChartTab === 'line' && (
-          <>
-            <div className="usage-chart-title">每日费用趋势</div>
-            <ResponsiveContainer width="100%" height={200}>
-              <LineChart data={dailyCost} margin={{ top: 4, right: 8, left: -16, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border-light)" />
-                <XAxis dataKey="date" tick={{ fontSize: 10 }} />
-                <YAxis tick={{ fontSize: 10 }} />
-                <Tooltip formatter={(value) => [`$${value}`, '费用']} />
-                <Line type="monotone" dataKey="cost" stroke="var(--accent-primary)" strokeWidth={2} dot={false} />
-              </LineChart>
-            </ResponsiveContainer>
-          </>
-        )}
-        {usageChartTab === 'pie' && typeCost.length > 0 && (
-          <>
-            <div className="usage-chart-title">图片与对话占比</div>
-            <ResponsiveContainer width="100%" height={200}>
-              <PieChart>
-                <Pie
-                  data={typeCost}
-                  dataKey="value"
-                  nameKey="name"
-                  cx="50%"
-                  cy="50%"
-                  outerRadius={70}
-                  label={({ name, percent }) => `${name} ${((percent ?? 0) * 100).toFixed(0)}%`}
-                  labelLine={false}
-                >
-                  {typeCost.map((entry, index) => (
-                    <Cell key={index} fill={entry.fill} />
-                  ))}
-                </Pie>
-                <Legend iconSize={10} wrapperStyle={{ fontSize: 11 }} />
-              </PieChart>
-            </ResponsiveContainer>
-          </>
-        )}
-        {usageChartTab === 'bar' && modelCount.length > 0 && (
-          <>
-            <div className="usage-chart-title">模型调用次数</div>
-            <ResponsiveContainer width="100%" height={200}>
-              <BarChart data={modelCount} margin={{ top: 4, right: 8, left: -16, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border-light)" />
-                <XAxis dataKey="model" tick={{ fontSize: 9 }} />
-                <YAxis tick={{ fontSize: 10 }} allowDecimals={false} />
-                <Tooltip />
-                <Bar dataKey="count" fill="var(--accent-orange)" radius={[3, 3, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </>
-        )}
-      </div>
+    <div className="usage-chart-card">
+      <div className="usage-chart-title">{METRIC_LABEL[metric]} · 每日趋势</div>
+      {hasData ? (
+        <ResponsiveContainer width="100%" height={220}>
+          <LineChart data={points} margin={{ top: 8, right: 12, left: 4, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="var(--border-light)" />
+            <XAxis dataKey="date" tick={{ fontSize: 10 }} tickFormatter={(d: string) => d.slice(5)} minTickGap={24} />
+            <YAxis
+              tick={{ fontSize: 10 }}
+              tickFormatter={yTickFormatter}
+              width={56}
+              domain={isCost ? ['auto', 'auto'] : [0, (max: number) => Math.max(1, Math.ceil(max))]}
+              allowDecimals={isCost}
+            />
+            <Tooltip
+              formatter={(value) => [formatMetricValue(metric, Number(value)), METRIC_LABEL[metric]]}
+              labelStyle={{ fontSize: 12 }}
+              contentStyle={{ fontSize: 12, borderRadius: 8 }}
+            />
+            <Line type="monotone" dataKey="value" stroke="var(--accent-primary)" strokeWidth={2} dot={false} isAnimationActive={false} />
+          </LineChart>
+        </ResponsiveContainer>
+      ) : (
+        <div className="usage-chart-empty">
+          <svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true">
+            <path d="M3 20h18M6 16l4-6 3 3 5-8" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          <p>当前时间范围暂无用量数据</p>
+        </div>
+      )}
     </div>
   );
 }

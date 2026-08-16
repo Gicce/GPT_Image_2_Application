@@ -93,10 +93,26 @@
   flex: 1;
   min-width: 0;
   overflow-y: auto;
+  max-width: 1280px;
 }
 
-.history-detail h3 {
-  margin: 0 0 14px;
+.history-detail-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed var(--border-default);
+  border-radius: 12px;
+}
+
+.history-detail-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.history-detail-head h3 {
+  margin: 0;
   font-size: 16px;
   color: var(--text-secondary);
 }
@@ -105,6 +121,284 @@
   margin: 20px 0 12px;
   font-size: 14px;
   color: var(--text-secondary);
+}
+
+/* ===== 详情四段结构：概览 / 方案 / 结果 / 高级 ===== */
+
+.history-section {
+  margin-bottom: 24px;
+}
+
+.history-section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+.history-section-no {
+  font-weight: 600;
+  color: var(--accent-primary-text);
+}
+
+.history-section-hint {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-faint);
+}
+
+.history-overview {
+  border: 1px solid var(--border-default);
+  border-radius: 12px;
+  background: var(--bg-card);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.history-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 28px;
+}
+
+.history-overview-grid .detail-row {
+  font-size: 13px;
+}
+
+.history-overview-counts {
+  display: flex;
+  gap: 12px;
+  font-size: 13px;
+}
+
+.history-overview-counts .ok { color: var(--accent-success); }
+.history-overview-counts .fail { color: var(--accent-danger); }
+
+.history-progress-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.history-progress-bar {
+  width: 120px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--bg-inset);
+  overflow: hidden;
+}
+
+.history-progress-fill {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--accent-primary);
+  transition: width 0.3s ease;
+}
+
+.history-prompts {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* 旧版批量任务（repeat_same）子任务执行明细 */
+.history-legacy-subtasks {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  background: var(--bg-card);
+  padding: 10px 14px;
+}
+
+.history-legacy-subtask {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  min-height: 26px;
+}
+
+.history-legacy-subtask-label {
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.history-legacy-subtask-error {
+  color: var(--accent-danger);
+  font-size: 12.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 生成方案（复用批量主页方案卡片视觉） */
+.history-plans {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.history-plan-result-count {
+  font-size: 12.5px;
+  color: var(--text-tertiary);
+}
+
+.history-plan-result-count.muted {
+  color: var(--text-faint);
+}
+
+/* 生成结果：图片卡（与方案关联） */
+.history-results {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 12px;
+}
+
+.history-result-card {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--bg-card);
+  cursor: pointer;
+  transition: box-shadow 0.15s;
+}
+
+.history-result-card:hover {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.history-result-thumb img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+}
+
+.history-result-thumb .gallery-loading {
+  aspect-ratio: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+.history-result-info {
+  padding: 8px 10px 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.history-result-plan {
+  max-width: 100%;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-result-time {
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+
+/* 高级信息（默认折叠） */
+.history-advanced {
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  background: var(--bg-card);
+}
+
+.history-advanced summary {
+  padding: 10px 14px;
+  font-size: 13px;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.history-advanced[open] summary {
+  border-bottom: 1px solid var(--bg-inset);
+}
+
+.history-advanced-body {
+  padding: 6px 14px 12px;
+}
+
+.history-advanced .detail-row span:last-child {
+  max-width: none;
+  white-space: normal;
+}
+
+.history-adv-value {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* 方案抽屉附加区 */
+.history-plan-error {
+  color: var(--accent-danger);
+}
+
+.history-plan-times {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.history-plan-result {
+  max-width: 240px;
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.history-plan-result img {
+  display: block;
+  width: 100%;
+}
+
+.history-plan-result .gallery-loading {
+  aspect-ratio: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+.history-plan-result > span {
+  display: block;
+  padding: 4px 8px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 1100px) {
+  .history-overview-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .detail-params {
@@ -135,23 +429,12 @@
   white-space: nowrap;
 }
 
-.detail-row .detail-prompt {
-  max-width: none !important;
-  white-space: pre-wrap !important;
-  word-break: break-word !important;
-  overflow: visible !important;
-  text-overflow: clip !important;
-  text-align: left !important;
-  line-height: 1.5;
-  flex: 1;
-  margin-left: 12px;
-}
-
 .detail-row .path {
   font-size: 11px;
   max-width: 400px;
   word-break: break-all;
   white-space: normal;
+  text-align: right;
 }
 
 .detail-row .ok { color: var(--accent-success); }

@@ -1,4 +1,4 @@
-/* ===== About Page — SaaS Style ===== */
+/* ===== About Page — CyImagePro 产品介绍（纵向三区） ===== */
 
 .about-page {
   background: linear-gradient(180deg, var(--bg-body) 0%, var(--bg-card) 100%);
@@ -36,6 +36,10 @@
   padding: 28px 32px;
 }
 
+.about-section-card {
+  margin-bottom: 24px;
+}
+
 .card-title {
   font-size: 20px;
   font-weight: 600;
@@ -45,15 +49,7 @@
   border-bottom: 2px solid var(--border-light);
 }
 
-/* Two-column layout */
-.about-main-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 24px;
-  margin-bottom: 24px;
-}
-
-/* Left card — company info */
+/* ① 项目介绍 */
 .card-desc {
   font-size: 14px;
   color: var(--text-tertiary);
@@ -63,8 +59,8 @@
 
 .info-list {
   margin-top: 18px;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 12px;
 }
 
@@ -89,57 +85,10 @@
   font-weight: 500;
 }
 
-/* Right card — services */
-.biz-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-}
-
-.biz-grid .biz-card:last-child {
-  grid-column: 1 / -1;
-}
-
-.biz-card {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  padding: 14px 16px;
-  background: var(--bg-card-alt);
-  border-radius: 12px;
-  border: 1px solid transparent;
-  transition: transform 0.2s, box-shadow 0.2s, border-color 0.2s;
-  cursor: default;
-}
-
-.biz-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(79, 124, 255, 0.1);
-  border-color: var(--accent-primary);
-}
-
-.biz-icon {
-  font-size: 24px;
-  flex-shrink: 0;
-  margin-top: 1px;
-}
-
-.biz-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-heading);
-  margin-bottom: 2px;
-}
-
-.biz-desc {
-  font-size: 12px;
-  color: var(--text-muted);
-}
-
-/* Features card */
+/* ② 产品特性 */
 .features-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, 1fr);
   gap: 12px;
 }
 
@@ -180,16 +129,24 @@
   line-height: 1.5;
 }
 
-/* Contact card */
+/* ③ 联系我们 */
 .about-contact-card {
   display: flex;
   flex-direction: column;
+}
+
+.contact-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
 }
 
 .contact-sections {
   display: flex;
   gap: 0;
   margin-bottom: 20px;
+  width: 100%;
+  max-width: 640px;
 }
 
 .contact-section {
@@ -281,22 +238,16 @@
 
 /* Responsive */
 @media (max-width: 1120px) {
-  .about-main-row {
-    grid-template-columns: 1fr;
-  }
-
   .about-page {
     padding: 0 16px 32px;
   }
 
-  .biz-grid {
-    grid-template-columns: 1fr;
+  .features-grid {
+    grid-template-columns: repeat(2, 1fr);
   }
+}
 
-  .biz-grid .biz-card:last-child {
-    grid-column: auto;
-  }
-
+@media (max-width: 720px) {
   .features-grid {
     grid-template-columns: 1fr;
   }

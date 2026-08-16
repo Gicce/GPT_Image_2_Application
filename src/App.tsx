@@ -2,15 +2,22 @@ import { lazy, Suspense, useEffect, useState } from 'react';
 import Sidebar from './components/Sidebar';
 import UpdateNotification from './components/UpdateNotification';
 import MarqueeNotice from './components/MarqueeNotice';
+import { ToastHost } from './components/Toast';
 import { useSettingsStore } from './store/useSettingsStore';
 import { useUpdateStore } from './store/useUpdateStore';
 import { useAuthStore, setGroupTypeMap } from './store/useAuthStore';
+import { useAccountStore } from './store/useAccountStore';
+import { useServerStatusStore, startHealthCheckLoop, startHeartbeatLoop } from './store/useServerStatusStore';
+import { ensureTaskEventBridge } from './store/useTaskStore';
+import { loadRuntimeConfig } from './services/runtimeTokenService';
 import { serverApi } from './services/serverApi';
+import { initAvatarAccountSync } from './services/avatarService';
 import type { PageType } from './types';
 import './App.css';
 
 const Auth = lazy(() => import('./pages/Auth'));
 const AgentChat = lazy(() => import('./pages/AgentChat'));
+const ImageStudio = lazy(() => import('./pages/ImageStudio'));
 const TaskQueue = lazy(() => import('./pages/TaskQueue'));
 const Gallery = lazy(() => import('./pages/Gallery'));
 const History = lazy(() => import('./pages/History'));
@@ -20,6 +27,7 @@ const Account = lazy(() => import('./pages/Account'));
 
 const PAGE_COMPONENTS: Record<PageType, JSX.Element> = {
   agent: <AgentChat />,
+  imagestudio: <ImageStudio />,
   queue: <TaskQueue />,
   gallery: <Gallery />,
   history: <History />,
@@ -65,21 +73,55 @@ export default function App() {
   useEffect(() => {
     loadSettings();
     loadFromStorage();
+    // 全局单点 task-updated 订阅：各页面（ImageStudio / TaskQueue / Chat）不再重复注册
+    ensureTaskEventBridge();
+    // 账号切换时同步各自头像（登出清空、登录恢复缓存）
+    const stopAvatarSync = initAvatarAccountSync();
     const timer = setTimeout(() => { checkUpdate(); }, 3000);
-    return () => clearTimeout(timer);
+    return () => { clearTimeout(timer); stopAvatarSync(); };
   }, []);
 
-  // 登录后刷新用户信息 + 预取模型列表填充 groupTypeMap
+  // Auto-check server connection on startup if server_url is configured
+  useEffect(() => {
+    const settings = useSettingsStore.getState().settings;
+    const serverUrl = settings.server_url?.trim();
+
+    // Only start health check loop if server_url is configured
+    if (serverUrl) {
+      // Check connection once on startup (lightweight health check)
+      useServerStatusStore.getState().checkConnection();
+
+      // Start health check loop (every 60 seconds)
+      startHealthCheckLoop();
+
+      // Start heartbeat loop for logged-in users (every 60 seconds)
+      startHeartbeatLoop();
+    }
+
+    // Cleanup on unmount
+    return () => {
+      // Loops will be stopped when the app unmounts
+    };
+  }, []);
+
+  // 登录后刷新用户信息 + 预取模型列表填充 groupTypeMap + 加载 runtime token + 获取账户权益
   useEffect(() => {
     if (isLoggedIn) {
       refreshUser();
+      // 获取账户权益数据
+      useAccountStore.getState().fetchEntitlements();
       serverApi.getModels()
         .then(list => {
           const map: Record<string, 'image' | 'agent' | 'postprocess' | 'chat'> = {};
           for (const m of list) if (m.group) map[m.group] = m.model_type;
           setGroupTypeMap(map);
+          // Load runtime tokens from server (memory-only, synced to Rust)
+          loadRuntimeConfig().catch(() => {});
         })
         .catch(() => {});
+    } else {
+      // 登出时清除权益数据
+      useAccountStore.getState().clearEntitlements();
     }
   }, [isLoggedIn]);
 
@@ -95,7 +137,7 @@ export default function App() {
   }, [isLoggedIn, requestedPage, clearRequestedPage]);
 
   function handleNavigate(page: PageType) {
-    const authRequiredPages: PageType[] = ['agent', 'queue', 'account'];
+    const authRequiredPages: PageType[] = ['agent', 'imagestudio', 'queue', 'account'];
     if (authRequiredPages.includes(page) && !isLoggedIn) {
       setShowAuth(true);
       useAuthStore.getState().setRequestedPage(page);
@@ -103,6 +145,24 @@ export default function App() {
     }
     setCurrentPage(page);
   }
+
+  // 全局导航事件（图片生成工作台 / Empty State 的「前往设置」「查看任务」等入口）
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent).detail as { page: PageType; section?: string; focusTaskId?: string } | undefined;
+      if (!detail?.page) return;
+      if (detail.focusTaskId) {
+        localStorage.setItem('cy_taskqueue_focus_id', detail.focusTaskId);
+      }
+      if (detail.page === 'settings' && detail.section) {
+        localStorage.setItem('cy_settings_section', detail.section);
+        window.dispatchEvent(new CustomEvent('cy-settings-section'));
+      }
+      handleNavigate(detail.page);
+    };
+    window.addEventListener('cyimage-navigate', handler);
+    return () => window.removeEventListener('cyimage-navigate', handler);
+  }, [isLoggedIn]);
 
   return (
     <div className="app">
@@ -134,6 +194,7 @@ export default function App() {
           />
         </Suspense>
       )}
+      <ToastHost />
     </div>
   );
 }
