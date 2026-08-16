@@ -69,7 +69,7 @@ jobs:
             echo "release_body<<RELEASE_BODY_EOF"
             echo "# ${TITLE}"
             echo ""
-            echo "这是 CyImagePro ${CORE} 的${STAGE}发布（Tag：\`${TAG}\`）。"
+            echo "这是 CyImagePro ${CORE} ${STAGE}（Tag：\`${TAG}\`）。"
             echo ""
             echo "## 本版本重点"
             echo ""
