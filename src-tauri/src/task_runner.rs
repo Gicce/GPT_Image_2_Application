@@ -577,6 +577,24 @@ async fn edit_single_image(
     task: &Task,
     index: usize,
 ) -> Result<ImageRecord, String> {
+    // ===== 源图前置校验（图生图执行的硬边界）=====
+    // 空源图 / 源图文件不存在时必须在本地立即失败，给出明确错误；
+    // 绝不把无源图 / 坏路径的 edit 请求发给上游，也绝不静默 fallback 到其它图片。
+    let source_images = effective_source_images(task, index);
+    if source_images.is_empty() {
+        return Err(
+            "图生图任务缺少源图片，请在任务卡中重新绑定源图片后再执行。".to_string(),
+        );
+    }
+    for img_path in &source_images {
+        if !Path::new(img_path).exists() {
+            return Err(format!(
+                "源图片不存在：{}。该任务引用的源图可能已被删除或移动，请在任务卡中切换源图片后重试。",
+                img_path
+            ));
+        }
+    }
+
     let mut form = reqwest::multipart::Form::new()
         .text("model", "gpt-image-2")
         .text(
@@ -590,7 +608,7 @@ async fn edit_single_image(
         .text("size", task.size.clone())
         .text("response_format", "b64_json");
 
-    for img_path in &effective_source_images(task, index) {
+    for img_path in &source_images {
         let path = Path::new(img_path);
         let file_bytes =
             fs::read(path).map_err(|e| format!("无法读取源图片 {}: {}", img_path, e))?;

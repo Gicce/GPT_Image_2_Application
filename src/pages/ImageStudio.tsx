@@ -6,7 +6,7 @@ import { useAuthStore } from '../store/useAuthStore';
 import { useImageEditStore } from '../store/useImageEditStore';
 import { useDraftStore } from '../store/useDraftStore';
 import { api } from '../services/api';
-import { assertCanRunImageTask } from '../services/billingService';
+import { authorizeImageTask, settleImageTask, createRequestId, registerTaskAuthorization } from '../services/billingService';
 import { optimizePrompt, resolvePromptOptimizerModelLabel } from '../services/promptOptimizer';
 import { appendAiPlan, optimizeSinglePlan, planBatchFromRequirement } from '../services/batchPlanner';
 import type { ParsedAiPlan } from '../services/batchPlanner';
@@ -478,10 +478,6 @@ export default function ImageStudio() {
     imageEditPrompt: i2iPrompt,
     setImageEditPrompt: setI2iPrompt,
   } = useDraftStore();
-  /** 单张文生图数量（原页面逻辑：默认 4，1–50） */
-  const [t2iCount, setT2iCount] = useState(4);
-  /** 单张图生图数量（原页面逻辑：默认 1，1–10） */
-  const [i2iCount, setI2iCount] = useState(1);
   /** 单张图生图参考图（原 imageEditSourceImages 草稿字段持久化路径） */
   const [i2iSources, setI2iSources] = useState<SourceImage[]>(() =>
     useDraftStore.getState().imageEditSourceImages.map(p => ({ path: p, name: p.split(/[\\/]/).pop() || p })));
@@ -560,7 +556,6 @@ export default function ImageStudio() {
   const singleOpt = isEdit ? i2iOpt : t2iOpt;
   const setSingleOpt = isEdit ? setI2iOpt : setT2iOpt;
   const singlePrompt = isEdit ? i2iPrompt : t2iPrompt;
-  const singleCount = isEdit ? i2iCount : t2iCount;
 
   // ============================================================
   // 单张模式：AI 优化 + 提交
@@ -615,7 +610,8 @@ export default function ImageStudio() {
     const promptText = singlePrompt.trim();
     const manualNegative = isEdit ? '' : t2iNegative;
     const opt = singleOpt;
-    const count = singleCount;
+    // 单张生成模式数量恒为 1；批量数量只在批量模式（方案规划）中设置
+    const count = 1;
 
     if (!promptText) {
       setError(isEdit ? '请输入图片编辑需求。' : '请输入提示词。');
@@ -648,20 +644,22 @@ export default function ImageStudio() {
         }
       : { applied: false };
 
+    // 生成前预占额度：余额不足在此阻断，不会调用上游（与 BYOK 对话计费完全分离）
     const { isLoggedIn } = useAuthStore.getState();
+    let billingRequestId: string | undefined;
     if (isLoggedIn) {
       try {
-        // 图片生成仍使用 CyImagePro 服务余额（与 BYOK 对话计费完全分离）
-        await assertCanRunImageTask('gpt-image-2', count);
+        billingRequestId = createRequestId('studio');
+        await authorizeImageTask(billingRequestId, count);
       } catch (err: any) {
-        setError(err?.message || '余额不足，请先充值后再生成。');
+        setError(err?.message || '余额不足，请充值后继续使用');
         return;
       }
     }
 
     setSubmitting(true);
     try {
-      await createAndExecuteTask({
+      const created = await createAndExecuteTask({
         prompt: finalPrompt,
         negative_prompt: finalNegative,
         user_prompt_raw: promptText,
@@ -676,25 +674,23 @@ export default function ImageStudio() {
         output_dir: outputDir,
         task_type: isEdit ? 'edit' : 'generate',
         source_images: isEdit ? i2iSources.map(item => item.path) : [],
-        execution_mode: count > 1 ? 'batch' : 'single',
-        ...(count > 1 ? { batch_strategy: 'repeat_same' as const } : {}),
-        task_plan_summary: count > 1 ? `${count} 张（同参数）` : undefined,
+        execution_mode: 'single',
         task_source: 'manual',
       });
+      if (billingRequestId) registerTaskAuthorization(created.id, billingRequestId);
       toastSuccess(`已提交生成任务（${count} 张），可在任务队列查看进度`);
       // 保持原单张页面行为：提交成功后清空本次输入
       if (isEdit) {
         setI2iPrompt('');
         updateI2iSources([]);
-        setI2iCount(1);
         setI2iOpt(emptyOptimization());
       } else {
         setT2iPrompt('');
         setT2iNegative('');
-        setT2iCount(4);
         setT2iOpt(emptyOptimization());
       }
     } catch (err: any) {
+      if (billingRequestId) void settleImageTask(billingRequestId, false, 0, 'create task failed');
       setError(err?.toString() || '创建任务失败');
       toastError(err?.message || '创建任务失败');
     } finally {
@@ -993,23 +989,27 @@ export default function ImageStudio() {
       return;
     }
 
+    // 生成前预占额度：余额不足在此阻断，不会调用上游
     const { isLoggedIn } = useAuthStore.getState();
+    let billingRequestId: string | undefined;
     if (isLoggedIn) {
       try {
-        // 图片生成仍使用 CyImagePro 服务余额（与 BYOK 对话计费完全分离）
-        await assertCanRunImageTask('gpt-image-2', built.total);
+        billingRequestId = createRequestId('batch');
+        await authorizeImageTask(billingRequestId, built.total);
       } catch (err: any) {
-        setError(err?.message || '余额不足，请先充值后再生成。');
+        setError(err?.message || '余额不足，请充值后继续使用');
         return;
       }
     }
 
     setSubmitting(true);
     try {
-      await createAndExecuteTask({ ...built.params, task_source: 'manual' });
+      const created = await createAndExecuteTask({ ...built.params, task_source: 'manual' });
+      if (billingRequestId) registerTaskAuthorization(created.id, billingRequestId);
       toastSuccess(`已提交批量任务（${plans.length} 个方案 / 共 ${built.total} 张），可在任务队列查看进度`);
       // 提交后保留总需求与方案：任务创建时已快照 Prompt，用户可继续查看 / 修改 / 再次生成
     } catch (err: any) {
+      if (billingRequestId) void settleImageTask(billingRequestId, false, 0, 'create task failed');
       setError(err?.toString() || '创建任务失败');
       toastError(err?.message || '创建任务失败');
     } finally {
@@ -1026,7 +1026,6 @@ export default function ImageStudio() {
     const opt = singleOpt;
     const optimizing = opt.status === 'loading';
     const hasResult = opt.status === 'success';
-    const count = isEdit ? i2iCount : t2iCount;
 
     return (
       <section className="settings-card studio-card">
@@ -1105,27 +1104,11 @@ export default function ImageStudio() {
               </div>
             </div>
 
-            <div className="form-row">
-              <div className="form-group">
-                <label>输出格式</label>
-                <select value={format} onChange={e => setFormat(e.target.value)}>
-                  {FORMATS.map(f => <option key={f} value={f}>{f.toUpperCase()}</option>)}
-                </select>
-              </div>
-              <div className="form-group">
-                <label>生成数量</label>
-                <input
-                  type="number"
-                  min={1}
-                  max={isEdit ? 10 : 50}
-                  value={count}
-                  onChange={e => {
-                    const max = isEdit ? 10 : 50;
-                    const v = parseInt(e.target.value || '1', 10) || 1;
-                    (isEdit ? setI2iCount : setT2iCount)(Math.max(1, Math.min(max, v)));
-                  }}
-                />
-              </div>
+            <div className="form-group">
+              <label>输出格式</label>
+              <select value={format} onChange={e => setFormat(e.target.value)}>
+                {FORMATS.map(f => <option key={f} value={f}>{f.toUpperCase()}</option>)}
+              </select>
             </div>
 
             <div className="form-group">
@@ -1170,7 +1153,7 @@ export default function ImageStudio() {
             <div className="summary-divider" />
             <div className="summary-item highlight">
               <span className="summary-label">生成数量</span>
-              <span className="summary-value">{count} 张</span>
+              <span className="summary-value">1 张</span>
             </div>
             <div className="summary-item">
               <span className="summary-label">输出目录</span>
@@ -1181,7 +1164,7 @@ export default function ImageStudio() {
               onClick={() => void submitSingle()}
               disabled={submitting}
             >
-              {submitting ? '创建中...' : isEdit ? (count > 1 ? `开始编辑（${count} 张）` : '开始编辑') : `开始生成 ${count} 张图片`}
+              {submitting ? '创建中...' : isEdit ? '开始编辑' : '开始生成图片'}
             </button>
             <p className="summary-note">
               {isEdit ? '图生图任务将使用所选参考图片进行 AI 编辑。' : '系统将为每张图片单独调用 API，确保稳定性。'}

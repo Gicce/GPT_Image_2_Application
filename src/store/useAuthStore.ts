@@ -1,16 +1,12 @@
 import { create } from 'zustand';
-import type { UserInfo, UserToken } from '../services/serverApi';
+import type { UserInfo } from '../services/serverApi';
 import { serverApi } from '../services/serverApi';
-import { useSettingsStore } from './useSettingsStore';
 import { clearRuntimeConfig } from '../services/runtimeTokenService';
 
 // 全局缓存：group → model_type 的映射，由首次成功的 getModels 调用填充
 let groupTypeMap: Record<string, 'image' | 'agent' | 'postprocess' | 'chat'> = {};
 export function setGroupTypeMap(map: Record<string, 'image' | 'agent' | 'postprocess' | 'chat'>) {
   groupTypeMap = { ...groupTypeMap, ...map };
-  // 立刻同步一次
-  const u = useAuthStore.getState().user;
-  if (u) syncTokensToSettings(u);
 }
 
 export function getGroupTypeMap() {
@@ -25,7 +21,7 @@ export function isImageGroup(group: string): boolean {
   if (group in groupTypeMap) return groupTypeMap[group] === 'image';
   // groupTypeMap 非空但该 group 不在其中：保守归为 chat
   if (Object.keys(groupTypeMap).length > 0) return false;
-  // groupTypeMap 为空（loadModels 未完成）：用正则兜底（仅用于显示，syncTokensToSettings 不依赖此路径）
+  // groupTypeMap 为空（loadModels 未完成）：用正则兜底（仅用于显示）
   return /sora|gpt-?image/i.test(group);
 }
 
@@ -36,35 +32,13 @@ export function displayGroupType(group: string): 'image' | 'agent' | 'postproces
   return 'agent';
 }
 
-// 把后端下发的 api_token 同步到本地 settings，让 Rust 端能读（未登录手动 Token 模式的 fallback）
-// 注意：runtime token 不走此路径，runtime token 通过 Tauri command 写入 Rust 内存
-function syncTokensToSettings(user: UserInfo | null) {
-  if (!user) return;
-  if (Object.keys(groupTypeMap).length === 0) return;
+// V4 统一余额重构：user.tokens / api_token 已随服务端下线，旧 syncTokensToSettings
+// 同步逻辑删除（登录态下的生图鉴权由 runtime-config 下发的 runtime token 负责）。
 
-  const settings = useSettingsStore.getState().settings;
-  const partial: any = {};
-
-  const apiImageToken = user.tokens.find(t => groupTypeMap[t.group] === 'image')?.api_token ?? '';
-  const apiAgentToken = user.tokens.find(t => groupTypeMap[t.group] === 'agent' || groupTypeMap[t.group] === 'chat')?.api_token ?? '';
-
-  if (settings.token !== apiImageToken) partial.token = apiImageToken;
-  if (settings.agent_token !== apiAgentToken) partial.agent_token = apiAgentToken;
-  if (settings.chat_token !== apiAgentToken) partial.chat_token = apiAgentToken;
-  if (Object.keys(partial).length > 0) {
-    useSettingsStore.getState().saveSettings(partial);
-  }
-}
-
-// 重新规范化（兼容老 localStorage 格式：检测到无 tokens 字段直接清空，强制重新登录）
+// 重新规范化（V4：统一余额字段；老 v3 存量用户缺 balance 字段时回落 '0'，
+// 登录后 refreshUser 会立即以服务端数据覆盖）
 function normalizeStored(raw: any): UserInfo | null {
-  if (!raw || !Array.isArray(raw.tokens)) return null;
-  const tokens: UserToken[] = raw.tokens.map((t: any) => ({
-    group: t.group,
-    balance_usd: Number(t.balance_usd ?? 0),
-    api_token: t.api_token ?? '',
-    is_trial: !!t.is_trial,
-  }));
+  if (!raw || !raw.id || !raw.username) return null;
   return {
     id: raw.id,
     username: raw.username,
@@ -72,7 +46,8 @@ function normalizeStored(raw: any): UserInfo | null {
     account_type: raw.account_type,
     trial_expires_at: raw.trial_expires_at ?? null,
     trial_expired: raw.trial_expired ?? false,
-    tokens,
+    balance_usd: raw.balance_usd != null ? String(raw.balance_usd) : '0',
+    trial_credit_usd: raw.trial_credit_usd != null ? String(raw.trial_credit_usd) : '0',
   };
 }
 
@@ -80,6 +55,8 @@ interface AuthState {
   jwt: string | null;
   user: UserInfo | null;
   isLoggedIn: boolean;
+  /** 最近一次 refreshUser 是否失败（非 401）。账户页据此显示“加载失败”，绝不把失败静默显示为 $0 */
+  refreshFailed: boolean;
   authPromptVisible: boolean;
   requestedPage: string | null;
   login: (username: string, password: string) => Promise<void>;
@@ -94,8 +71,8 @@ interface AuthState {
   clearRequestedPage: () => void;
   refreshUser: () => Promise<void>;
   updateAccountType: (account_type: 'trial' | 'normal' | 'paid') => void;
-  updateTokenBalance: (group: string, balance_usd: number) => void;
-  setUserTokens: (tokens: UserToken[]) => void;
+  /** 以后端 authorize/settle/refresh 响应回写统一余额（字符串透传，客户端不累计） */
+  updateBalances: (balanceUsd: string | number, trialCreditUsd: string | number | undefined | null) => void;
   loadFromStorage: () => void;
 }
 
@@ -103,6 +80,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   jwt: null,
   user: null,
   isLoggedIn: false,
+  refreshFailed: false,
   authPromptVisible: false,
   requestedPage: null,
 
@@ -119,7 +97,6 @@ export const useAuthStore = create<AuthState>((set, get) => ({
           return;
         }
         set({ jwt, user, isLoggedIn: true });
-        syncTokensToSettings(user);
       }
     } catch {}
   },
@@ -128,16 +105,14 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     const res = await serverApi.login(username, password);
     localStorage.setItem('cy_jwt', res.access_token);
     localStorage.setItem('cy_user', JSON.stringify(res.user));
-    set({ jwt: res.access_token, user: res.user, isLoggedIn: true });
-    syncTokensToSettings(res.user);
+    set({ jwt: res.access_token, user: res.user, isLoggedIn: true, refreshFailed: false });
   },
 
   register: async (username, email, password, account_type = 'trial') => {
     const res = await serverApi.register(username, email, password, account_type);
     localStorage.setItem('cy_jwt', res.access_token);
     localStorage.setItem('cy_user', JSON.stringify(res.user));
-    set({ jwt: res.access_token, user: res.user, isLoggedIn: true });
-    syncTokensToSettings(res.user);
+    set({ jwt: res.access_token, user: res.user, isLoggedIn: true, refreshFailed: false });
   },
 
   registerSendCode: async (username, email, password, account_type = 'normal') => {
@@ -148,22 +123,20 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     const res = await serverApi.registerVerify(email, code, username, password, account_type);
     localStorage.setItem('cy_jwt', res.access_token);
     localStorage.setItem('cy_user', JSON.stringify(res.user));
-    set({ jwt: res.access_token, user: res.user, isLoggedIn: true });
-    syncTokensToSettings(res.user);
+    set({ jwt: res.access_token, user: res.user, isLoggedIn: true, refreshFailed: false });
   },
 
   upgradeTrial: async () => {
     const updated = await serverApi.upgradeTrial();
     localStorage.setItem('cy_user', JSON.stringify(updated));
     set({ user: updated });
-    syncTokensToSettings(updated);
   },
 
   logout: () => {
     clearRuntimeConfig();
     localStorage.removeItem('cy_jwt');
     localStorage.removeItem('cy_user');
-    set({ jwt: null, user: null, isLoggedIn: false });
+    set({ jwt: null, user: null, isLoggedIn: false, refreshFailed: false });
   },
 
   showAuthPrompt: () => set({ authPromptVisible: true }),
@@ -176,10 +149,14 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     try {
       const user = await serverApi.getMe();
       localStorage.setItem('cy_user', JSON.stringify(user));
-      set({ user });
-      syncTokensToSettings(user);
+      set({ user, refreshFailed: false });
     } catch (e: any) {
-      if (e.status === 401) get().logout();
+      if (e.status === 401) {
+        get().logout();
+        return;
+      }
+      // 保留上一次的 user 数据（若有），但标记失败——UI 必须把“获取失败”与“余额为 0”区分开
+      set({ refreshFailed: true });
     }
   },
 
@@ -191,21 +168,14 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     set({ user: updated });
   },
 
-  updateTokenBalance: (group, balance_usd) => {
+  updateBalances: (balanceUsd, trialCreditUsd) => {
     const user = get().user;
     if (!user) return;
-    const tokens = user.tokens.map(t => t.group === group ? { ...t, balance_usd } : t);
-    const updated = { ...user, tokens };
+    const nextBalance = balanceUsd != null ? String(balanceUsd) : user.balance_usd;
+    const nextTrial = trialCreditUsd != null ? String(trialCreditUsd) : user.trial_credit_usd;
+    if (user.balance_usd === nextBalance && user.trial_credit_usd === nextTrial) return;
+    const updated = { ...user, balance_usd: nextBalance, trial_credit_usd: nextTrial };
     localStorage.setItem('cy_user', JSON.stringify(updated));
     set({ user: updated });
-  },
-
-  setUserTokens: (tokens) => {
-    const user = get().user;
-    if (!user) return;
-    const updated = { ...user, tokens };
-    localStorage.setItem('cy_user', JSON.stringify(updated));
-    set({ user: updated });
-    syncTokensToSettings(updated);
   },
 }));

@@ -240,6 +240,33 @@ pub struct ResponsesShapeDiagnostic {
     /// `provider_response_payload_missing` 判定要求 output_tokens > 0。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_tokens: Option<u64>,
+    /// chat_completions 通道专用：choices[0].finish_reason（stop / length / ...）。
+    /// `finish_reason=length` 是"输出被 max_tokens 截断"的权威信号，
+    /// 也是 planner_output_truncated 分类的第一判据。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finish_reason: Option<String>,
+    /// usage.input_tokens（Responses）/ usage.prompt_tokens（chat）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_tokens: Option<u64>,
+    /// usage.reasoning_tokens（含 Responses usage.output_tokens_details.reasoning_tokens）。
+    /// 推理型模型（DeepSeek v4 / gpt-5.x reasoning）的推理 token 与最终 JSON 共享
+    /// max_output_tokens 预算 —— 这是"JSON 输出到一半被截断"的主要根因指标。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_tokens: Option<u64>,
+    /// 本次 Planner 调用若触发过"针对性自动重试"（截断 / 空文本），记录轨迹。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_retry: Option<PlannerAutoRetryTrace>,
+}
+
+/// Planner 针对性自动重试轨迹（截断 / 空文本各触发一次，总共最多 1 次）。
+#[derive(Debug, Serialize, Clone, Default)]
+pub struct PlannerAutoRetryTrace {
+    /// 触发原因：planner_output_truncated / response_text_missing。
+    #[serde(default)]
+    pub trigger: String,
+    /// 重试结果：recovered / still_truncated / still_empty / request_failed。
+    #[serde(default)]
+    pub result: String,
 }
 
 /// Responses Payload Recovery 执行轨迹。前端 "查看规划详情" 据此展示
@@ -1775,6 +1802,22 @@ fn build_responses_diagnostic(
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
         output_tokens: extract_output_token_count(body),
+        input_tokens: body
+            .get("usage")
+            .and_then(|u| u.get("input_tokens"))
+            .and_then(value_as_u64),
+        reasoning_tokens: body
+            .get("usage")
+            .and_then(|u| u.get("output_tokens_details"))
+            .and_then(|d| d.get("reasoning_tokens"))
+            .and_then(value_as_u64)
+            .or_else(|| {
+                body.get("usage")
+                    .and_then(|u| u.get("reasoning_tokens"))
+                    .and_then(value_as_u64)
+            }),
+        finish_reason: None,
+        auto_retry: None,
     }
 }
 
@@ -2267,6 +2310,83 @@ fn find_first_balanced_object(content: &str) -> Option<(usize, usize)> {
 /// The scan in step 4 correctly handles JSON strings containing `}` or `{`
 /// (which a naive `rfind('}')` would mishandle) and tolerates leading or
 /// trailing prose like "下面是规划结果：{...} 以上为任务规划结果。".
+/// 判断 Planner 文本是否"JSON 输出到一半被截断"。
+///
+/// 判据（结构启发式，不依赖上游元数据）：
+///   - 文本里出现过 object 起始 `{`；
+///   - `extract_json_object_text` 找不到任何平衡对象；
+///   - 逐字符扫描后：要么花括号深度 > 0（对象未闭合），要么停在未闭合的字符串内部。
+///
+/// 典型样例：`{"intent":"EDIT_IMAGE",...,"final_prompt":"少女的白色发丝随风轻扬`
+/// 这类内容绝不允许"补个引号补个 }"式脑补修复 —— final_prompt 本身也没生成完。
+pub(crate) fn looks_like_truncated_json(content: &str) -> bool {
+    let trimmed = content.trim();
+    if trimmed.is_empty() || !trimmed.contains('{') {
+        return false;
+    }
+    if extract_json_object_text(trimmed).is_some() {
+        return false;
+    }
+    let mut in_string = false;
+    let mut escape = false;
+    let mut depth: i64 = 0;
+    let mut saw_object_start = false;
+    for ch in trimmed.chars() {
+        if in_string {
+            if escape {
+                escape = false;
+            } else if ch == '\\' {
+                escape = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match ch {
+            '"' => in_string = true,
+            '{' => {
+                saw_object_start = true;
+                depth += 1;
+            }
+            '}' => depth -= 1,
+            _ => {}
+        }
+    }
+    saw_object_start && (depth > 0 || in_string)
+}
+
+/// Planner JSON 解析失败的细分类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PlannerParseFailureKind {
+    /// 输出被截断（finish_reason=length / status=incomplete / 结构启发式命中）。
+    Truncated,
+    /// 完整文本但不是合法 JSON / 不是 JSON 对象。
+    Malformed,
+}
+
+/// 结合上游元数据 + 结构启发式，把 Planner 解析失败归类为 Truncated / Malformed。
+/// 上游显式信号优先：`finish_reason=length`（chat）与 `status=incomplete`（Responses）
+/// 是协议层面的权威截断信号，即使结构扫描没命中也按截断处理。
+pub(crate) fn classify_planner_parse_failure(
+    content: &str,
+    finish_reason: Option<&str>,
+    response_status: Option<&str>,
+) -> PlannerParseFailureKind {
+    if finish_reason == Some("length") || response_status == Some("incomplete") {
+        return PlannerParseFailureKind::Truncated;
+    }
+    if looks_like_truncated_json(content) {
+        return PlannerParseFailureKind::Truncated;
+    }
+    PlannerParseFailureKind::Malformed
+}
+
+/// 截断重试的 system 追加指令：要求模型压缩输出并确保 JSON 完整闭合。
+const PLANNER_TRUNCATED_RETRY_NUDGE: &str = "\n\n【输出被截断，重新输出】上一次输出因达到长度上限被截断。请重新输出完整结果，并严格遵守：只输出一个完整 JSON 对象，不要输出任何解释或 markdown；recommended_action 压缩到 60 字以内；title 压缩到 20 字以内；final_prompt 压缩到 400 字以内；确保 JSON 以 } 完整结束。";
+
+/// 空文本重试的 system 追加指令。
+const PLANNER_EMPTY_RETRY_NUDGE: &str = "\n\n【重要】上一次没有返回任何文本内容。请直接输出一个完整 JSON 对象，不要输出任何其他内容，确保 JSON 以 } 完整结束。";
+
 fn extract_json_object_text(content: &str) -> Option<String> {
     let trimmed = content.trim();
     if trimmed.is_empty() {
@@ -2681,6 +2801,213 @@ pub async fn list_provider_models(
     }
 }
 
+/// Planner 原始返回诊断日志 —— 必须打印**真实命中的通道**（transport_used），
+/// 而不是硬编码 "responses"。旧版日志把 chat_completions 通道也打成 transport=responses，
+/// 导致"为什么 prefer_responses=false 却显示 responses"的误判。
+/// 同时带上 finish_reason / usage / reasoning_tokens：这是判断"JSON 为什么停止输出"
+/// （截断 vs 模型胡说）的关键证据。preview 限 1000 字符，绝不打印鉴权头 / 完整请求体。
+fn log_planner_raw_response(
+    transport_used: Option<&str>,
+    model: &str,
+    content: &str,
+    diag: Option<&ResponsesShapeDiagnostic>,
+) {
+    let content_preview: String = content.chars().take(1000).collect();
+    let content_has_fence = content.starts_with("```");
+    let content_has_leading_prose =
+        !content.is_empty() && !content.starts_with('{') && !content.starts_with('`');
+    let (finish_reason, response_status, input_tokens, output_tokens, reasoning_tokens) =
+        match diag {
+            Some(d) => (
+                d.finish_reason.as_deref(),
+                d.response_status.as_deref(),
+                d.input_tokens,
+                d.output_tokens,
+                d.reasoning_tokens,
+            ),
+            None => (None, None, None, None, None),
+        };
+    println!(
+        "[PlannerRawResponse] transport={} model={} content_len={} finish_reason={:?} response_status={:?} usage=(input={:?} output={:?} reasoning={:?}) has_fence={} has_leading_prose={} preview={:?}",
+        transport_used.unwrap_or("unknown"),
+        model,
+        content.len(),
+        finish_reason,
+        response_status,
+        input_tokens,
+        output_tokens,
+        reasoning_tokens,
+        content_has_fence,
+        content_has_leading_prose,
+        content_preview,
+    );
+}
+
+/// 从 chat/responses 归一化 body 中提取 Planner 文本（choices[0].message.content）。
+fn planner_content_from_value(value: &serde_json::Value) -> String {
+    value
+        .get("choices")
+        .and_then(|v| v.get(0))
+        .and_then(|v| v.get("message"))
+        .and_then(|v| v.get("content"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string()
+}
+
+/// chat_completions 通道的 Planner 诊断（未经 responses_body_normalize，手工构造）。
+/// 关键字段是 finish_reason：`length` = 输出被 max_tokens 截断的权威信号。
+fn build_chat_completions_diagnostic(value: &serde_json::Value) -> ResponsesShapeDiagnostic {
+    let choice = value.get("choices").and_then(|v| v.get(0));
+    let finish_reason = choice
+        .and_then(|c| c.get("finish_reason"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let usage = value.get("usage");
+    let input_tokens = usage
+        .and_then(|u| u.get("prompt_tokens"))
+        .and_then(value_as_u64);
+    let completion_tokens = usage
+        .and_then(|u| u.get("completion_tokens"))
+        .and_then(value_as_u64);
+    let reasoning_tokens = usage
+        .and_then(|u| u.get("completion_tokens_details"))
+        .and_then(|d| d.get("reasoning_tokens"))
+        .and_then(value_as_u64)
+        .or_else(|| {
+            usage
+                .and_then(|u| u.get("reasoning_tokens"))
+                .and_then(value_as_u64)
+        });
+    ResponsesShapeDiagnostic {
+        http_status: Some(200),
+        has_choices: true,
+        finish_reason,
+        input_tokens,
+        output_tokens: completion_tokens,
+        reasoning_tokens,
+        extracted_text_len: choice
+            .and_then(|c| c.get("message"))
+            .and_then(|m| m.get("content"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.chars().count())
+            .unwrap_or(0),
+        ..ResponsesShapeDiagnostic::default()
+    }
+}
+
+/// Planner 阶段统一失败结果构造器 —— 避免每个分支手写 20 个 None 字段。
+#[allow(clippy::too_many_arguments)]
+fn planner_failure_result(
+    transport_used: Option<&str>,
+    error_kind: &str,
+    error_message: String,
+    status: Option<u16>,
+    raw_output: Option<String>,
+    parser_error: Option<String>,
+    diag: Option<ResponsesShapeDiagnostic>,
+    recovery: Option<ResponsesRecoveryTrace>,
+) -> AgentRunResult {
+    AgentRunResult {
+        ok: false,
+        intent: None,
+        confidence: None,
+        needs_clarification: None,
+        clarification_question: None,
+        recommended_action: None,
+        should_propose_execution: None,
+        final_prompt: None,
+        final_negative_prompt: None,
+        api_kind: None,
+        reply: None,
+        reasoning: None,
+        prompt_tokens: None,
+        completion_tokens: None,
+        error_kind: Some(error_kind.to_string()),
+        error_message: Some(error_message),
+        status,
+        used_local_fallback: Some(false),
+        planner_raw_output: raw_output,
+        planner_parser_error: parser_error,
+        planner_transport: transport_used.map(|s| s.to_string()),
+        planner_diagnostic: diag,
+        planner_recovery: recovery,
+    }
+}
+
+/// Planner 针对性单次重试（截断 / 空文本）。
+///
+/// - 把 nudge 追加到 system 消息后重新请求**同一通道**（transport 与首次一致，
+///   不做协议切换 —— 截断是预算问题，不是协议问题）。
+/// - chat 通道返回原始 body（调用方再构造 chat 诊断）；
+///   responses 通道返回归一化 body + 新诊断。
+/// - 任何请求层错误都返回 None（外层按原始失败结果返回，不再叠加重试）。
+async fn planner_targeted_retry(
+    base_url: &str,
+    token: &str,
+    model: &str,
+    transport: &str,
+    mut chat_body: serde_json::Value,
+    nudge: &str,
+) -> Option<(serde_json::Value, Option<ResponsesShapeDiagnostic>)> {
+    if let Some(messages) = chat_body
+        .get_mut("messages")
+        .and_then(|v| v.as_array_mut())
+    {
+        if let Some(first) = messages.first_mut() {
+            if let Some(sys) = first.get_mut("content") {
+                if let Some(s) = sys.as_str() {
+                    *sys = serde_json::Value::String(format!("{}{}", s, nudge));
+                }
+            }
+        }
+    }
+    println!(
+        "[PlannerRetry] transport={} model={} nudge_len={} triggered",
+        transport,
+        model,
+        nudge.chars().count(),
+    );
+    if transport == "responses" {
+        let messages_array = chat_body
+            .get("messages")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let system_content = messages_array
+            .first()
+            .and_then(|f| f.get("content"))
+            .cloned()
+            .unwrap_or(json!(""));
+        let user_content = messages_array
+            .get(1)
+            .and_then(|f| f.get("content"))
+            .cloned()
+            .unwrap_or(json!(""));
+        let responses_body = json!({
+            "model": model,
+            "input": [
+                { "role": "system", "content": system_content },
+                { "role": "user", "content": user_content }
+            ],
+            "max_output_tokens": 4000
+        });
+        match post_responses_api(base_url, token, responses_body).await {
+            Ok((raw, http_status)) => {
+                let (normalized, diag) = responses_body_normalize(raw, http_status);
+                Some((normalized, Some(diag)))
+            }
+            Err(_) => None,
+        }
+    } else {
+        match post_chat_completions(base_url, token, chat_body).await {
+            Ok(v) => Some((v, None)),
+            Err(_) => None,
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn run_agent_request(payload: AgentRunPayload) -> Result<AgentRunResult, String> {
     if payload.base_url.trim().is_empty()
@@ -2739,7 +3066,11 @@ pub async fn run_agent_request(payload: AgentRunPayload) -> Result<AgentRunResul
                 }
             ],
             "temperature": 0.2,
-            "max_tokens": 1600
+            // 1600 → 4096：deepseek-v4-flash 等推理型模型的思考 token 与最终 JSON
+            // 共享 max_tokens 预算。1600 时中文 final_prompt 稍长就会被推理挤爆，
+            // 表现为 JSON 输出到一半停止（finish_reason=length）。4096 与 Responses
+            // 通道的 4000 max_output_tokens 量级对齐，足够容纳 reasoning + 完整 JSON。
+            "max_tokens": 4096
         })
     } else {
         let mut messages = Vec::new();
@@ -3294,234 +3625,308 @@ pub async fn run_agent_request(payload: AgentRunPayload) -> Result<AgentRunResul
         }
     }
 
-    let value = value.unwrap_or(json!({}));
+    let mut value = value.unwrap_or(json!({}));
     if payload.mode == "interpret" || payload.mode == "plan_task" {
-        let content = value
-            .get("choices")
-            .and_then(|v| v.get(0))
-            .and_then(|v| v.get("message"))
-            .and_then(|v| v.get("content"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .trim()
-            .to_string();
+        // chat_completions 通道没有经过 responses_body_normalize —— 手工构造一份诊断，
+        // 把 finish_reason / usage 带进"查看规划详情"；responses 通道已在 normalize 时填充。
+        if transport_used == Some("chat_completions") && responses_diag.is_none() {
+            responses_diag = Some(build_chat_completions_diagnostic(&value));
+        }
+        let mut content = planner_content_from_value(&value);
+        log_planner_raw_response(transport_used, &payload.model, &content, responses_diag.as_ref());
 
-        // 诊断日志：开发态可以看到模型到底返回了什么形态的内容。
-        // 注意：只截取前 1000 字符，避免日志被超长响应撑爆；同时绝不打印
-        // 任何鉴权头 / 完整请求体。
-        let content_preview: String = content.chars().take(1000).collect();
-        let content_has_fence = content.starts_with("```");
-        let content_has_leading_prose =
-            !content.is_empty() && !content.starts_with('{') && !content.starts_with('`');
-        println!(
-            "[PlannerRawResponse] transport=responses model={} content_len={} has_fence={} has_leading_prose={} preview={:?}",
-            payload.model,
-            content.len(),
-            content_has_fence,
-            content_has_leading_prose,
-            content_preview,
-        );
+        // ===== Planner 解析主循环（首次 + 最多 1 次针对性自动重试）=====
+        // 重试触发条件（总共只允许一次）：
+        //   - 空文本（仅 chat 通道；responses 通道 primary 循环已对空文本重试过）
+        //   - JSON 截断（finish_reason=length / status=incomplete / 结构启发式命中）：
+        //     重试时在 system 追加"压缩输出、确保 JSON 闭合"指令，同一通道重发。
+        // 绝不做的事：对截断 JSON 做脑补补全 —— final_prompt 本身没生成完，
+        // 补出来的只会是残缺任务。截断必须重新请求。
+        let mut auto_retry: Option<PlannerAutoRetryTrace> = None;
+        let mut retry_done = false;
+        let mut parsed: Option<serde_json::Value> = None;
+        let mut failure: Option<(String, String, Option<String>)> = None;
+        let mut strategy = "balanced-object";
+        let mut json_text = String::new();
 
-        if content.is_empty() {
-            // 上游 2xx 但 extract_final_responses_text 拿到空文本。
-            // 这里根据 responses_diag 细分错误类型 ——
-            // 不再统一报 response_text_missing，而是区分：
-            //   - upstream_error（顶层 error / status=failed）
-            //   - response_incomplete（status=incomplete）
-            //   - response_text_missing（reasoning-only / output 空 / message 但无 output_text）
-            let (fine_kind, fine_reason) = match &responses_diag {
-                Some(d) => classify_missing_text(d),
-                None => (
-                    "response_text_missing".to_string(),
-                    "Agent 上游未返回任何可解析文本，请检查模型兼容性或稍后重试。".to_string(),
-                ),
-            };
-            println!(
-                "[PlannerRawResponse] empty_text classified kind={} reason={} diag={:?}",
-                fine_kind, fine_reason, responses_diag,
-            );
-            return Ok(AgentRunResult {
-                ok: false,
-                intent: None,
-                confidence: None,
-                needs_clarification: None,
-                clarification_question: None,
-                recommended_action: None,
-                should_propose_execution: None,
-                final_prompt: None,
-                final_negative_prompt: None,
-                api_kind: None,
-                reply: None,
-                reasoning: None,
-                prompt_tokens: None,
-                completion_tokens: None,
-                error_kind: Some(fine_kind),
-                error_message: Some(fine_reason),
-                status: responses_diag.as_ref().and_then(|d| d.http_status),
-                used_local_fallback: Some(false),
-                planner_raw_output: None,
-                planner_parser_error: None,
-                planner_transport: transport_used.map(|s| s.to_string()),
-                planner_diagnostic: responses_diag.clone(),
-                planner_recovery: if recovery_trace.attempted {
+        loop {
+            if content.is_empty() {
+                if !retry_done && transport_used == Some("chat_completions") {
+                    match planner_targeted_retry(
+                        &payload.base_url,
+                        &payload.token,
+                        &payload.model,
+                        "chat_completions",
+                        body.clone(),
+                        PLANNER_EMPTY_RETRY_NUDGE,
+                    )
+                    .await
+                    {
+                        Some((retry_value, retry_diag)) => {
+                            let retry_content = planner_content_from_value(&retry_value);
+                            let recovered = !retry_content.is_empty();
+                            retry_done = true;
+                            auto_retry = Some(PlannerAutoRetryTrace {
+                                trigger: "response_text_missing".to_string(),
+                                result: if recovered {
+                                    "recovered".to_string()
+                                } else {
+                                    "still_empty".to_string()
+                                },
+                            });
+                            println!(
+                                "[PlannerRetry] empty_text result={}",
+                                auto_retry.as_ref().map(|t| t.result.as_str()).unwrap_or("?")
+                            );
+                            if recovered {
+                                value = retry_value;
+                                responses_diag = Some(
+                                    retry_diag
+                                        .unwrap_or_else(|| build_chat_completions_diagnostic(&value)),
+                                );
+                                content = retry_content;
+                                log_planner_raw_response(
+                                    transport_used,
+                                    &payload.model,
+                                    &content,
+                                    responses_diag.as_ref(),
+                                );
+                                continue;
+                            }
+                        }
+                        None => {
+                            auto_retry = Some(PlannerAutoRetryTrace {
+                                trigger: "response_text_missing".to_string(),
+                                result: "request_failed".to_string(),
+                            });
+                            println!("[PlannerRetry] empty_text request_failed");
+                        }
+                    }
+                }
+                // 上游 2xx 但没有可解析文本。按 diag 细分：
+                //   - upstream_error（顶层 error / status=failed）
+                //   - response_incomplete（status=incomplete）
+                //   - response_text_missing（reasoning-only / output 空）
+                let (fine_kind, fine_reason) = match &responses_diag {
+                    Some(d) => classify_missing_text(d),
+                    None => (
+                        "response_text_missing".to_string(),
+                        "Agent 上游未返回任何可解析文本，请检查模型兼容性或稍后重试。".to_string(),
+                    ),
+                };
+                println!(
+                    "[PlannerRawResponse] empty_text classified kind={} reason={} auto_retry={:?}",
+                    fine_kind, fine_reason, auto_retry,
+                );
+                let mut diag = responses_diag.clone();
+                if let Some(d) = diag.as_mut() {
+                    d.auto_retry = auto_retry.clone();
+                }
+                return Ok(planner_failure_result(
+                    transport_used,
+                    &fine_kind,
+                    fine_reason,
+                    responses_diag.as_ref().and_then(|d| d.http_status),
+                    None,
+                    None,
+                    diag,
+                    if recovery_trace.attempted {
+                        Some(recovery_trace.clone())
+                    } else {
+                        None
+                    },
+                ));
+            }
+
+            let finish_reason = responses_diag.as_ref().and_then(|d| d.finish_reason.as_deref());
+            let response_status = responses_diag
+                .as_ref()
+                .and_then(|d| d.response_status.as_deref());
+
+            // JSON 提取（纯 JSON / markdown fence / 前后说明文字 → 平衡对象）
+            // + serde 解析。两个失败点统一进入 Err((kind, parser_error))。
+            let parse_outcome: Result<serde_json::Value, (String, Option<String>)> =
+                match extract_json_object_text(&content) {
+                    Some(text) => {
+                        json_text = text;
+                        strategy = if json_text == content.trim() {
+                            "direct-json"
+                        } else if content.starts_with("```") {
+                            "code-fence"
+                        } else {
+                            "balanced-object"
+                        };
+                        match serde_json::from_str::<serde_json::Value>(&json_text) {
+                            Ok(v) if v.is_object() => Ok(v),
+                            Ok(other) => {
+                                let kind_label = match &other {
+                                    serde_json::Value::Null => "null",
+                                    serde_json::Value::Bool(_) => "bool",
+                                    serde_json::Value::Number(_) => "number",
+                                    serde_json::Value::String(_) => "string",
+                                    serde_json::Value::Array(_) => "array",
+                                    serde_json::Value::Object(_) => "object",
+                                };
+                                Err((
+                                    "planner_schema_invalid".to_string(),
+                                    Some(format!("解析结果不是 JSON 对象（实际类型：{}）", kind_label)),
+                                ))
+                            }
+                            Err(err) => Err((
+                                "planner_json_parse_failed".to_string(),
+                                Some(format!("{}", err)),
+                            )),
+                        }
+                    }
+                    None => Err((
+                        "planner_json_parse_failed".to_string(),
+                        Some("未找到可解析的 JSON 对象".to_string()),
+                    )),
+                };
+
+            match parse_outcome {
+                Ok(v) => {
+                    println!(
+                        "[PlannerParser] strategy={} success json_len={} fields={} auto_retry={:?}",
+                        strategy,
+                        json_text.len(),
+                        v.as_object().map(|m| m.len()).unwrap_or(0),
+                        auto_retry.as_ref().map(|t| t.result.as_str()),
+                    );
+                    parsed = Some(v);
+                    break;
+                }
+                Err((kind, parser_error)) => {
+                    // 关键分类：截断 vs 格式错误 —— 二者的修复路径完全不同。
+                    let failure_kind =
+                        classify_planner_parse_failure(&content, finish_reason, response_status);
+                    let truncated = failure_kind == PlannerParseFailureKind::Truncated;
+                    println!(
+                        "[PlannerParser] strategy={} failed kind={} truncated={} parser_error={:?} json_text_len={} content_len={} finish_reason={:?} response_status={:?}",
+                        strategy,
+                        kind,
+                        truncated,
+                        parser_error,
+                        json_text.len(),
+                        content.len(),
+                        finish_reason,
+                        response_status,
+                    );
+                    if truncated && !retry_done && transport_used.is_some() {
+                        let transport = transport_used.unwrap_or("chat_completions");
+                        match planner_targeted_retry(
+                            &payload.base_url,
+                            &payload.token,
+                            &payload.model,
+                            transport,
+                            body.clone(),
+                            PLANNER_TRUNCATED_RETRY_NUDGE,
+                        )
+                        .await
+                        {
+                            Some((retry_value, retry_diag)) => {
+                                let retry_content = planner_content_from_value(&retry_value);
+                                let retry_recovered = extract_json_object_text(&retry_content)
+                                    .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+                                    .map(|v| v.is_object())
+                                    .unwrap_or(false);
+                                retry_done = true;
+                                auto_retry = Some(PlannerAutoRetryTrace {
+                                    trigger: "planner_output_truncated".to_string(),
+                                    result: if retry_recovered {
+                                        "recovered".to_string()
+                                    } else {
+                                        "still_truncated".to_string()
+                                    },
+                                });
+                                println!(
+                                    "[PlannerRetry] truncated result={}",
+                                    auto_retry.as_ref().map(|t| t.result.as_str()).unwrap_or("?")
+                                );
+                                // 无论是否恢复都用重试结果继续下一轮：
+                                // 恢复 → 走成功；未恢复 → retry_done 已置位，走最终截断错误。
+                                value = retry_value;
+                                match retry_diag {
+                                    Some(d) => responses_diag = Some(d),
+                                    None => responses_diag = Some(build_chat_completions_diagnostic(&value)),
+                                }
+                                content = retry_content;
+                                log_planner_raw_response(
+                                    transport_used,
+                                    &payload.model,
+                                    &content,
+                                    responses_diag.as_ref(),
+                                );
+                                continue;
+                            }
+                            None => {
+                                auto_retry = Some(PlannerAutoRetryTrace {
+                                    trigger: "planner_output_truncated".to_string(),
+                                    result: "request_failed".to_string(),
+                                });
+                                println!("[PlannerRetry] truncated request_failed");
+                            }
+                        }
+                    }
+                    let (final_kind, final_message) = if truncated {
+                        (
+                            "planner_output_truncated".to_string(),
+                            if auto_retry.is_some() {
+                                "规划结果被截断，系统已自动重试一次仍未获得完整 JSON，请重新规划或修改任务后重试。".to_string()
+                            } else {
+                                "规划结果被截断（输出长度达到上限），请重新规划或修改任务后重试。".to_string()
+                            },
+                        )
+                    } else {
+                        (
+                            kind,
+                            "规划模型返回了内容，但不是合法任务 JSON。".to_string(),
+                        )
+                    };
+                    failure = Some((final_kind, final_message, parser_error));
+                    break;
+                }
+            }
+        }
+
+        if let Some((kind, message, parser_error)) = failure {
+            // 安全截断：避免上游返回异常长内容时把诊断卡撑爆或污染日志。
+            // 仅截取前 4000 字符（按 Unicode scalar），对模型输出已足够。
+            let raw_output_truncated: String = content.chars().take(4000).collect();
+            let mut diag = responses_diag.clone();
+            if let Some(d) = diag.as_mut() {
+                d.auto_retry = auto_retry.clone();
+            }
+            return Ok(planner_failure_result(
+                transport_used,
+                &kind,
+                message,
+                None,
+                Some(raw_output_truncated),
+                parser_error,
+                diag,
+                if recovery_trace.attempted {
                     Some(recovery_trace.clone())
                 } else {
                     None
                 },
-            });
+            ));
         }
 
-        // 安全截断：避免上游返回异常长内容时把诊断卡撑爆或污染日志。
-        // 仅截取前 4000 字符（按 Unicode scalar），对模型输出已足够。
-        let raw_output_truncated: String = content.chars().take(4000).collect();
-
-        let json_text = match extract_json_object_text(&content) {
-            Some(text) => text,
+        let parsed = match parsed {
+            Some(v) => v,
+            // 理论不可达：循环必然以 parsed 或 failure 结束。防御性兜底。
             None => {
-                println!(
-                    "[PlannerParser] strategy=none failed: no balanced JSON object found, content_len={}",
-                    content.len()
-                );
-                return Ok(AgentRunResult {
-                    ok: false,
-                    intent: None,
-                    confidence: None,
-                    needs_clarification: None,
-                    clarification_question: None,
-                    recommended_action: None,
-                    should_propose_execution: None,
-                    final_prompt: None,
-                    final_negative_prompt: None,
-                    api_kind: None,
-                    reply: None,
-                    reasoning: None,
-                    prompt_tokens: None,
-                    completion_tokens: None,
-                    error_kind: Some("planner_json_parse_failed".to_string()),
-                    error_message: Some(
-                        "Agent 理解接口返回的内容不是合法 JSON，请检查模型兼容性".to_string(),
-                    ),
-                    status: None,
-                    used_local_fallback: Some(false),
-                    planner_raw_output: Some(raw_output_truncated.clone()),
-                    planner_parser_error: Some("未找到可解析的 JSON 对象".to_string()),
-                    planner_transport: transport_used.map(|s| s.to_string()),
-                    planner_diagnostic: responses_diag.clone(),
-                    planner_recovery: if recovery_trace.attempted {
-                        Some(recovery_trace.clone())
-                    } else {
-                        None
-                    },
-                });
-            }
-        };
-
-        let strategy = if json_text.len() == content.trim().len() && json_text == content.trim() {
-            "direct-json"
-        } else if content_has_fence {
-            "code-fence"
-        } else {
-            "balanced-object"
-        };
-
-        let parsed: serde_json::Value = match serde_json::from_str::<serde_json::Value>(&json_text)
-        {
-            Ok(v) if v.is_object() => {
-                println!(
-                    "[PlannerParser] strategy={} success json_len={} fields={}",
-                    strategy,
-                    json_text.len(),
-                    v.as_object().map(|m| m.len()).unwrap_or(0),
-                );
-                v
-            }
-            Ok(other) => {
-                let kind_label = match other {
-                    serde_json::Value::Null => "null",
-                    serde_json::Value::Bool(_) => "bool",
-                    serde_json::Value::Number(_) => "number",
-                    serde_json::Value::String(_) => "string",
-                    serde_json::Value::Array(_) => "array",
-                    serde_json::Value::Object(_) => "object",
-                };
-                println!(
-                    "[PlannerParser] strategy={} failed: parsed value is not an object (kind={})",
-                    strategy, kind_label,
-                );
-                return Ok(AgentRunResult {
-                    ok: false,
-                    intent: None,
-                    confidence: None,
-                    needs_clarification: None,
-                    clarification_question: None,
-                    recommended_action: None,
-                    should_propose_execution: None,
-                    final_prompt: None,
-                    final_negative_prompt: None,
-                    api_kind: None,
-                    reply: None,
-                    reasoning: None,
-                    prompt_tokens: None,
-                    completion_tokens: None,
-                    error_kind: Some("planner_schema_invalid".to_string()),
-                    error_message: Some(
-                        "Agent 规划输出不是 JSON 对象，请检查模型兼容性。".to_string(),
-                    ),
-                    status: None,
-                    used_local_fallback: Some(false),
-                    planner_raw_output: Some(raw_output_truncated.clone()),
-                    planner_parser_error: Some(format!(
-                        "解析结果不是 JSON 对象（实际类型：{}）",
-                        kind_label
-                    )),
-                    planner_transport: transport_used.map(|s| s.to_string()),
-                    planner_diagnostic: responses_diag.clone(),
-                    planner_recovery: if recovery_trace.attempted {
-                        Some(recovery_trace.clone())
-                    } else {
-                        None
-                    },
-                });
-            }
-            Err(err) => {
-                println!(
-                    "[PlannerParser] strategy={} failed: parse error={} json_text_len={} json_preview={:?}",
-                    strategy,
-                    err,
-                    json_text.len(),
-                    json_text.chars().take(500).collect::<String>(),
-                );
-                return Ok(AgentRunResult {
-                    ok: false,
-                    intent: None,
-                    confidence: None,
-                    needs_clarification: None,
-                    clarification_question: None,
-                    recommended_action: None,
-                    should_propose_execution: None,
-                    final_prompt: None,
-                    final_negative_prompt: None,
-                    api_kind: None,
-                    reply: None,
-                    reasoning: None,
-                    prompt_tokens: None,
-                    completion_tokens: None,
-                    error_kind: Some("planner_json_parse_failed".to_string()),
-                    error_message: Some(
-                        "Agent 理解接口返回的内容不是合法 JSON，请检查模型兼容性".to_string(),
-                    ),
-                    status: None,
-                    used_local_fallback: Some(false),
-                    planner_raw_output: Some(raw_output_truncated.clone()),
-                    planner_parser_error: Some(format!("{}", err)),
-                    planner_transport: transport_used.map(|s| s.to_string()),
-                    planner_diagnostic: responses_diag.clone(),
-                    planner_recovery: if recovery_trace.attempted {
-                        Some(recovery_trace.clone())
-                    } else {
-                        None
-                    },
-                });
+                return Ok(planner_failure_result(
+                    transport_used,
+                    "planner_json_parse_failed",
+                    "规划结果解析异常终止。".to_string(),
+                    None,
+                    None,
+                    None,
+                    responses_diag.clone(),
+                    None,
+                ))
             }
         };
         return Ok(AgentRunResult {
@@ -4177,12 +4582,15 @@ fn is_reference_bound_detail_task_text(text: &str) -> bool {
     has_model_signal && has_product_signal && has_binding_signal
 }
 
-/// 批量任务最终生成数量：携带 batch_items 时以子项数为准（防止 count 与子项不一致悄悄放大/回落）
-fn resolve_task_count(count: usize, batch_items_len: usize) -> usize {
-    if batch_items_len == 0 {
-        count
-    } else {
+/// 任务最终生成数量：携带 batch_items 时以子项数为准（防止 count 与子项不一致悄悄放大/回落）；
+/// single 模式（无 batch_items）强制为 1——mode 是语义来源，不信任客户端 count
+fn resolve_task_count(count: usize, batch_items_len: usize, execution_mode: &str) -> usize {
+    if batch_items_len > 0 {
         batch_items_len
+    } else if execution_mode == "single" {
+        1
+    } else {
+        count
     }
 }
 
@@ -4218,9 +4626,16 @@ pub fn create_task(app: tauri::AppHandle, params: CreateTaskParams) -> Result<Ta
     let prompt = params.prompt.clone();
     let negative_prompt = params.negative_prompt.clone();
 
+    let execution_mode = if params.execution_mode.trim().is_empty() {
+        "single".to_string()
+    } else {
+        params.execution_mode.trim().to_string()
+    };
+
     // 携带 batch_items 的批量任务（variant_set / multi_input）：生成数量必须与子项数严格一致，
-    // 否则 task_runner 的 effective_prompt 会把多余指标回落到基础 Prompt，悄悄多生成图片（历史 3->4 的残留通道）
-    let count = resolve_task_count(params.count, params.batch_items.len());
+    // 否则 task_runner 的 effective_prompt 会把多余指标回落到基础 Prompt，悄悄多生成图片（历史 3->4 的残留通道）。
+    // single 模式恒为 1（服务端兜底，不信任客户端 count）
+    let count = resolve_task_count(params.count, params.batch_items.len(), &execution_mode);
 
     let task = Task {
         id,
@@ -4262,11 +4677,7 @@ pub fn create_task(app: tauri::AppHandle, params: CreateTaskParams) -> Result<Ta
         failed_count: 0,
         task_type,
         source_images: params.source_images.clone(),
-        execution_mode: if params.execution_mode.trim().is_empty() {
-            "single".to_string()
-        } else {
-            params.execution_mode.clone()
-        },
+        execution_mode,
         batch_strategy: params.batch_strategy.clone(),
         task_plan_summary: params.task_plan_summary.clone(),
         batch_items: params.batch_items.clone(),
@@ -6096,6 +6507,78 @@ mod tests {
     }
 
     // ========================================================================
+    // Planner 截断检测（planner_output_truncated）—— 本轮修复的核心回归防线。
+    // 截断 JSON 与"模型胡说"必须区分为不同 error_kind，且绝不允许脑补补全。
+    // ========================================================================
+
+    #[test]
+    fn truncated_json_detected_when_stops_mid_string() {
+        // 实际日志样例：停在 final_prompt 字符串内部，没有闭引号也没有 }
+        let s = "{\n  \"intent\": \"EDIT_IMAGE\",\n  \"title\": \"夜晚动态白毛";
+        assert!(looks_like_truncated_json(s));
+        assert!(extract_json_object_text(s).is_none());
+    }
+
+    #[test]
+    fn truncated_json_detected_when_stops_after_unclosed_object() {
+        // 字符串完整闭合了，但对象本身没有闭合
+        let s = "{\"intent\": \"EDIT_IMAGE\", \"final_prompt\": \"白发少女\"";
+        assert!(looks_like_truncated_json(s));
+    }
+
+    #[test]
+    fn truncated_json_not_flagged_for_complete_json() {
+        let s = "{\"intent\": \"EDIT_IMAGE\", \"final_prompt\": \"白发少女\"}";
+        assert!(!looks_like_truncated_json(s));
+    }
+
+    #[test]
+    fn truncated_json_not_flagged_for_prose_without_object() {
+        // 模型输出解释性文字（没有任何 {）→ 是格式错误，不是截断
+        let s = "我认为应该生成一张 LOL 对战图，但没给出 JSON。";
+        assert!(!looks_like_truncated_json(s));
+    }
+
+    #[test]
+    fn truncated_json_handles_braces_inside_strings() {
+        // 字符串里的 { } 不应干扰深度扫描
+        let s = "{\"final_prompt\": \"构图 {城市} 与 {人物}";
+        assert!(looks_like_truncated_json(s));
+    }
+
+    #[test]
+    fn classify_failure_prefers_explicit_length_signal() {
+        // finish_reason=length 是权威截断信号，即使结构扫描不命中也按截断处理
+        // （例如模型恰好停在 } 之后但 JSON 中间缺失）。
+        assert_eq!(
+            classify_planner_parse_failure("garbage", Some("length"), None),
+            PlannerParseFailureKind::Truncated
+        );
+        // Responses status=incomplete 同理。
+        assert_eq!(
+            classify_planner_parse_failure("garbage", None, Some("incomplete")),
+            PlannerParseFailureKind::Truncated
+        );
+        // finish_reason=stop + 纯文字 → 格式错误。
+        assert_eq!(
+            classify_planner_parse_failure("就是不想给 JSON", Some("stop"), Some("completed")),
+            PlannerParseFailureKind::Malformed
+        );
+    }
+
+    #[test]
+    fn classify_failure_structural_heuristic_without_metadata() {
+        assert_eq!(
+            classify_planner_parse_failure("{\"intent\": \"EDIT", None, None),
+            PlannerParseFailureKind::Truncated
+        );
+        assert_eq!(
+            classify_planner_parse_failure("没有任何对象的胡话", None, None),
+            PlannerParseFailureKind::Malformed
+        );
+    }
+
+    // ========================================================================
     // Responses Adapter fixture 测试 —— 验证 extract_final_responses_text /
     // build_responses_diagnostic / classify_missing_text 在各种真实上游
     // 返回 shape 下的行为。这些测试是 "response_text_missing 根治" 的回归防线。
@@ -6837,16 +7320,23 @@ mod tests {
     #[test]
     fn resolve_task_count_batch_items_win() {
         // 3 条 Prompt = 3 项，count 传入多少都被钳位到子项数
-        assert_eq!(resolve_task_count(3, 3), 3);
-        assert_eq!(resolve_task_count(4, 3), 3);
-        assert_eq!(resolve_task_count(0, 3), 3);
+        assert_eq!(resolve_task_count(3, 3, "batch"), 3);
+        assert_eq!(resolve_task_count(4, 3, "batch"), 3);
+        assert_eq!(resolve_task_count(0, 3, "single"), 3);
     }
 
     #[test]
-    fn resolve_task_count_without_batch_items_uses_count() {
-        // 同 Prompt 多变体 / 单张：没有 batch_items，count 原样生效
-        assert_eq!(resolve_task_count(4, 0), 4);
-        assert_eq!(resolve_task_count(1, 0), 1);
+    fn resolve_task_count_single_forced_to_one() {
+        // 单张模式：即使客户端误传 count=4 也强制为 1
+        assert_eq!(resolve_task_count(4, 0, "single"), 1);
+        assert_eq!(resolve_task_count(1, 0, "single"), 1);
+    }
+
+    #[test]
+    fn resolve_task_count_batch_without_items_uses_count() {
+        // 历史 repeat_same 批量任务（无 batch_items）：count 原样生效
+        assert_eq!(resolve_task_count(4, 0, "batch"), 4);
+        assert_eq!(resolve_task_count(1, 0, "batch"), 1);
     }
 
     // ---------------------------------------------------------------- --------

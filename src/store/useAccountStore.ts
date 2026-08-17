@@ -3,33 +3,27 @@ import { serverApi, type AccountEntitlements } from '../services/serverApi';
 import { useAuthStore } from './useAuthStore';
 
 export interface AccountEntitlementState {
-  // 权益数据
-  balances: Record<string, number>;  // { "image": 3.0, "agent": 3.0, "postprocess": 0.0 }
-  enabledFeatures: Record<string, boolean>;  // { "image": true, "agent": true, "postprocess": false }
-  enabledModels: Record<string, string[]>;  // { "image": ["gpt-image-2"], "agent": ["gpt-4o"] }
+  /** 统一余额（字符串透传，展示时 parseFloat） */
+  balanceUsd: string;
+  trialCreditUsd: string;
+  totalCreditUsd: string;
+  enabledFeatures: Record<string, boolean>;  // { "image": true }
+  enabledModels: string[];  // ["gpt-image-2"]
 
-  // 加载状态
   loading: boolean;
   error: string | null;
   lastFetched: number | null;
 
-  // 方法
   fetchEntitlements: () => Promise<void>;
   clearEntitlements: () => void;
-
-  // 便捷方法
-  getFeatureStatus: (feature: 'image' | 'agent' | 'postprocess') => {
-    enabled: boolean;
-    balance: number;
-    hasBalance: boolean;
-    statusText: string;
-  };
 }
 
-export const useAccountStore = create<AccountEntitlementState>((set, get) => ({
-  balances: {},
+export const useAccountStore = create<AccountEntitlementState>((set) => ({
+  balanceUsd: '0',
+  trialCreditUsd: '0',
+  totalCreditUsd: '0',
   enabledFeatures: {},
-  enabledModels: {},
+  enabledModels: [],
   loading: false,
   error: null,
   lastFetched: null,
@@ -38,9 +32,11 @@ export const useAccountStore = create<AccountEntitlementState>((set, get) => ({
     const { isLoggedIn } = useAuthStore.getState();
     if (!isLoggedIn) {
       set({
-        balances: {},
+        balanceUsd: '0',
+        trialCreditUsd: '0',
+        totalCreditUsd: '0',
         enabledFeatures: {},
-        enabledModels: {},
+        enabledModels: [],
         loading: false,
         error: null,
         lastFetched: null,
@@ -52,19 +48,14 @@ export const useAccountStore = create<AccountEntitlementState>((set, get) => ({
     try {
       const data: AccountEntitlements = await serverApi.getAccountEntitlements();
       set({
-        balances: data.balances || {},
+        balanceUsd: data.balance_usd ?? '0',
+        trialCreditUsd: data.trial_credit_usd ?? '0',
+        totalCreditUsd: data.total_credit_usd ?? '0',
         enabledFeatures: data.enabled_features || {},
-        enabledModels: data.enabled_models || {},
+        enabledModels: Array.isArray(data.enabled_models) ? data.enabled_models : [],
         loading: false,
         error: null,
         lastFetched: Date.now(),
-      });
-
-      // 调试日志
-      console.log('[account] 权益数据已更新:', {
-        balances: data.balances,
-        enabledFeatures: data.enabled_features,
-        enabledModels: data.enabled_models,
       });
     } catch (err: any) {
       console.error('[account] 获取权益失败:', err);
@@ -77,30 +68,14 @@ export const useAccountStore = create<AccountEntitlementState>((set, get) => ({
 
   clearEntitlements: () => {
     set({
-      balances: {},
+      balanceUsd: '0',
+      trialCreditUsd: '0',
+      totalCreditUsd: '0',
       enabledFeatures: {},
-      enabledModels: {},
+      enabledModels: [],
       loading: false,
       error: null,
       lastFetched: null,
     });
-  },
-
-  getFeatureStatus: (feature: 'image' | 'agent' | 'postprocess') => {
-    const state = get();
-    const enabled = state.enabledFeatures[feature] ?? false;
-    const balance = state.balances[feature] ?? 0;
-    const hasBalance = balance > 0;
-
-    let statusText = '';
-    if (!enabled) {
-      statusText = '未开通';
-    } else if (!hasBalance) {
-      statusText = '已开通，余额不足';
-    } else {
-      statusText = '已开通';
-    }
-
-    return { enabled, balance, hasBalance, statusText };
   },
 }));

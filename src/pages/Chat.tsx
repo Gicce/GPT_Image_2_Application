@@ -17,6 +17,7 @@ import { api } from '../services/api';
 import { serverApi } from '../services/serverApi';
 import type { ChatAttachment, ChatConversation, ChatMessage, ChatMode, GallerySearchCriteria, GallerySearchResult, GallerySearchState, ImageRecord } from '../types';
 import TaskMessageCard from '../components/TaskMessageCard';
+import { collectConversationImages, type ConversationImageOption } from '../utils/agent/taskSourceImage';
 import { marked } from 'marked';
 import hljs from 'highlight.js/lib/core';
 import bash from 'highlight.js/lib/languages/bash';
@@ -372,6 +373,7 @@ export default function Chat() {
   const editTaskMessage = useChatStore(state => state.editTaskMessage);
   const retryTaskMessage = useChatStore(state => state.retryTaskMessage);
   const replanTaskMessage = useChatStore(state => state.replanTaskMessage);
+  const switchTaskSourceImage = useChatStore(state => state.switchTaskSourceImage);
   const syncTaskMessage = useChatStore(state => state.syncTaskMessage);
   const setConversationChatMode = useChatStore(state => state.setConversationChatMode);
   const setConversationAgentSelection = useChatStore(state => state.setConversationAgentSelection);
@@ -752,6 +754,22 @@ export default function Chat() {
     return activeConv.messages.slice(-visibleMessageCount);
   }, [activeConv, visibleMessageCount]);
   const hiddenMessageCount = activeConv ? Math.max(0, activeConv.messages.length - visibleMessageCount) : 0;
+
+  // 当前对话的可用图片（生成图 + 用户上传），供任务卡"切换图片"Picker 使用。
+  // 按 memo 缓存：仅随消息列表变化重算。
+  const sourceImageOptions = useMemo(
+    () => collectConversationImages(activeConv?.messages || []),
+    [activeConv?.messages],
+  );
+  const handleSwitchSourceImage = useCallback((taskId: string, image: ConversationImageOption) => {
+    if (!activeId) return;
+    switchTaskSourceImage(activeId, taskId, {
+      imageId: image.imageId,
+      localPath: image.localPath,
+      url: image.url,
+      fileName: image.fileName,
+    });
+  }, [activeId, switchTaskSourceImage]);
 
   // 一键复制全部对话：从 message 数据生成干净 Markdown（禁止 DOM 复制）。
   const handleCopyConversation = useCallback(async () => {
@@ -1746,7 +1764,8 @@ export default function Chat() {
     if (!activeId) return;
     // 进入"基于此图编辑"上下文：保留在当前聊天，切换到任务模式，
     // 后续用户输入修改要求时，Agent 会创建 EDIT Task 而不是 GENERATION。
-    useChatStore.getState().setActiveImageId(activeId, imageId || imageIdFromPath(imagePath) || imagePath, imagePath);
+    // source='explicit'：用户手动绑定，任务卡会显示"已手动选择"而非"上一张图片"。
+    useChatStore.getState().setActiveImageId(activeId, imageId || imageIdFromPath(imagePath) || imagePath, imagePath, 'explicit');
     useChatStore.getState().setConversationChatMode(activeId, 'task');
     // 提示用户当前已绑定源图
     useChatStore.setState({ error: null });
@@ -1954,6 +1973,8 @@ export default function Chat() {
                   onCancelTaskMessage={handleCancelTaskMessage}
                   onModifyTaskMessage={handleModifyTaskMessage}
                   onReplanTaskMessage={handleReplanTaskMessage}
+                  sourceImageOptions={sourceImageOptions}
+                  onSwitchSourceImageTask={handleSwitchSourceImage}
                 />
               ))}
               </>
@@ -2409,6 +2430,7 @@ const MessageItem = memo(function MessageItem({
   onConfirmProposal, onCancelProposal, onUpdateProposal, onToggleProposalBatchItem,
   onRetryTaskMessage, onViewTask, onEditTaskImage, onRegenerateTask,
   onConfirmTaskMessage, onCancelTaskMessage, onModifyTaskMessage, onReplanTaskMessage,
+  sourceImageOptions, onSwitchSourceImageTask,
 }: {
   message: ChatMessage;
   isStreaming: boolean;
@@ -2438,6 +2460,9 @@ const MessageItem = memo(function MessageItem({
   onCancelTaskMessage: (messageId: string, taskId: string) => void;
   onModifyTaskMessage: (messageId: string, taskId: string, finalPrompt: string, finalNegativePrompt: string) => void;
   onReplanTaskMessage: (messageId: string, taskId: string, newText?: string) => void;
+  /** 当前对话的可用图片（生成 + 上传），供任务卡"切换图片"Picker 使用。 */
+  sourceImageOptions: ConversationImageOption[];
+  onSwitchSourceImageTask: (taskId: string, image: ConversationImageOption) => void;
 }) {
   const isUser = message.role === 'user';
   const [reasoningOpen, setReasoningOpen] = useState(true);
@@ -2596,6 +2621,8 @@ const MessageItem = memo(function MessageItem({
             onCancel={() => onCancelTaskMessage(message.id, message.task_message!.taskId)}
             onModify={(finalPrompt, finalNegativePrompt) => onModifyTaskMessage(message.id, message.task_message!.taskId, finalPrompt, finalNegativePrompt)}
             onReplan={(newText) => onReplanTaskMessage(message.id, message.task_message!.taskId, newText)}
+            sourceImageOptions={sourceImageOptions}
+            onSwitchSourceImage={(image) => onSwitchSourceImageTask(message.task_message!.taskId, image)}
           />
         )}
         {/* Token badge */}

@@ -1,157 +1,146 @@
 /**
- * billingService.ts - Lightweight billing service for commercial loop
+ * billingService.ts - Image2 统一余额计费（V4 两阶段：authorize → settle）
  *
- * Responsibilities:
- * - Pre-run balance check
- * - Post-run usage reporting
- * - Cost estimation
+ * 服务端已从「多模型分组余额」重构为「Image2 单模型 + 统一余额」
+ * （balance_usd 现金 + trial_credit_usd 试用）。计费架构不变：
+ * 客户端直连上游生图，服务端记账——
+ * - 生成前：authorize 预占额度（余额不足 402，客户端显示固定文案）
+ * - 生成后：settle 按实际成功数结算（幂等；服务端对超时未 settle
+ *   的预占有 2 小时自动释放兜底）
  *
  * Does NOT:
  * - Upload images to server
  * - Proxy image generation requests
  * - Handle payment flows (use serverApi directly)
+ * - 触碰 Agent / BYOK / 本地 Provider（那是另一套独立的计费体系）
  */
 
-import { serverApi, UsageEstimateItem, UsageReportResult, UsageEstimate, ServerModel } from './serverApi';
+import { serverApi, UsageAuthorizeResult, UsageSettleResult } from './serverApi';
 import { useAuthStore } from '../store/useAuthStore';
 
-export type BillingGroup = 'image' | 'agent' | 'postprocess';
+/** 402 / QUOTA_EXHAUSTED 的统一用户文案 */
+export const QUOTA_EXHAUSTED_MESSAGE = '余额不足，请充值后继续使用';
 
-export interface BalanceCheckResult {
-  canRun: boolean;
-  group: string;
-  balance_usd: number;
-  required_usd: number;
-  message?: string;
-}
-
-export interface ImageUsagePayload {
-  model: string;
-  image_count: number;
+export interface UnifiedBalance {
+  balanceUsd: number;
+  trialCreditUsd: number;
 }
 
 /**
- * Get user's balance for a specific group
+ * 读取统一余额（仅展示用）。
+ * 后端返回字符串，parseFloat 后直接展示；
+ * 客户端绝不做余额加减累计——一切以后端 authorize/settle 响应回写为准。
  */
-export function getGroupBalance(group: string): number {
+export function getUnifiedBalance(): UnifiedBalance {
   const { user } = useAuthStore.getState();
-  if (!user?.tokens) return 0;
-  const token = user.tokens.find(t => t.group === group);
-  return token?.balance_usd ?? 0;
-}
-
-/**
- * Get all group balances
- */
-export function getAllBalances(): Record<string, number> {
-  const { user } = useAuthStore.getState();
-  if (!user?.tokens) return {};
-  return Object.fromEntries(user.tokens.map(t => [t.group, t.balance_usd]));
-}
-
-/**
- * Check if user has enough balance for a given cost in a group
- */
-export function checkBalance(group: string, requiredUsd: number): BalanceCheckResult {
-  const balance = getGroupBalance(group);
-  const canRun = balance >= requiredUsd;
   return {
-    canRun,
-    group,
-    balance_usd: balance,
-    required_usd: requiredUsd,
-    message: canRun ? undefined : `${group} 余额不足: 需要 $${requiredUsd.toFixed(4)}, 当前 $${balance.toFixed(2)}`,
+    balanceUsd: parseFloat(user?.balance_usd ?? '0') || 0,
+    trialCreditUsd: parseFloat(user?.trial_credit_usd ?? '0') || 0,
   };
 }
 
 /**
- * Estimate cost for image generation
- * Returns cost in USD, or 0 if model not found
+ * 生成全局唯一 request_id（8-64 字符）。
+ * 同一计费单元的 authorize / settle 必须复用同一个 ID。
  */
-export function estimateImageCost(modelName: string, count: number, models: ServerModel[]): number {
-  const model = models.find(m => m.name === modelName && m.billing_type === 'per_call');
-  if (!model?.price_per_call) return 0;
-  return Number(model.price_per_call) * count;
+export function createRequestId(scope: string): string {
+  const uuid = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+  return `${scope}-${uuid}`.slice(0, 64);
+}
+
+function isQuotaExhausted(err: any): boolean {
+  return err?.status === 402 || err?.code === 'QUOTA_EXHAUSTED';
 }
 
 /**
- * Check balance before running an image task
- * Uses server-side estimate for accuracy — no need to pass local models list
- * Throws if balance insufficient
- *
- * V3.0.6：仅图片 / 后处理走服务器余额（CyImagePro 图片服务）。
- * Agent 对话已全面 BYOK —— 不存在 agent/chat 余额预检与上报（旧
- * assertCanRunAgentTask / reportAgentUsage / reportChatUsage 已随服务器 Agent 一并移除）。
+ * 生成前预占额度（authorize）。
+ * - 402 / QUOTA_EXHAUSTED → 抛出固定文案「余额不足，请充值后继续使用」
+ * - 其余错误（403 IMAGE2_DISABLED / 网络错误等）原样抛出，message 已由
+ *   serverApi 从 detail.message 提取
+ * - 成功后以后端响应回写本地余额
  */
-export async function assertCanRunImageTask(
-  modelName: string,
-  count: number,
-): Promise<BalanceCheckResult> {
-  const items: UsageEstimateItem[] = [
-    { type: 'image', model: modelName, image_count: count },
-  ];
-
-  const estimate = await serverApi.estimateUsage(items);
-
-  if (!estimate.can_run && estimate.groups.length > 0) {
-    const groupInfo = estimate.groups[0];
-    throw new Error(
-      `余额不足，请先充值后再生成。${groupInfo.group} 需要 $${groupInfo.required_usd.toFixed(4)}, 当前 $${groupInfo.balance_usd.toFixed(2)}`
-    );
+export async function authorizeImageTask(
+  requestId: string,
+  imageCount: number,
+): Promise<UsageAuthorizeResult> {
+  let result: UsageAuthorizeResult;
+  try {
+    result = await serverApi.authorizeImage2(requestId, imageCount);
+  } catch (err: any) {
+    if (isQuotaExhausted(err)) {
+      err.message = QUOTA_EXHAUSTED_MESSAGE;
+    }
+    throw err;
   }
-
-  // If no groups returned (e.g. model not found on server), allow run
-  // — server will reject at report time if model invalid
-  const groupInfo = estimate.groups[0];
-  return {
-    canRun: true,
-    group: groupInfo?.group ?? '',
-    balance_usd: groupInfo?.balance_usd ?? 0,
-    required_usd: groupInfo?.required_usd ?? 0,
-  };
-}
-
-/**
- * Report image usage after successful generation
- * Updates local balance on success
- */
-export async function reportImageUsage(payload: ImageUsagePayload): Promise<UsageReportResult> {
-  const result = await serverApi.reportImage(payload.model, payload.image_count);
-
-  // Update local balance
-  const auth = useAuthStore.getState();
-  if (result.group) {
-    auth.updateTokenBalance(result.group, result.balance_usd);
+  if (result && result.balance_usd != null) {
+    useAuthStore.getState().updateBalances(result.balance_usd, result.trial_credit_usd);
   }
-  if (result.account_type) {
-    auth.updateAccountType(result.account_type);
-  }
-
   return result;
 }
 
 /**
- * Estimate usage cost via server API
+ * 生成后结算（settle）。失败静默容错（console.warn，不阻断 UI）——
+ * 服务端对超时未 settle 的预占有 2 小时自动释放兜底。
  */
-export async function estimateUsage(items: UsageEstimateItem[]): Promise<UsageEstimate> {
-  return serverApi.estimateUsage(items);
+export async function settleImageTask(
+  requestId: string,
+  success: boolean,
+  imageCount?: number,
+  failureReason?: string,
+): Promise<UsageSettleResult | null> {
+  try {
+    const result = await serverApi.settleImage2(requestId, success, imageCount, failureReason);
+    if (result && result.balance_usd != null) {
+      useAuthStore.getState().updateBalances(result.balance_usd, result.trial_credit_usd);
+    }
+    return result;
+  } catch (err) {
+    console.warn(`[billing] settle 失败（依赖服务端 2h 自动释放兜底）: ${requestId}`, err);
+    return null;
+  }
+}
+
+// ── 任务级预占登记 ──
+// authorize 发生在任务创建之前（此时 task.id 未知），任务创建成功后按
+// task.id 登记 request_id；useTaskStore.reportNewlyCompleted 在任务终态时
+// 按登记的 request_id settle（取后即删，天然幂等去重）。
+// 应用重启会丢失登记 → 无法 settle → 服务端 2h 自动释放兜底。
+const taskAuthorization = new Map<string, string>();
+
+export function registerTaskAuthorization(taskId: string, requestId: string): void {
+  if (!taskId || !requestId) return;
+  taskAuthorization.set(taskId, requestId);
+}
+
+/** 取出并删除该任务的预占 ID；不存在（未授权 / 已结算 / 重启丢失）返回 undefined */
+export function takeTaskAuthorization(taskId: string): string | undefined {
+  const requestId = taskAuthorization.get(taskId);
+  if (requestId) taskAuthorization.delete(taskId);
+  return requestId;
 }
 
 /**
- * Quick local balance check without server call
- * Use this for UI display, but use assertCanRun* before actual operations
+ * 兼容旧调用形态的生成前预检：内部转为 authorize 预占。
+ * 402 时抛出「余额不足，请充值后继续使用」；其余错误原样抛出。
+ * 注意：modelName 参数仅为兼容旧签名保留（V4 服务端只有 gpt-image-2 一个模型）。
  */
-export function hasEnoughBalance(group: string, requiredUsd: number): boolean {
-  return getGroupBalance(group) >= requiredUsd;
+export async function assertCanRunImageTask(
+  modelName: string,
+  count: number,
+  requestId: string,
+): Promise<UsageAuthorizeResult> {
+  void modelName;
+  return authorizeImageTask(requestId, count);
 }
 
 export const billingService = {
-  getGroupBalance,
-  getAllBalances,
-  checkBalance,
-  estimateImageCost,
+  getUnifiedBalance,
+  createRequestId,
+  authorizeImageTask,
+  settleImageTask,
+  registerTaskAuthorization,
+  takeTaskAuthorization,
   assertCanRunImageTask,
-  reportImageUsage,
-  estimateUsage,
-  hasEnoughBalance,
 };

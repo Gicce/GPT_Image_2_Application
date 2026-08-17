@@ -2,14 +2,7 @@ import { useSettingsStore } from '../store/useSettingsStore';
 
 const DEFAULT_SERVER_BASE = 'http://localhost:4001';
 
-export interface UserToken {
-  group: string;
-  balance_usd: number;
-  api_token: string;
-  is_trial: boolean;
-}
-
-// 客户端统一使用的用户结构（v3 tokens[] 重构）
+// 客户端统一使用的用户结构（V4 统一余额重构：不再有 tokens[] 分组余额）
 export interface UserInfo {
   id: string;
   username: string;
@@ -17,7 +10,10 @@ export interface UserInfo {
   account_type: 'trial' | 'normal' | 'paid';
   trial_expires_at: string | null;
   trial_expired: boolean;
-  tokens: UserToken[];
+  /** 现金余额（后端返回字符串；展示 parseFloat(...).toFixed(2)，余额以服务端响应为准，不做本地累计） */
+  balance_usd: string;
+  /** 试用额度（字符串，同上） */
+  trial_credit_usd: string;
 }
 
 export interface RuntimeGroupConfig {
@@ -41,47 +37,39 @@ export interface AuthResponse {
   user: UserInfo;
 }
 
-export interface OrderItem {
-  group: string;
-  amount_usd: number;
-}
-
+// V4：充值订单为单一金额（Image2 统一余额），不再有 items/group
 export interface OrderResult {
   out_trade_no: string;
   code_url: string;
+  amount_usd: number;
   amount_cny: number;
   exchange_rate: number;
-  amount_usd: number;
-  group: string;
-  items: OrderItem[];
-  status?: 'pending' | 'paid' | 'closed';
+  status: string;
+  dev_mode?: boolean;
+  message?: string;
 }
 
 export interface OrderStatus {
   out_trade_no: string;
-  status: 'pending' | 'paid' | 'closed';
+  /** status 到 'assigned' 即到账（不再下发 api_token） */
+  status: 'pending' | 'paid' | 'assigned' | 'closed' | string;
   amount_usd: number;
   amount_cny: number;
-  group: string;
-  items?: OrderItem[];
   paid_at: string | null;
-  api_token?: string | null;
-}
-
-export interface PackageGroup {
-  name: string;
-  description?: string;
+  balance_usd?: string;
+  trial_credit_usd?: string;
 }
 
 export interface PayLimits {
   min_total_usd: number;
   max_total_usd: number;
-  min_per_item_usd: number;
+  min_per_item_usd?: number;
 }
 
 export interface UserOrder {
   out_trade_no: string;
-  group: string;
+  /** V4 订单不再绑定分组；历史订单可能仍有值 */
+  group?: string;
   amount_usd: number;
   amount_cny: number;
   total_usd?: number;
@@ -89,7 +77,7 @@ export interface UserOrder {
   exchange_rate: number | null;
   status: 'pending' | 'paid' | 'assigned' | 'allocated' | 'refunding' | 'refunded' | 'refund_change' | 'closed';
   pay_type: string;
-  items: { group: string; amount_usd: number }[];
+  items?: { group: string; amount_usd: number }[];
   created_at: string;
   paid_at: string | null;
   allocated_at?: string | null;
@@ -109,6 +97,8 @@ export interface UsageRecord {
   unit_price?: string | null;
   cost_usd: string;
   created_at: string | null;
+  /** V4 两阶段计费：该笔用量对应的客户端 request_id */
+  request_id?: string | null;
 }
 
 export interface UsageRecordsResponse {
@@ -144,9 +134,28 @@ export interface UsageModelStat {
   cost_usd: string;
 }
 
+// ── Image2 Runtime Token（服务端 Token 池分配状态，仅脱敏信息） ──
+
+export interface RuntimeTokenStatus {
+  assigned: boolean;
+  /** assigned = 用户绑定 Token；server_master = 未绑定，回落服务端 Master Token；none = 无可用上游凭证 */
+  source: 'assigned' | 'server_master' | 'none';
+  token_id: string | null;
+  masked_token: string | null;
+  is_trial: boolean;
+  is_disabled: boolean;
+  assigned_at: string | null;
+}
+
 export interface PackagesResponse {
   exchange_rate: number;
-  groups: PackageGroup[];
+  currency?: string;
+  /** V4：单模型（Image2）按次计费，不再有 groups 数组 */
+  model: {
+    name: string;
+    display_name: string;
+    price_per_call_usd: number | string;
+  };
   limits?: PayLimits;
 }
 
@@ -171,48 +180,28 @@ export interface ServerModel {
   rechargeable?: boolean;
 }
 
-export interface ServerPrompt {
-  id: string;
-  title: string;
-  content: string;
+// ── V4 两阶段计费：authorize（生成前预占）/ settle（生成后结算） ──
+
+/** POST /api/usage/authorize 200 响应（金额字段后端返回字符串，统一归一为 string） */
+export interface UsageAuthorizeResult {
+  request_id: string;
+  status: string;
+  unit_price_usd: string;
+  amount_usd: string;
+  trial_amount: string;
+  balance_amount: string;
+  billing_source: string;
+  balance_usd: string;
+  trial_credit_usd: string;
 }
 
-export interface PromptsResponse {
-  categories: string[];
-  prompts: Record<string, ServerPrompt[]>;
-}
-
-export interface UsageEstimateItem {
-  type: 'agent' | 'image' | 'postprocess' | 'chat';
-  model?: string;
-  tool?: string;
-  quantity?: number;
-  image_count?: number;
-  input_tokens?: number;
-  output_tokens?: number;
-  cached_tokens?: number;
-}
-
-export interface UsageEstimateGroup {
-  group: string;
-  required_usd: number;
-  balance_usd: number;
-  enough: boolean;
-}
-
-export interface UsageEstimate {
-  can_run: boolean;
-  total_cost_usd: number;
-  groups: UsageEstimateGroup[];
-  message?: string;
-}
-
-// Server returns cost_usd/balance_usd as strings — normalize to numbers
-export interface UsageReportResult {
-  cost_usd: number;
-  balance_usd: number;
-  group: string;
-  account_type: 'trial' | 'normal' | 'paid';
+/** POST /api/usage/settle 200 响应 */
+export interface UsageSettleResult {
+  request_id: string;
+  status: string;
+  amount_usd: string;
+  balance_usd: string;
+  trial_credit_usd: string;
 }
 
 /**
@@ -394,10 +383,30 @@ async function request<T>(
 
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
-      const err: any = new Error(body.detail || `HTTP ${res.status}`);
+      // detail 可能是字符串、{code, message} 对象（如 402 QUOTA_EXHAUSTED），
+      // 或 FastAPI 校验错误数组 [{loc, msg, type}, ...]（HTTP 422）
+      const rawDetail: unknown = body.detail;
+      let message = `HTTP ${res.status}`;
+      let detailCode: string | undefined;
+      if (typeof rawDetail === 'string' && rawDetail.trim()) {
+        message = rawDetail.trim();
+      } else if (Array.isArray(rawDetail) && rawDetail.length) {
+        const msgs = rawDetail
+          .map((item: any) => (typeof item?.msg === 'string' ? item.msg : ''))
+          .filter(Boolean);
+        message = msgs.length ? msgs.join('；') : `HTTP ${res.status}`;
+        detailCode = 'VALIDATION_ERROR';
+      } else if (rawDetail && typeof rawDetail === 'object') {
+        const d = rawDetail as { code?: unknown; message?: unknown };
+        if (typeof d.message === 'string' && d.message.trim()) message = d.message.trim();
+        if (typeof d.code === 'string') detailCode = d.code;
+      }
+      const err: any = new Error(message);
       err.status = res.status;
       err.url = fullUrl;
-      console.error(`[serverApi] 业务错误 ${fullUrl}:`, body.detail || `HTTP ${res.status}`);
+      if (detailCode) err.code = detailCode;
+      if (rawDetail && typeof rawDetail === 'object') err.detail = rawDetail;
+      console.error(`[serverApi] 业务错误 ${fullUrl}:`, rawDetail || `HTTP ${res.status}`);
       console.log('[serverApi] ===== REQUEST END (ERROR) =====');
       throw err;
     }
@@ -441,14 +450,6 @@ async function request<T>(
 
 // Normalize raw user response into consistent UserInfo shape
 function normalizeUser(raw: any): UserInfo {
-  const tokens: UserToken[] = Array.isArray(raw.tokens)
-    ? raw.tokens.map((t: any) => ({
-        group: t.group,
-        balance_usd: Number(t.balance_usd ?? 0),
-        api_token: t.api_token ?? '',
-        is_trial: !!t.is_trial,
-      }))
-    : [];
   return {
     id: raw.id,
     username: raw.username,
@@ -456,7 +457,8 @@ function normalizeUser(raw: any): UserInfo {
     account_type: raw.account_type,
     trial_expires_at: raw.trial_expires_at ?? null,
     trial_expired: raw.trial_expired ?? false,
-    tokens,
+    balance_usd: raw.balance_usd != null ? String(raw.balance_usd) : '0',
+    trial_credit_usd: raw.trial_credit_usd != null ? String(raw.trial_credit_usd) : '0',
   };
 }
 
@@ -468,33 +470,43 @@ function normalizeAuthResponse(raw: any): AuthResponse {
   };
 }
 
-function normalizeUsageReport(raw: any): UsageReportResult {
+function normalizeAuthorize(raw: any): UsageAuthorizeResult {
   return {
-    cost_usd: Number(raw.cost_usd ?? 0),
-    balance_usd: Number(raw.balance_usd ?? 0),
-    group: raw.group ?? '',
-    account_type: raw.account_type ?? 'normal',
+    request_id: raw.request_id,
+    status: raw.status,
+    unit_price_usd: String(raw.unit_price_usd ?? '0'),
+    amount_usd: String(raw.amount_usd ?? '0'),
+    trial_amount: String(raw.trial_amount ?? '0'),
+    balance_amount: String(raw.balance_amount ?? '0'),
+    billing_source: raw.billing_source ?? '',
+    balance_usd: raw.balance_usd != null ? String(raw.balance_usd) : '0',
+    trial_credit_usd: raw.trial_credit_usd != null ? String(raw.trial_credit_usd) : '0',
   };
 }
 
-function normalizeEstimate(raw: any): UsageEstimate {
+function normalizeSettle(raw: any): UsageSettleResult {
   return {
-    can_run: raw.can_run ?? false,
-    total_cost_usd: Number(raw.total_cost_usd ?? 0),
-    groups: (raw.groups ?? []).map((g: any) => ({
-      group: g.group,
-      required_usd: Number(g.required_usd ?? 0),
-      balance_usd: Number(g.balance_usd ?? 0),
-      enough: g.enough ?? false,
-    })),
-    message: raw.message,
+    request_id: raw.request_id,
+    status: raw.status,
+    amount_usd: String(raw.amount_usd ?? '0'),
+    balance_usd: raw.balance_usd != null ? String(raw.balance_usd) : '0',
+    trial_credit_usd: raw.trial_credit_usd != null ? String(raw.trial_credit_usd) : '0',
   };
 }
 
+// V4 统一余额权益（不再按 group 拆分）
 export interface AccountEntitlements {
-  balances: Record<string, number>;  // { "image": 3.0, "agent": 3.0, "postprocess": 0.0 }
-  enabled_features: Record<string, boolean>;  // { "image": true, "agent": true, "postprocess": false }
-  enabled_models: Record<string, string[]>;  // { "image": ["gpt-image-2"], "agent": ["gpt-4o"] }
+  balance_usd: string;
+  trial_credit_usd: string;
+  total_credit_usd: string;
+  enabled_features: Record<string, boolean>;  // { "image": true }
+  enabled_models: string[];  // ["gpt-image-2"]
+  image2?: {
+    enabled: boolean;
+    trial_allowed: boolean;
+    price_per_call_usd: number | string;
+    currency: string;
+  };
 }
 
 export const serverApi = {
@@ -535,32 +547,45 @@ export const serverApi = {
   getRuntimeConfig: () =>
     request<RuntimeConfig>('/api/users/me/runtime-config', {}, true),
 
+  getRuntimeToken: () =>
+    request<RuntimeTokenStatus>('/api/users/me/runtime-token', {}, true),
+
+  replaceRuntimeToken: () =>
+    request<RuntimeTokenStatus & { replaced: boolean }>('/api/users/me/runtime-token/replace', { method: 'POST' }, true),
+
   getUsage: () =>
     request<any[]>('/api/users/me/usage', {}, true),
 
-  reportImage: (model: string, image_count: number) =>
+  // ── V4 两阶段计费（Image2 单模型 + 统一余额）──
+  // 生成前预占额度：402 = QUOTA_EXHAUSTED（余额不足，请充值后继续使用）；403 = IMAGE2_DISABLED
+  authorizeImage2: (requestId: string, imageCount: number) =>
     request<any>(
-      '/api/usage/report/image',
-      { method: 'POST', body: JSON.stringify({ model, image_count }) },
+      '/api/usage/authorize',
+      { method: 'POST', body: JSON.stringify({ request_id: requestId, image_count: imageCount }) },
       true
-    ).then(normalizeUsageReport),
+    ).then(normalizeAuthorize),
 
-  // V3.0.6：Agent 对话全面 BYOK，服务器 Agent/Chat/Tool 用量上报端点已移除；
-  // 仅图片生成（CyImagePro 图片服务）保留 estimate + report 闭环。
-
-  estimateUsage: (items: UsageEstimateItem[]) =>
-    request<any>(
-      '/api/usage/estimate',
-      { method: 'POST', body: JSON.stringify({ items }) },
+  // 生成后结算（幂等；服务端对超时未 settle 的预占有 2 小时自动释放兜底）
+  settleImage2: (requestId: string, success: boolean, imageCount?: number, failureReason?: string) => {
+    const body: Record<string, unknown> = { request_id: requestId, success };
+    if (imageCount != null) body.image_count = imageCount;
+    if (failureReason) body.failure_reason = failureReason;
+    return request<any>(
+      '/api/usage/settle',
+      { method: 'POST', body: JSON.stringify(body) },
       true
-    ).then(normalizeEstimate),
+    ).then(normalizeSettle);
+  },
+
+  // V3.0.6：Agent 对话全面 BYOK；V4：图片生成改为 authorize + settle 闭环
+  // （旧 estimate / report/image 端点已随服务器重构删除）。
 
   getPackages: () => request<PackagesResponse>('/api/pay/packages'),
 
-  createOrder: (items: OrderItem[]) =>
+  createOrder: (amountUsd: number) =>
     request<OrderResult>(
       '/api/pay/create_order',
-      { method: 'POST', body: JSON.stringify({ items }) },
+      { method: 'POST', body: JSON.stringify({ amount_usd: amountUsd }) },
       true
     ),
 
@@ -630,11 +655,6 @@ export const serverApi = {
 
   getTrialStock: () =>
     request<{ remaining: number; available: boolean }>('/api/tokens/trial-stock'),
-
-  getPrompts: () => request<PromptsResponse>('/api/prompts'),
-
-  getStock: () =>
-    request<Record<string, number>>('/api/tokens/stock'),
 
   forgotPassword: (email: string) =>
     request<{ message: string }>('/api/auth/forgot-password/send-code', {

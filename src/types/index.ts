@@ -400,6 +400,7 @@ export type PlannerErrorKind =
   | 'response_text_missing'
   | 'response_incomplete'
   | 'upstream_error'
+  | 'planner_output_truncated'
   | 'planner_json_parse_failed'
   | 'planner_schema_invalid'
   | 'provider_response_payload_missing';
@@ -440,6 +441,15 @@ export interface ResponsesShapeDiagnostic {
    * 注意这与 `0`（明确告知本轮没产生 output token）语义不同。
    * `provider_response_payload_missing` 判定要求 output_tokens > 0。 */
   outputTokens?: number | null;
+  /** chat_completions 通道：choices[0].finish_reason。`length` = 输出被 max_tokens 截断。 */
+  finishReason?: string | null;
+  /** usage.prompt_tokens（chat）/ usage.input_tokens（Responses）。 */
+  inputTokens?: number | null;
+  /** usage.reasoning_tokens —— 推理 token 与最终 JSON 共享输出预算的模型上，
+   * 这是 JSON 被截断的主要根因指标。 */
+  reasoningTokens?: number | null;
+  /** Planner 针对性自动重试轨迹（截断 / 空文本，最多一次）。 */
+  autoRetry?: { trigger?: string; result?: string };
 }
 
 /**
@@ -541,6 +551,15 @@ export interface TaskMessageState {
   sourceImageId?: string;
   /** 本地路径形式的源图（编辑任务的 active image path）。重新规划时用它来还原编辑上下文。 */
   sourceImagePath?: string;
+  /**
+   * 源图绑定方式（任务创建时快照）：
+   *   - 'attachment'：本轮用户上传附件（第一张为编辑目标）
+   *   - 'explicit'  ：用户手动绑定 / 手动切换的图片
+   *   - 'latest'    ：默认规则 —— 当前对话最新一张图片
+   *   - 'none'      ：文生图，未引用图片
+   * 一旦写入不再随会话 active image 变化（Task Source Image Snapshot ≠ Conversation Active Image）。
+   */
+  sourceImageSelection?: 'latest' | 'explicit' | 'attachment' | 'none';
   sourceImagePreviewUrl?: string;
   sourceImageFileName?: string;
   pendingParams?: CreateTaskParams;
@@ -732,6 +751,17 @@ export interface ChatConversation {
   active_task_id?: string | null;
   active_image_id?: string | null;
   active_image_path?: string | null;
+  /**
+   * active image 的绑定来源：'explicit' = 用户点「编辑此图」显式绑定；
+   * 'auto' = 任务成功后自动推进到最新结果图。任务卡展示"引用方式"用。
+   */
+  active_image_source?: 'explicit' | 'auto';
+  /**
+   * active image 的设定时间（取任务 completed_at）。防回退守卫用：
+   * 旧任务的 retry / reconcile 事件不允许把 active image 拉回旧图
+   * （图生图源图漂移的根因修复）。
+   */
+  active_image_set_at?: string;
   chat_mode?: ChatMode;
   /** 会话级 AI 智能体选择（profile_id + model_id，双 key 区分同 model_id 的不同 Provider） */
   selected_agent_profile_id?: string;

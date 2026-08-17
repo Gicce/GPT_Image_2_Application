@@ -4,10 +4,10 @@
  * 发布阶段（channel/iteration/label）独立于底层 SemVer，不写入 Tauri/Cargo version 字段。
  */
 export const RELEASE_INFO = {
-  version: '4.0.0',
-  channel: 'test',
+  version: '4.0.1',
+  channel: 'stable',
   iteration: 1,
-  label: '测试正式版 V1',
+  label: '正式版',
 } as const;
 
 export type ReleaseChannel = typeof RELEASE_INFO.channel;

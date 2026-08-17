@@ -1,13 +1,16 @@
 import { create } from 'zustand';
 import type { CreateTaskParams, Task, TaskStage } from '../types';
+import { TERMINAL_TASK_STATUSES } from '../types';
 import { api } from '../services/api';
-import { serverApi } from '../services/serverApi';
 import { useAuthStore } from './useAuthStore';
-import { useSettingsStore } from './useSettingsStore';
-import { explainError, isAuthError } from '../utils/errors';
-
-// 防止并发 loadTasks 重复上报同一批完成任务
-const reportedKeys = new Set<string>();
+import { isAuthError } from '../utils/errors';
+import {
+  authorizeImageTask,
+  settleImageTask,
+  registerTaskAuthorization,
+  takeTaskAuthorization,
+  createRequestId,
+} from '../services/billingService';
 
 // 进行中任务的"恢复降级"用集合：记录已知存在过的 taskId
 const knownTaskIds = new Set<string>();
@@ -132,8 +135,24 @@ export const useTaskStore = create<TaskState>((set, get) => ({
 
   retryTask: async (taskId) => {
     console.log('[AgentTask] retry task', taskId);
-    const retried = await api.retryTask(taskId);
+    // 重试会重新生成图片，属新的计费单元：先 authorize 预占，创建后登记
+    const { isLoggedIn } = useAuthStore.getState();
+    let requestId: string | undefined;
+    if (isLoggedIn) {
+      const original = get().tasks.find(t => t.id === taskId);
+      const count = Math.max(1, original?.count ?? original?.sub_tasks?.length ?? 1);
+      requestId = createRequestId('retry');
+      await authorizeImageTask(requestId, count);
+    }
+    let retried: Task;
+    try {
+      retried = await api.retryTask(taskId);
+    } catch (err) {
+      if (requestId) void settleImageTask(requestId, false, 0, 'retry create failed');
+      throw err;
+    }
     knownTaskIds.add(retried.id);
+    if (requestId) registerTaskAuthorization(retried.id, requestId);
     await get().loadTasks();
     console.log('[TaskExecution] task retried', retried.id);
     return retried;
@@ -164,46 +183,24 @@ export const useTaskStore = create<TaskState>((set, get) => ({
 
   reportNewlyCompleted: (prevTasks, nextTasks) => {
     const { isLoggedIn } = useAuthStore.getState();
-    const { settings } = useSettingsStore.getState();
     if (!isLoggedIn) return;
+    void prevTasks;
 
-    const prevSubStatus: Record<string, string> = {};
-    for (const t of prevTasks) {
-      for (const st of t.sub_tasks || []) {
-        prevSubStatus[`${t.id}:${st.index}`] = st.status;
-      }
-    }
-
-    let newlyCompleted = 0;
+    // V4 两阶段计费：任务到达终态后，按创建时登记的 request_id 结算
+    // （取后即删，天然幂等；未登记的任务——如应用重启后创建前丢失——依赖服务端 2h 自动释放兜底）
     for (const t of nextTasks) {
-      for (const st of t.sub_tasks || []) {
-        const key = `${t.id}:${st.index}`;
-        // 用全局 Set 去重，同一个 sub_task 只上报一次
-        if (st.status === 'completed' && !reportedKeys.has(key)) {
-          const prev = prevSubStatus[key];
-          if (prev && prev !== 'completed') {
-            reportedKeys.add(key);
-            newlyCompleted++;
-          }
-        }
-      }
-    }
-
-    if (newlyCompleted > 0) {
-      console.log('[reportImage] 上报批量图片用量: model=gpt-image-2, count=', newlyCompleted);
-      serverApi.reportImage('gpt-image-2', newlyCompleted).then(res => {
-        console.log('[reportImage] 上报成功:', res);
-        const auth = useAuthStore.getState();
-        if (res.group) auth.updateTokenBalance(res.group, res.balance_usd);
-        if (res.account_type) auth.updateAccountType(res.account_type);
-        if (!res.group) auth.refreshUser();
-      }).catch((err: any) => {
-        console.error('[reportImage] 上报失败:', err);
+      if (!TERMINAL_TASK_STATUSES.has(t.status)) continue;
+      const requestId = takeTaskAuthorization(t.id);
+      if (!requestId) continue;
+      const completed = t.success_count ?? (t.sub_tasks || []).filter(st => st.status === 'completed').length;
+      const success = completed > 0;
+      console.log('[billing] settle task', t.id, { requestId, success, completed });
+      settleImageTask(requestId, success, completed, success ? undefined : `task ${t.status}`).catch(err => {
+        console.warn('[billing] settle task failed:', t.id, err);
         if (isAuthError(err)) {
           useAuthStore.getState().logout();
           useAuthStore.getState().showAuthPrompt();
         }
-        console.warn('图片用量上报失败:', explainError(err));
       });
     }
   },

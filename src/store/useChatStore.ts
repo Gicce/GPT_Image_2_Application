@@ -24,6 +24,7 @@ import { useSettingsStore } from './useSettingsStore';
 import { useTaskStore } from './useTaskStore';
 import { useImageStore } from './useImageStore';
 import { explainError, isAuthError } from '../utils/errors';
+import { authorizeImageTask, settleImageTask, createRequestId, registerTaskAuthorization } from '../services/billingService';
 import { classifyAgentIntent } from '../utils/agentIntent';
 import { resolveAgentConfig } from '../utils/agentConfig';
 import { planTaskWithAgent, DEFAULT_EXECUTION_MODEL, type TaskPlanInput } from '../utils/agent/promptPlanner';
@@ -43,6 +44,10 @@ import {
   buildTaskRevisionContinuationText,
 } from '../utils/agent/taskRevision';
 import { buildAttachmentDescriptors } from '../utils/agent/attachmentLabels';
+import {
+  resolveConversationSourceImage,
+  type SourceImageSelection,
+} from '../utils/agent/taskSourceImage';
 import { extractDistinctObjects } from '../utils/generationIntent';
 import { resolveByokAgentConfig, resolveByokConfigForUse } from '../features/aiProviders/store';
 import { buildProviderError, providerErrorCompact } from '../features/aiProviders/providerError';
@@ -235,7 +240,22 @@ interface ChatState {
   /** 会话级 AI 智能体选择（profileId + modelId）；传 null 清除后回落到全局默认 Profile */
   setConversationAgentSelection: (conversationId: string, profileId: string | null, modelId: string | null) => void;
   setActiveTaskId: (conversationId: string, taskId: string | null) => void;
-  setActiveImageId: (conversationId: string, imageId: string | null, localPath?: string | null) => void;
+  setActiveImageId: (
+    conversationId: string,
+    imageId: string | null,
+    localPath?: string | null,
+    source?: 'explicit' | 'auto',
+  ) => void;
+  /**
+   * 「切换图片」：把当前任务卡（waiting_confirm / planning_failed / needs_clarification）
+   * 的源图快照切换为用户手动选择的图片。只覆盖当前任务，不污染会话默认规则。
+   * waiting_confirm 的 edit 任务会同步替换 pendingParams.source_images[0]（编辑目标位）。
+   */
+  switchTaskSourceImage: (
+    conversationId: string,
+    taskId: string,
+    image: { imageId: string; localPath?: string; url?: string; fileName?: string },
+  ) => void;
   stopGeneration: (conversationId?: string) => void;
   confirmProposal: (conversationId: string, messageId: string, settings: SendSettings) => Promise<void>;
   cancelProposal: (conversationId: string, messageId: string) => Promise<void>;
@@ -1518,16 +1538,16 @@ function buildContextMessages(conv: ChatConversation): ChatMessage[] {
   return genuineMessages.slice(-CONTEXT_TAIL_MESSAGES);
 }
 
-async function estimateOrThrow(items: Parameters<typeof serverApi.estimateUsage>[0]) {
+/** 生成前预占额度（V4 两阶段计费）。
+ * 返回 request_id 供任务创建成功后登记（终态时 settle）；402/QUOTA_EXHAUSTED
+ * 抛出「余额不足，请充值后继续使用」；404/405（旧版服务端无此端点）静默放行。 */
+async function authorizeImageTaskOrThrow(count: number): Promise<string | undefined> {
+  const requestId = createRequestId('chat');
   try {
-    const estimate = await serverApi.estimateUsage(items);
-    if (!estimate.can_run) {
-      const error: any = new Error(estimate.message || '当前余额不足，请前往“我的账户”充值后继续使用。');
-      error.status = 402;
-      throw error;
-    }
+    await authorizeImageTask(requestId, count);
+    return requestId;
   } catch (error: any) {
-    if (error?.status === 404 || error?.status === 405) return;
+    if (error?.status === 404 || error?.status === 405) return undefined;
     throw error;
   }
 }
@@ -1851,13 +1871,14 @@ async function createTaskFromProposal(conversationId: string, messageId: string,
     throw new Error('请至少保留一个批量子任务后再执行。');
   }
 
-  if (effectiveIntent === 'remove_background') {
-    await estimateOrThrow([{ type: 'postprocess', tool: 'remove.bg', quantity: count }]);
-  } else {
-    await estimateOrThrow([{ type: 'image', model: 'gpt-image-2', quantity: count }]);
-  }
+  // 生成前预占额度（remove_background 已无服务端计费）
+  const billingRequestId = effectiveIntent === 'remove_background'
+    ? undefined
+    : await authorizeImageTaskOrThrow(count);
 
-  const task = await api.createTask({
+  let task: Task;
+  try {
+    task = await api.createTask({
     prompt: proposal.final_prompt,
     negative_prompt: proposal.final_negative_prompt,
     user_prompt_raw: proposal.user_prompt_raw,
@@ -1887,6 +1908,11 @@ async function createTaskFromProposal(conversationId: string, messageId: string,
     composite_layout: executionMode === 'single' ? proposal.composite_layout : undefined,
     subject_entities: executionMode === 'single' ? proposal.subject_entities : undefined,
   });
+  } catch (err) {
+    if (billingRequestId) void settleImageTask(billingRequestId, false, 0, 'create task failed');
+    throw err;
+  }
+  if (billingRequestId) registerTaskAuthorization(task.id, billingRequestId);
 
   try {
     await api.appendAgentTemplateLog({
@@ -2291,6 +2317,7 @@ function buildTaskMessageFromTask(task: Task, base?: Partial<TaskMessageState>):
     apiKind: base?.apiKind,
     sourceImageCount: base?.sourceImageCount ?? task.source_images.length,
     sourceImageId: base?.sourceImageId,
+    sourceImageSelection: base?.sourceImageSelection,
     pendingParams: base?.pendingParams,
     confirming: false,
     cancelling: false,
@@ -2439,6 +2466,7 @@ function restoreActiveImageIds(convId?: string | null) {
     if (conv.active_image_id && conv.active_image_path) continue;
     let foundImageId: string | null = null;
     let foundImagePath: string | null = null;
+    let foundSetAt: string | null = null;
     for (let i = conv.messages.length - 1; i >= 0; i -= 1) {
       const m = conv.messages[i];
       const tm = m.task_message;
@@ -2447,6 +2475,7 @@ function restoreActiveImageIds(convId?: string | null) {
       if (first.localPath) {
         foundImageId = first.imageId || first.id;
         foundImagePath = first.localPath;
+        foundSetAt = tm.updatedAt || tm.createdAt || m.created_at || null;
         break;
       }
     }
@@ -2455,7 +2484,13 @@ function restoreActiveImageIds(convId?: string | null) {
       useChatStore.setState(state => ({
         conversations: state.conversations.map(c =>
           c.id === conv.id
-            ? { ...c, active_image_id: foundImageId, active_image_path: foundImagePath }
+            ? {
+                ...c,
+                active_image_id: foundImageId,
+                active_image_path: foundImagePath,
+                active_image_source: 'auto',
+                ...(foundSetAt ? { active_image_set_at: foundSetAt } : {}),
+              }
             : c,
         ),
       }));
@@ -2477,6 +2512,8 @@ type PlannerSourceImageContext = {
   sourceImagePath: string | null;
   sourceImagePreviewUrl?: string;
   sourceImageFileName?: string;
+  /** 源图绑定方式快照（attachment / explicit / latest / none），随任务卡持久化。 */
+  sourceImageSelection?: SourceImageSelection;
 };
 
 type PlannerCoreOutcome =
@@ -2599,6 +2636,7 @@ async function planTaskCore(input: {
     sourceImagePath: resolved.sourceImagePath,
     sourceImagePreviewUrl: resolved.sourceImagePreviewUrl,
     sourceImageFileName: resolved.sourceImageFileName,
+    sourceImageSelection: resolved.sourceImageSelection,
   };
 
   if (planResult.planningFailed) {
@@ -2659,6 +2697,7 @@ async function planTaskCore(input: {
   let effectiveSourceImagePath: string | null = resolved.sourceImagePath;
   let effectiveSourceImagePreviewUrl: string | undefined = resolved.sourceImagePreviewUrl;
   let effectiveSourceImageFileName: string | undefined = resolved.sourceImageFileName;
+  let effectiveSourceImageSelection: SourceImageSelection | undefined = resolved.sourceImageSelection;
   if (taskType === 'generate') {
     if (effectiveSourceImageId || effectiveSourceImagePath || attachmentPaths.length > 0) {
       console.warn('[TaskRouting] dropping source image fields for generation task', {
@@ -2670,6 +2709,7 @@ async function planTaskCore(input: {
     effectiveSourceImagePath = null;
     effectiveSourceImagePreviewUrl = undefined;
     effectiveSourceImageFileName = undefined;
+    effectiveSourceImageSelection = 'none';
   }
 
   const finalPrompt = planResult.optimizedPrompt || trimmed;
@@ -2826,6 +2866,7 @@ async function planTaskCore(input: {
     sourceImagePath: effectiveSourceImagePath,
     sourceImagePreviewUrl: effectiveSourceImagePreviewUrl,
     sourceImageFileName: effectiveSourceImageFileName,
+    sourceImageSelection: effectiveSourceImageSelection,
   };
 }
 
@@ -2972,6 +3013,7 @@ function applyPlannerOutcomeToTaskMessage(
       apiKind: outcome.apiKind,
       sourceImageId: outcome.sourceImageId ?? undefined,
       sourceImagePath: outcome.sourceImagePath ?? undefined,
+      sourceImageSelection: outcome.sourceImageSelection ?? current.sourceImageSelection,
       sourceImagePreviewUrl: outcome.sourceImagePreviewUrl,
       sourceImageFileName: outcome.sourceImageFileName,
       plannerDiagnostic: outcome.plannerDiagnostic,
@@ -3077,6 +3119,7 @@ function applyPlannerOutcomeToTaskMessage(
     sourceImageCount: outcome.pendingParams.source_images.length,
     sourceImageId: outcome.sourceImageId ?? undefined,
     sourceImagePath: outcome.sourceImagePath ?? undefined,
+    sourceImageSelection: outcome.sourceImageSelection ?? current.sourceImageSelection,
     sourceImagePreviewUrl: outcome.sourceImagePreviewUrl,
     sourceImageFileName: outcome.sourceImageFileName,
     size: outcome.pendingParams.size,
@@ -4139,7 +4182,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }));
   },
 
-  setActiveImageId: (conversationId, imageId, localPath) => {
+  setActiveImageId: (conversationId, imageId, localPath, source = 'auto') => {
     set(state => ({
       conversations: state.conversations.map(c =>
         c.id === conversationId
@@ -4147,6 +4190,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
               ...c,
               active_image_id: imageId,
               active_image_path: localPath !== undefined ? localPath : (imageId ? c.active_image_path : null),
+              // 'explicit' = 用户点"编辑此图"手动绑定；'auto' = 系统推进到最新图。
+              active_image_source: imageId ? source : undefined,
+              active_image_set_at: imageId ? new Date().toISOString() : undefined,
             }
           : c,
       ),
@@ -4154,6 +4200,53 @@ export const useChatStore = create<ChatState>((set, get) => ({
     try {
       void get().saveConversation(conversationId);
     } catch {}
+  },
+
+  switchTaskSourceImage: (conversationId, taskId, image) => {
+    const conversation = get().conversations.find(c => c.id === conversationId);
+    const message = conversation?.messages.find(m => m.task_message?.taskId === taskId);
+    if (!message?.task_message) return;
+    const stage = message.task_message.stage;
+    // 只允许在纯前端可编辑态切换；运行中/终态任务的绑定不可变。
+    if (stage !== 'waiting_confirm' && stage !== 'planning_failed' && stage !== 'needs_clarification') {
+      console.warn('[AgentTask] switch source image ignored: stage not editable', taskId, stage);
+      return;
+    }
+    patchTaskMessageState(conversationId, message.id, current => {
+      const next: Partial<TaskMessageState> = {
+        // 手动切换 = 显式选择，覆盖当前任务快照；不影响会话默认规则（新任务仍默认最新图）。
+        sourceImageId: image.imageId,
+        sourceImagePath: image.localPath,
+        sourceImagePreviewUrl: image.url,
+        sourceImageFileName: image.fileName,
+        sourceImageSelection: 'explicit',
+        updatedAt: new Date().toISOString(),
+      };
+      // waiting_confirm 的非生成任务：同步替换 pendingParams.source_images 的
+      // 编辑目标位（index 0），参考图保持不变 —— 执行阶段只读 pendingParams。
+      if (
+        current.stage === 'waiting_confirm'
+        && current.pendingParams
+        && current.pendingParams.task_type !== 'generate'
+        && image.localPath
+      ) {
+        const sources = [...(current.pendingParams.source_images || [])];
+        if (sources.length > 0) {
+          sources[0] = image.localPath;
+        } else {
+          sources.push(image.localPath);
+        }
+        next.pendingParams = { ...current.pendingParams, source_images: sources };
+        next.sourceImageCount = sources.length;
+      }
+      console.log('[AgentTask] source image switched', {
+        taskId,
+        stage: current.stage,
+        newSourceImageId: image.imageId,
+      });
+      return { ...current, ...next };
+    });
+    void get().saveConversation(conversationId);
   },
 
   sendTaskMessage: async (input) => {
@@ -4349,38 +4442,34 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const imageAttachments = attachments.filter(item => item.type === 'image' && item.filePath);
     const hasImages = imageAttachments.length > 0;
 
-    // 编辑上下文：优先使用会话中显式设置的 active_image_id（由"编辑此图"按钮触发）；
-    // 其次如果用户明确以"把这个图 / 把刚才那张"等措辞开头，且最近一次成功任务有结果图，则自动绑定到该图。
-    // ignoreActiveImage=true 时彻底跳过这一步（"再来一张"明确要求 GENERATION，不能被任何源图污染）。
-    const activeImageId = ignoreActiveImage ? null : (currentConv?.active_image_id || null);
-    const activeImagePath = ignoreActiveImage ? null : (currentConv?.active_image_path || null);
-    const looksLikeEditReference = !ignoreActiveImage && /(?:把(?:这个|这张|刚才那(?:张|个)|上一张|最近)(?:图|图片|图像)?|这个图|这张图|刚才那张|上一张|把它|把图|画面里的|画面中的|画面中|画面里|图里的|图中的)/.test(trimmed);
-    let resolvedSourceImageId = activeImageId;
-    let resolvedSourceImagePath = activeImagePath;
+    // ====== 统一源图解析（单一事实源：utils/agent/taskSourceImage）======
+    // Planner 只判断 CREATE / EDIT；「图生图具体用哪张」由应用层在这里决定，
+    // 并在下方 planningTaskMessage 里快照固化。优先级：
+    //   1. 本轮用户上传附件（编辑目标 = 第一张附件）
+    //   2. 会话 active image（"编辑此图"显式绑定 → explicit）
+    //   3. 当前对话最后一张有效图片（时间序，latest）
+    // ignoreActiveImage=true（"再来一张"强制 GENERATION）时彻底跳过会话解析。
+    let resolvedSourceImageId: string | null = null;
+    let resolvedSourceImagePath: string | null = null;
     let resolvedSourceImagePreviewUrl: string | undefined;
     let resolvedSourceImageFileName: string | undefined;
-    if (!resolvedSourceImageId && looksLikeEditReference && currentConv) {
-      // 找到当前会话最后一张可编辑的成功图
-      for (let i = currentConv.messages.length - 1; i >= 0; i -= 1) {
-        const m = currentConv.messages[i];
-        const tm = m.task_message;
-        if (!tm || tm.stage !== 'success' || !tm.images?.length) continue;
-        const first = tm.images[0];
-        if (first.localPath) {
-          resolvedSourceImageId = first.imageId || first.id;
-          resolvedSourceImagePath = first.localPath;
-          resolvedSourceImagePreviewUrl = first.url;
-          resolvedSourceImageFileName = first.file_name;
-          break;
-        }
-      }
-    } else if (resolvedSourceImagePath) {
-      // 用户通过"编辑此图"显式绑定的源图 —— 找到对应缩略图用于确认卡展示。
-      const found = currentConv?.messages
-        .flatMap(m => m.task_message?.images || [])
-        .find(img => img.localPath === resolvedSourceImagePath || img.imageId === resolvedSourceImageId);
-      resolvedSourceImagePreviewUrl = found?.url;
-      resolvedSourceImageFileName = found?.file_name;
+    let sourceImageSelection: SourceImageSelection = 'none';
+    if (imageAttachments.length > 0) {
+      // 附件任务：sourceImageId/Path 留空（附件通过 attachmentPaths 进入 source_images，
+      // 第一张附件即编辑目标），不要让会话 active image 抢占编辑目标位。
+      sourceImageSelection = 'attachment';
+    } else if (!ignoreActiveImage) {
+      const conversationSource = resolveConversationSourceImage({
+        messages: currentConv?.messages || [],
+        activeImageId: currentConv?.active_image_id,
+        activeImagePath: currentConv?.active_image_path,
+        activeImageSource: currentConv?.active_image_source,
+      });
+      resolvedSourceImageId = conversationSource.sourceImageId;
+      resolvedSourceImagePath = conversationSource.sourceImagePath;
+      resolvedSourceImagePreviewUrl = conversationSource.sourceImagePreviewUrl;
+      resolvedSourceImageFileName = conversationSource.sourceImageFileName;
+      sourceImageSelection = conversationSource.selection;
     }
 
     if (ignoreActiveImage) {
@@ -4498,6 +4587,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       apiKind: undefined,
       sourceImageCount,
       sourceImageId: resolvedSourceImageId || undefined,
+      sourceImageSelection,
       sourceImagePreviewUrl: resolvedSourceImagePreviewUrl,
       sourceImageFileName: resolvedSourceImageFileName,
       // 任务语义层（即便 Planner 还没回来，UI 也能先显示真实的附件 / 继承上下文）。
@@ -4593,6 +4683,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           sourceImagePath: resolvedSourceImagePath,
           sourceImagePreviewUrl: resolvedSourceImagePreviewUrl,
           sourceImageFileName: resolvedSourceImageFileName,
+          sourceImageSelection,
         },
         attachmentPaths: imageAttachments.map(item => item.filePath!).filter(Boolean) as string[],
         attachmentNames,
@@ -4650,6 +4741,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         sourceImagePath: resolvedSourceImagePath,
         sourceImagePreviewUrl: resolvedSourceImagePreviewUrl,
         sourceImageFileName: resolvedSourceImageFileName,
+        sourceImageSelection,
       };
       applyPlannerOutcomeToTaskMessage(activeId, assistantMessageId, fallbackOutcome, {
         planningAttempt: 1,
@@ -4700,12 +4792,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set({ taskSubmitting: true, error: null });
 
     try {
-      // 余额预检（非致命，失败时由后端拦截）
+      // 生成前预占额度（V4 两阶段计费；remove_background 已无服务端计费）
+      let billingRequestId: string | undefined;
       try {
-        if (params.task_type === 'remove_background') {
-          await estimateOrThrow([{ type: 'postprocess', tool: 'remove.bg', quantity: params.count }]);
-        } else {
-          await estimateOrThrow([{ type: 'image', model: 'gpt-image-2', quantity: params.count }]);
+        if (params.task_type !== 'remove_background') {
+          billingRequestId = await authorizeImageTaskOrThrow(params.count ?? 1);
         }
       } catch (estimateError: any) {
         patchTaskMessageState(conversationId, message.id, current => ({
@@ -4734,6 +4825,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const executionStartedAtIso = new Date().toISOString();
       console.log('[TaskExecutionTimer]', { messageId: message.id, event: 'start' });
       const task = await useTaskStore.getState().createAndExecuteTask(params);
+      if (billingRequestId) registerTaskAuthorization(task.id, billingRequestId);
       console.log('[TaskExecution] task created', task.id);
 
       const realStage = buildTaskMessageFromTask(task, {
@@ -4748,6 +4840,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         apiKind: message.task_message.apiKind,
         sourceImageCount: message.task_message.sourceImageCount,
         sourceImageId: message.task_message.sourceImageId,
+        sourceImageSelection: message.task_message.sourceImageSelection,
         executionStartedAt: executionStartedAtIso,
       });
 
@@ -4928,13 +5021,34 @@ export const useChatStore = create<ChatState>((set, get) => ({
     };
 
     // 重新规划不允许携带新附件（用户修改的文字直接覆盖原 prompt）。
-    // 原任务卡上保留的 sourceImageId / Path 仍然作为编辑上下文。
-    const resolved: PlannerSourceImageContext = {
-      sourceImageId: tm.sourceImageId ?? null,
-      sourceImagePath: tm.sourceImagePath ?? null,
-      sourceImagePreviewUrl: tm.sourceImagePreviewUrl,
-      sourceImageFileName: tm.sourceImageFileName,
-    };
+    // 原任务卡上保留的 sourceImageId / Path 仍然作为编辑上下文 ——
+    // 重新规划只重跑 Planner Prompt，绝不重新 getLatestImage() 覆盖绑定
+    //（除非原任务本来就没有源图快照：上一轮是 GENERATION / 无图场景，
+    // 此时按会话默认规则补一张候选，且只在 Planner 判 EDIT 时生效）。
+    let resolved: PlannerSourceImageContext;
+    if (tm.sourceImageId || tm.sourceImagePath) {
+      resolved = {
+        sourceImageId: tm.sourceImageId ?? null,
+        sourceImagePath: tm.sourceImagePath ?? null,
+        sourceImagePreviewUrl: tm.sourceImagePreviewUrl,
+        sourceImageFileName: tm.sourceImageFileName,
+        sourceImageSelection: tm.sourceImageSelection || 'latest',
+      };
+    } else {
+      const conversationSource = resolveConversationSourceImage({
+        messages: conversation.messages,
+        activeImageId: conversation.active_image_id,
+        activeImagePath: conversation.active_image_path,
+        activeImageSource: conversation.active_image_source,
+      });
+      resolved = {
+        sourceImageId: conversationSource.sourceImageId,
+        sourceImagePath: conversationSource.sourceImagePath,
+        sourceImagePreviewUrl: conversationSource.sourceImagePreviewUrl,
+        sourceImageFileName: conversationSource.sourceImageFileName,
+        sourceImageSelection: conversationSource.selection,
+      };
+    }
     const hasEditableImage = !!resolved.sourceImagePath;
     const sourceImageCount = resolved.sourceImagePath ? 1 : 0;
 
@@ -5057,6 +5171,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         sourceImagePath: resolved.sourceImagePath,
         sourceImagePreviewUrl: resolved.sourceImagePreviewUrl,
         sourceImageFileName: resolved.sourceImageFileName,
+        sourceImageSelection: resolved.sourceImageSelection,
       };
       // 再次校验 requestId，避免异常路径上把更新的卡片覆盖回去。
       const currentMsg = get().conversations.find(c => c.id === conversationId)
@@ -5105,6 +5220,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           apiKind: oldMessage.task_message?.apiKind,
           sourceImageCount: oldMessage.task_message?.sourceImageCount,
           sourceImageId: oldMessage.task_message?.sourceImageId,
+          sourceImageSelection: oldMessage.task_message?.sourceImageSelection,
           // 重试 = 新一次执行：重置计时器（spec 六十八节：并发/重试各自计时）。
           executionStartedAt: new Date().toISOString(),
         });
@@ -5186,6 +5302,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         apiKind: msg.task_message?.apiKind,
         sourceImageCount: msg.task_message?.sourceImageCount,
         sourceImageId: msg.task_message?.sourceImageId,
+        sourceImageSelection: msg.task_message?.sourceImageSelection,
         // 执行耗时：startedAt 来自确认执行时刻；终态时 buildTaskMessageFromTask
         // 会补 finishedAt / durationMs。已计算过的 duration 保留，不重复覆盖。
         executionStartedAt: msg.task_message?.executionStartedAt,
@@ -5262,25 +5379,61 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
       console.log('[TaskRestore] restore task', taskId, 'status=' + task.status, 'stage=' + next.stage);
 
-      // 任务成功后：把当前会话的 active_image_id 更新为最新结果图，
+      // 任务成功后：把当前会话的 active_image_id 推进为最新结果图，
       // 这样下一条自然语言输入（例如"把那艘小船去掉"）能够被识别为 EDIT。
       // 这是从 GENERATION 衔接到 EDIT 的关键衔接点。
+      //
+      // ===== 防回退守卫（图片漂移根因修复）=====
+      // task-updated 事件会对【所有】任务触发（包括旧任务的 retry、focus/visibility
+      // 触发的全量 reconcile）。若不加守卫，旧任务后到的事件会把 active image
+      // 拉回旧图 —— 下一个编辑任务就绑定了错误源图。守卫规则：
+      // 只允许按完成时间向前推进，绝不允许回退。
       if (task.status === 'completed' && next.images && next.images.length > 0) {
         const firstImage = next.images[0];
         const imageId = firstImage.imageId || firstImage.id;
         const imagePath = firstImage.localPath;
         if (imageId && imagePath) {
-          // 避免无意义的重复写。
           const currentConv = get().conversations.find(c => c.id === conv.id);
-          if (currentConv && (currentConv.active_image_id !== imageId || currentConv.active_image_path !== imagePath)) {
-            console.log('[Conversation] activeImageId updated:', imageId);
+          if (!currentConv) continue;
+          const alreadyCurrent = currentConv.active_image_id === imageId
+            && currentConv.active_image_path === imagePath;
+          const candidateAt = Date.parse(task.completed_at || task.created_at || '');
+          const currentAt = currentConv.active_image_set_at
+            ? Date.parse(currentConv.active_image_set_at)
+            : NaN;
+          // 时间不可比时（旧数据无 set_at / 时间缺失）保守允许推进 ——
+          // 与旧行为一致，避免历史会话卡死在旧图上。
+          const isForward = !Number.isFinite(candidateAt)
+            || !Number.isFinite(currentAt)
+            || candidateAt >= currentAt;
+          if (!alreadyCurrent && isForward) {
+            console.log('[Conversation] activeImageId advanced:', imageId, {
+              taskId,
+              candidateAt: task.completed_at || task.created_at,
+              previousSetAt: currentConv.active_image_set_at,
+            });
             set(state => ({
               conversations: state.conversations.map(c =>
                 c.id === conv.id
-                  ? { ...c, active_image_id: imageId, active_image_path: imagePath, active_task_id: taskId }
+                  ? {
+                      ...c,
+                      active_image_id: imageId,
+                      active_image_path: imagePath,
+                      active_task_id: taskId,
+                      active_image_source: 'auto',
+                      active_image_set_at: task.completed_at
+                        || task.created_at
+                        || new Date().toISOString(),
+                    }
                   : c,
               ),
             }));
+          } else if (!alreadyCurrent && !isForward) {
+            console.log('[Conversation] activeImageId advance blocked (stale task event)', {
+              taskId,
+              candidateAt: task.completed_at || task.created_at,
+              currentSetAt: currentConv.active_image_set_at,
+            });
           }
         }
       }

@@ -12,8 +12,14 @@ vi.mock('../../services/api', () => ({
   },
 }));
 
-vi.mock('../../services/serverApi', () => ({
-  serverApi: { reportImage: vi.fn(async () => ({})) },
+// V4 两阶段计费：任务终态结算走 billingService（settle 幂等，由服务端兜底）
+vi.mock('../../services/billingService', () => ({
+  authorizeImageTask: vi.fn(async () => ({})),
+  settleImageTask: vi.fn(async () => null),
+  registerTaskAuthorization: vi.fn(),
+  takeTaskAuthorization: vi.fn(() => undefined),
+  createRequestId: vi.fn(() => 'test-request-id-1234'),
+  billingService: {},
 }));
 
 import { useTaskStore } from '../useTaskStore';

@@ -506,6 +506,112 @@
   color: var(--text-muted);
 }
 
+/* 规划失败卡上的紧凑引用行：缩略图略小，与错误文案上下排布 */
+.task-message-source-image.compact {
+  padding: 8px 10px;
+}
+
+.task-message-source-image.compact .task-message-source-image-body img,
+.task-message-source-image.compact .task-message-source-image-placeholder {
+  width: 56px;
+  height: 56px;
+}
+
+.task-message-source-image .tm-btn.tiny {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+/* ====== 「切换图片」Picker：当前对话图片网格 ====== */
+.task-message-image-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bg-chat) 92%, transparent);
+  border: 1px solid var(--border-subtle);
+}
+
+.task-message-image-picker-head {
+  font-size: 11px;
+  color: var(--text-muted);
+  letter-spacing: 0.5px;
+}
+
+.task-message-image-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 8px;
+  max-height: 264px;
+  overflow-y: auto;
+}
+
+.task-message-picker-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle);
+  background: color-mix(in srgb, var(--bg-chat) 85%, transparent);
+  cursor: pointer;
+  text-align: left;
+  min-width: 0;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.task-message-picker-item:hover {
+  border-color: color-mix(in srgb, var(--accent-primary) 60%, transparent);
+}
+
+.task-message-picker-item.current {
+  border-color: var(--accent-primary);
+  background: color-mix(in srgb, var(--accent-primary-light) 30%, var(--bg-chat) 70%);
+}
+
+.task-message-picker-item img {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  object-fit: cover;
+  border-radius: 6px;
+  background: #000;
+  border: 1px solid var(--border-subtle);
+}
+
+.task-message-picker-thumb-fallback {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--bg-chat) 80%, black 20%);
+}
+
+.task-message-picker-name {
+  font-size: 12px;
+  color: var(--text-chat);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.task-message-picker-item.current .task-message-picker-name {
+  font-weight: 600;
+}
+
+.task-message-picker-sub {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+
 /* ====== 多图附件列表（图二 / 图三 参考图汇总） ======
    仅在任务提交时快照里有 > 1 张附件时显示。 */
 .task-message-attachments-summary {

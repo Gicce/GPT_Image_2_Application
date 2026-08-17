@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -29,18 +30,42 @@ jobs:
         with:
           workspaces: './src-tauri -> target'
 
+      # 版本一致性守卫：Tag 版本必须与项目内三处版本字段完全一致，
+      # 不一致直接失败，禁止发布错误版本。
+      - name: Verify version consistency
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_NAME}" != v* ]]; then
+            echo "非 Tag 触发（${GITHUB_REF_NAME}），跳过版本一致性检查"
+            exit 0
+          fi
+          VER="${GITHUB_REF_NAME#v}"
+          PKG=$(node -p "require('./package.json').version")
+          TAURI=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          CARGO=$(sed -n 's/^version = "\(.*\)"/\1/p' src-tauri/Cargo.toml | head -1)
+          echo "tag=${VER} package.json=${PKG} tauri.conf.json=${TAURI} Cargo.toml=${CARGO}"
+          if [ "$VER" != "$PKG" ] || [ "$VER" != "$TAURI" ] || [ "$VER" != "$CARGO" ]; then
+            echo "::error::版本不一致：tag=${VER} package.json=${PKG} tauri.conf.json=${TAURI} Cargo.toml=${CARGO}"
+            exit 1
+          fi
+
       - name: Install frontend dependencies
         run: npm ci
 
       # 从 Tag 推导发布元数据：
-      #   v4.0.0            → 正式 Release（prerelease=false）
-      #   v4.0.0-test.1     → 测试正式版 V1（prerelease=true）
-      #   v4.0.0-beta.1/rc.1 → Beta / RC（prerelease=true）
+      #   v4.0.1            → 正式 Release（prerelease=false）
+      #   v4.0.1-test.1     → 测试正式版 V1（prerelease=true）
+      #   v4.0.1-beta.1/rc.1 → Beta / RC（prerelease=true）
+      # Release Notes 正文从 CHANGELOG.md 对应小节提取（单一来源，禁止虚构内容）。
       - name: Derive release metadata from tag
         id: meta
         shell: bash
         run: |
-          TAG="${GITHUB_REF_NAME}"
+          if [[ "${GITHUB_REF_NAME}" == v* ]]; then
+            TAG="${GITHUB_REF_NAME}"
+          else
+            TAG="v$(node -p "require('./package.json').version")"
+          fi
           VER="${TAG#v}"
           CORE="${VER%%-*}"
           if [ "$CORE" = "$VER" ]; then
@@ -62,23 +87,36 @@ jobs:
             TITLE="CyImagePro V${CORE} ${STAGE}"
             ARTIFACT="CyImagePro-Windows-V${CORE}-${CHANNEL_NAME}-V${ITER}"
           fi
+          if ! BODY=$(node -e '
+            const fs = require("fs");
+            const ver = process.argv[1];
+            const re = new RegExp("^## v" + ver + "(?!\\d)");
+            const lines = fs.readFileSync("CHANGELOG.md", "utf8").split(/\r?\n/);
+            const start = lines.findIndex(l => re.test(l));
+            if (start === -1) process.exit(1);
+            const out = [];
+            for (let i = start + 1; i < lines.length; i++) {
+              if (lines[i].startsWith("## ")) break;
+              out.push(lines[i]);
+            }
+            console.log(out.join("\n").trim());
+          ' "$CORE"); then
+            echo "::error::CHANGELOG.md 中未找到 v${CORE} 对应小节，拒绝生成虚构 Release Notes"
+            exit 1
+          fi
+          if [ -z "$BODY" ]; then
+            echo "::error::CHANGELOG.md 中 v${CORE} 小节内容为空"
+            exit 1
+          fi
           echo "prerelease=${PRERELEASE}" >> "$GITHUB_OUTPUT"
+          echo "release_tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "release_name=${TITLE}" >> "$GITHUB_OUTPUT"
           echo "artifact_name=${ARTIFACT}" >> "$GITHUB_OUTPUT"
           {
             echo "release_body<<RELEASE_BODY_EOF"
             echo "# ${TITLE}"
             echo ""
-            echo "这是 CyImagePro ${CORE} ${STAGE}（Tag：\`${TAG}\`）。"
-            echo ""
-            echo "## 本版本重点"
-            echo ""
-            echo "- CyImagePro 客户端版本升级至 ${CORE}"
-            echo "- 设置与更新页面版本体系升级"
-            echo "- 账户与用量相关功能持续完善"
-            echo "- 图片生成与素材管理持续优化"
-            echo "- AI 智能体及模型配置持续完善"
-            echo "- Windows 客户端构建流程迁移至 GitHub Actions"
+            echo "$BODY"
             echo ""
             echo "## 发布阶段"
             echo ""
@@ -90,6 +128,22 @@ jobs:
             echo "RELEASE_BODY_EOF"
           } >> "$GITHUB_OUTPUT"
 
+      # 正式打包前的完整检查：与 CI 保持同一套门禁。
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Cargo check
+        run: cargo check --manifest-path src-tauri/Cargo.toml
+
+      - name: Rust unit tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib
+
       - name: Build and release
         uses: tauri-apps/tauri-action@v0
         env:
@@ -97,7 +151,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: ${{ github.ref_name }}
+          tagName: ${{ steps.meta.outputs.release_tag }}
           releaseName: ${{ steps.meta.outputs.release_name }}
           releaseBody: ${{ steps.meta.outputs.release_body }}
           releaseDraft: false

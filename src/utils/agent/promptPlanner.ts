@@ -392,6 +392,8 @@ export function plannerErrorStageLabel(errorKind?: string): string {
       return '模型输出读取';
     case 'provider_response_payload_missing':
       return '模型输出恢复';
+    case 'planner_output_truncated':
+      return '规划结果被截断';
     case 'planner_json_parse_failed':
       return '规划结果解析';
     case 'planner_schema_invalid':
@@ -436,6 +438,8 @@ export function plannerErrorReason(errorKind?: string, fallback?: string): strin
       return '规划模型本轮输出被截断（max_output_tokens 不足或被安全策略中断）。';
     case 'provider_response_payload_missing':
       return '规划模型请求已完成并记录了输出 Token，但当前模型服务没有返回可读取的文本内容。CyImagePro 已尝试恢复响应（Retrieve + SSE Streaming），但仍未获取到 Planner 输出。建议更换模型或模型服务后重新规划。';
+    case 'planner_output_truncated':
+      return '规划结果输出不完整（JSON 被截断），系统已自动重试一次仍未成功。请重新规划，或精简任务描述后重试。';
     case 'planner_json_parse_failed':
       return '规划模型返回了内容，但不是合法任务 JSON。';
     case 'planner_schema_invalid':
@@ -492,6 +496,10 @@ export function isPlannerErrorRetryable(
   upstream?: { code?: string; type?: string },
 ): boolean {
   if (errorKind === 'response_text_missing' || errorKind === 'response_incomplete') return true;
+  // planner_output_truncated：Rust 端已做过一次针对性自动重试（压缩输出 + 同预算重发）。
+  // 自动重试不再叠加，但用户手动点"重新规划"值得鼓励 —— 返回 true 让 UI 不显示
+  // "重试无法解决"的劝阻文案。
+  if (errorKind === 'planner_output_truncated') return true;
   // provider_response_payload_missing：Recovery 流水线（Retrieve + SSE）已经跑完，
   // 再自动 retry 只会重复消耗 token。允许用户手动重新规划（前端按钮），但禁止自动重试。
   if (errorKind === 'provider_response_payload_missing') return false;

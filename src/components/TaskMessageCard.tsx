@@ -1,6 +1,7 @@
 import { memo, useEffect, useState } from 'react';
 import type { PlannerDiagnostic, TaskMessageState } from '../types';
 import { isPlannerErrorRetryable } from '../utils/agent/promptPlanner';
+import { sourceImageSelectionLabel, type ConversationImageOption } from '../utils/agent/taskSourceImage';
 import { executionVerbLabel, formatDuration, formatDurationPrecise, liveElapsedMs } from '../utils/taskDuration';
 import './TaskMessageCard.css';
 
@@ -17,6 +18,10 @@ interface TaskMessageCardProps {
   onModify?: (finalPrompt: string, finalNegativePrompt: string) => void;
   /** 当卡片处于 PLANNING_FAILED 时，点击"重新规划"按钮 */
   onReplan?: (newText?: string) => void;
+  /** 当前对话的可用图片（生成 + 上传），供"切换图片"Picker 使用。 */
+  sourceImageOptions?: ConversationImageOption[];
+  /** 用户在 Picker 中手动选择了一张源图 —— 只覆盖当前任务快照，不污染会话默认规则。 */
+  onSwitchSourceImage?: (image: ConversationImageOption) => void;
 }
 
 const DEFAULT_EXECUTION_MODEL = 'gpt-image-2';
@@ -145,6 +150,16 @@ function truncateRawOutput(text: string | undefined, limit = 4000): string | und
   return text.slice(0, limit) + `\n\n…（已截断，仅显示前 ${limit} 字符）`;
 }
 
+/** Picker 里的短时间标签（MM-DD HH:mm），解析失败返回空串。 */
+function formatPickerTime(iso?: string): string {
+  if (!iso) return '';
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return '';
+  const d = new Date(t);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 async function copyToClipboard(text: string): Promise<boolean> {
   try {
     await navigator.clipboard.writeText(text);
@@ -166,6 +181,8 @@ function TaskMessageCardImpl({
   onConfirm,
   onModify,
   onReplan,
+  sourceImageOptions,
+  onSwitchSourceImage,
 }: TaskMessageCardProps) {
   const [tick, setTick] = useState(0);
   const [elapsedTick, setElapsedTick] = useState(0);
@@ -175,6 +192,7 @@ function TaskMessageCardImpl({
   const [showPlannerDetail, setShowPlannerDetail] = useState(false);
   const [rawOutputExpanded, setRawOutputExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [showImagePicker, setShowImagePicker] = useState(false);
 
   useEffect(() => {
     setDraftPrompt(state.finalPrompt || state.prompt || '');
@@ -201,10 +219,16 @@ function TaskMessageCardImpl({
     return () => clearInterval(timer);
   }, [isExecutionTimingStage, state.executionStartedAt, state.executionDurationMs]);
 
-  // 当 stage 切换时，重置详情区开关，避免上一阶段的展开状态污染新阶段
+  // 当 stage 切换时，重置详情区开关，避免上一阶段的展开状态污染新阶段。
+  // 关键：进入 planning（正在规划/重新规划）必须强制收起编辑器与 Picker ——
+  // "重新规划"是一键行为，规划期间不允许残留任何编辑态 UI。
   useEffect(() => {
     setShowPlannerDetail(false);
     setRawOutputExpanded(false);
+    if (state.stage === 'planning') {
+      setEditing(false);
+      setShowImagePicker(false);
+    }
   }, [state.stage, state.taskId]);
 
   const headline = stageHeadline(state.stage, state.planningAttempt);
@@ -241,6 +265,22 @@ function TaskMessageCardImpl({
     || state.resolvedTaskKind === 'image_edit'
     || state.resolvedTaskKind === 'image_reference_generation';
   const sourceThumb = state.sourceImagePreviewUrl;
+
+  // ===== 源图绑定展示 / 切换（任务卡必须明确告诉用户引用了哪张图）=====
+  const conversationImageCount = sourceImageOptions?.length ?? 0;
+  const canSwitchSourceImage = !!onSwitchSourceImage
+    && conversationImageCount > 1
+    && !editing
+    && !confirming
+    && !isStreaming;
+  const isAttachmentSourced = (state.orderedAttachments?.length ?? 0) > 0
+    || state.sourceImageSelection === 'attachment';
+  const hasConversationSource = !!(state.sourceImageId || state.sourceImagePath);
+  const sourceSelectionLabel = isAttachmentSourced
+    ? sourceImageSelectionLabel('attachment')
+    : hasConversationSource
+      ? sourceImageSelectionLabel(state.sourceImageSelection || 'latest')
+      : sourceImageSelectionLabel('none');
   // 解析后的上下文摘要：作品 / 主体 / 补充标记。仅在 inheritedFromPreviousTurn=true 时展示。
   const resolvedCtx = state.resolvedContext;
   const hasResolvedContext = !!(resolvedCtx && (resolvedCtx.inheritedFromPreviousTurn || resolvedCtx.augmentationDetected));
@@ -316,6 +356,51 @@ function TaskMessageCardImpl({
     onModify?.(draftPrompt.trim(), draftNegative.trim());
   };
 
+  // 「切换图片」Picker：仅展示当前对话内的图片（生成 + 上传），按时间正序，
+  // 末位即最新。选择即提交（store 层只覆盖当前任务快照，不改会话默认规则）。
+  const renderImagePicker = () => {
+    if (!showImagePicker || !sourceImageOptions || sourceImageOptions.length === 0 || !onSwitchSourceImage) {
+      return null;
+    }
+    return (
+      <div className="task-message-image-picker">
+        <div className="task-message-image-picker-head">选择源图片（当前对话 {sourceImageOptions.length} 张）</div>
+        <div className="task-message-image-picker-grid">
+          {sourceImageOptions.map((opt, idx) => {
+            const isCurrent = (state.sourceImageId && opt.imageId === state.sourceImageId)
+              || (!!state.sourceImagePath && opt.localPath === state.sourceImagePath);
+            const isLatest = idx === sourceImageOptions.length - 1;
+            return (
+              <button
+                key={opt.imageId}
+                type="button"
+                className={`task-message-picker-item${isCurrent ? ' current' : ''}`}
+                onClick={() => {
+                  setShowImagePicker(false);
+                  onSwitchSourceImage(opt);
+                }}
+                title={opt.fileName || opt.imageId}
+              >
+                {opt.url ? (
+                  <img src={opt.url} alt={opt.fileName || '对话图片'} loading="lazy" decoding="async" />
+                ) : (
+                  <div className="task-message-picker-thumb-fallback">无预览</div>
+                )}
+                <span className="task-message-picker-name">
+                  第 {idx + 1} 张{isCurrent ? ' · 当前图片' : isLatest ? ' · 最新生成' : ''}
+                </span>
+                <span className="task-message-picker-sub">
+                  {opt.source === 'uploaded' ? '上传' : '生成'}{opt.createdAt ? ` · ${formatPickerTime(opt.createdAt)}` : ''}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        <button type="button" className="tm-btn tiny" onClick={() => setShowImagePicker(false)}>收起</button>
+      </div>
+    );
+  };
+
   const handleCopyRawOutput = async () => {
     if (!plannerDiagnostic?.rawOutput) return;
     const ok = await copyToClipboard(plannerDiagnostic.rawOutput);
@@ -386,6 +471,45 @@ function TaskMessageCardImpl({
             )}
           </div>
 
+          {/* ====== 图片引用（规划失败卡也必须可见：用户需要知道重试会编辑哪张图）====== */}
+          {(state.taskType === 'edit' || hasConversationSource)
+            && (sourceThumb || state.sourceImageFileName || state.sourceImageId) && (
+            <div className="task-message-source-image compact">
+              <span>图片引用</span>
+              <div className="task-message-source-image-body">
+                {sourceThumb ? (
+                  <img
+                    src={sourceThumb}
+                    alt={state.sourceImageFileName || '源图片'}
+                    onClick={() => sourceThumb && onPreviewImage?.(sourceThumb, {
+                      name: state.sourceImageFileName,
+                    })}
+                  />
+                ) : (
+                  <div className="task-message-source-image-placeholder">
+                    {state.sourceImageFileName || state.sourceImageId || '源图'}
+                  </div>
+                )}
+                <div className="task-message-source-image-meta">
+                  <span className="task-message-source-image-name">{sourceSelectionLabel}</span>
+                  {state.sourceImageId && (
+                    <span className="task-message-source-image-id">#{String(state.sourceImageId).slice(0, 8)}</span>
+                  )}
+                </div>
+                {canSwitchSourceImage && (
+                  <button
+                    type="button"
+                    className="tm-btn tiny"
+                    onClick={() => setShowImagePicker(v => !v)}
+                  >
+                    切换图片
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+          {renderImagePicker()}
+
           <div className="task-message-error">{displayReason}</div>
 
           {retryHint && (
@@ -399,9 +523,15 @@ function TaskMessageCardImpl({
               <button
                 type="button"
                 className="tm-btn primary"
-                onClick={() => onReplan()}
+                onClick={() => {
+                  // 一键重新规划：立即收起编辑器 / Picker，直接用当前任务需求重跑 Planner。
+                  // 不弹编辑框、不需要用户二次确认。
+                  setEditing(false);
+                  setShowImagePicker(false);
+                  onReplan();
+                }}
                 disabled={isStreaming}
-                title="重新规划"
+                title="使用当前任务需求立即重新规划"
               >
                 重新规划
               </button>
@@ -501,7 +631,13 @@ Upstream Code       : ${plannerDiagnostic.responsesShape.upstreamErrorCode ?? '(
 Upstream Type       : ${plannerDiagnostic.responsesShape.upstreamErrorType ?? '(无)'}
 Upstream Param      : ${plannerDiagnostic.responsesShape.upstreamErrorParam ?? '(无)'}
 Response ID         : ${plannerDiagnostic.responsesShape.responseId ?? '(无)'}
-Output Tokens       : ${plannerDiagnostic.responsesShape.outputTokens ?? '(无)'}`}
+Output Tokens       : ${plannerDiagnostic.responsesShape.outputTokens ?? '(无)'}
+Finish Reason       : ${plannerDiagnostic.responsesShape.finishReason ?? '(无)'}
+Input Tokens        : ${plannerDiagnostic.responsesShape.inputTokens ?? '(无)'}
+Reasoning Tokens    : ${plannerDiagnostic.responsesShape.reasoningTokens ?? '(无)'}
+Auto Retry          : ${plannerDiagnostic.responsesShape.autoRetry
+    ? `${plannerDiagnostic.responsesShape.autoRetry.trigger ?? '?'} → ${plannerDiagnostic.responsesShape.autoRetry.result ?? '?'}`
+    : '(未触发)'}`}
                   </pre>
                 </div>
               )}
@@ -564,12 +700,16 @@ Streaming           : ${plannerDiagnostic.recovery.streamResult ?? '(未执行)'
                   type="button"
                   className="tm-btn primary"
                   onClick={() => {
-                    if (!draftPrompt.trim()) return;
-                    onReplan?.();
+                    // 「修改任务」编辑器的一次性提交：把用户改写后的需求真正传给
+                    // re-planner（旧版漏传 newText，用户编辑被静默丢弃），并关闭编辑器。
+                    const next = draftPrompt.trim();
+                    if (!next) return;
+                    setEditing(false);
+                    onReplan?.(next);
                   }}
                   disabled={!draftPrompt.trim()}
                 >
-                  重新规划
+                  保存并重新规划
                 </button>
               </div>
             </div>
@@ -653,12 +793,14 @@ Streaming           : ${plannerDiagnostic.recovery.streamResult ?? '(未执行)'
                   type="button"
                   className="tm-btn primary"
                   onClick={() => {
-                    if (!draftPrompt.trim()) return;
-                    onReplan?.();
+                    const next = draftPrompt.trim();
+                    if (!next) return;
+                    setEditing(false);
+                    onReplan?.(next);
                   }}
                   disabled={!draftPrompt.trim()}
                 >
-                  重新规划
+                  保存并重新规划
                 </button>
               </div>
             </div>
@@ -684,6 +826,13 @@ Streaming           : ${plannerDiagnostic.recovery.streamResult ?? '(未执行)'
           )}
           {plannerModelLabel && state.agentModel !== (state.executionModel || DEFAULT_EXECUTION_MODEL) && (
             <div><span>规划模型</span><p>{plannerModelLabel}</p></div>
+          )}
+          {/* 图片引用（文生图明确显示"未引用"；编辑任务由下方缩略图块展示绑定方式） */}
+          {isWaiting && !isEditKind && (
+            <div><span>图片引用</span><p>未引用图片 · 文生图</p></div>
+          )}
+          {isWaiting && isEditKind && !sourceThumb && !state.sourceImageFileName && (state.orderedAttachments?.length ?? 0) === 0 && (
+            <div><span>图片引用</span><p>{sourceSelectionLabel}</p></div>
           )}
           {/* Chat Handoff 语义上下文：布局 + 来源（spec 四十五节） */}
           {state.gridLayout && state.gridLayout.rows > 0 && !state.compositeLayout && (
@@ -741,13 +890,14 @@ Streaming           : ${plannerDiagnostic.recovery.streamResult ?? '(未执行)'
         </div>
       )}
 
-      {/* ====== 编辑任务的 WAITING_CONFIRM 卡片：展示源图片缩略图 ======
-          关键修复：用语义标签 "图一 / 图二 / 图三" 替代"已绑定源图"这种过强措辞，
-          并优先读取任务提交时冻结的 orderedAttachments 快照 ——
-          后续 Composer 增删图不能影响历史任务的展示。 */}
+      {/* ====== 编辑任务的 WAITING_CONFIRM 卡片：图片引用 + 缩略图 + 切换图片 ======
+          引用方式必须明确（spec 核心要求）：
+            - 附件任务 → "本轮上传图片"（语义标签仍用"图一"，与附件映射编号一致）
+            - 会话源图 → "上一张图片" / "已手动选择"
+          缩略图可点击查看大图（复用现有预览组件）；多图对话提供"切换图片"Picker。 */}
       {!isPlanningFailed && isWaiting && isEditKind && (sourceThumb || state.sourceImageFileName || (state.orderedAttachments?.length ?? 0) > 0) && (
         <div className="task-message-source-image">
-          <span>编辑目标图</span>
+          <span>图片引用</span>
           <div className="task-message-source-image-body">
             {sourceThumb ? (
               <img
@@ -763,26 +913,26 @@ Streaming           : ${plannerDiagnostic.recovery.streamResult ?? '(未执行)'
               </div>
             ) : (
               <div className="task-message-source-image-placeholder">
-                {state.sourceImageFileName || state.sourceImageId || '图一'}
+                {state.sourceImageFileName || state.sourceImageId || '源图'}
               </div>
             )}
             <div className="task-message-source-image-meta">
               {(() => {
-                // 优先用任务快照里的"图一"语义标签，而不是真实文件名 / "已绑定源图"。
+                // 附件任务：语义标签"图一"（与附件映射编号一致）+ 绑定方式；
+                // 会话源图任务：直接展示绑定方式（上一张图片 / 已手动选择）。
                 const snapshot = state.orderedAttachments?.[0];
-                const label = '图一';
-                if (snapshot) {
+                if (isAttachmentSourced && snapshot) {
                   return (
-                    <span className="task-message-source-image-name" title={snapshot.internalName || label}>
-                      {label}
+                    <span className="task-message-source-image-name" title={snapshot.internalName || '图一'}>
+                      图一 · {sourceImageSelectionLabel('attachment')}
                       {snapshot.internalName ? ` · ${snapshot.internalName}` : ''}
                     </span>
                   );
                 }
                 return (
-                  <span className="task-message-source-image-name" title={state.sourceImageFileName || label}>
-                    {label}
-                    {state.sourceImageFileName ? ` · ${state.sourceImageFileName}` : ''}
+                  <span className="task-message-source-image-name" title={state.sourceImageFileName || sourceSelectionLabel}>
+                    {sourceSelectionLabel}
+                    {!isAttachmentSourced && state.sourceImageFileName ? ` · ${state.sourceImageFileName}` : ''}
                   </span>
                 );
               })()}
@@ -790,9 +940,20 @@ Streaming           : ${plannerDiagnostic.recovery.streamResult ?? '(未执行)'
                 <span className="task-message-source-image-id">#{String(state.sourceImageId).slice(0, 8)}</span>
               )}
             </div>
+            {canSwitchSourceImage && (
+              <button
+                type="button"
+                className="tm-btn tiny"
+                onClick={() => setShowImagePicker(v => !v)}
+                title="从当前对话的图片中选择源图"
+              >
+                切换图片
+              </button>
+            )}
           </div>
         </div>
       )}
+      {!isPlanningFailed && isWaiting && renderImagePicker()}
 
       {/* 多图附件：当 orderedAttachments > 1 时，列出图二 / 图三 等参考图。
           没有 orderedAttachments 时降级到 attachmentNames 数量提示。 */}

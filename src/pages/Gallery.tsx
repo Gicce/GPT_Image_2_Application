@@ -4,7 +4,7 @@ import { useTaskStore } from '../store/useTaskStore';
 import { useAuthStore } from '../store/useAuthStore';
 import { useImageEditStore } from '../store/useImageEditStore';
 import { api } from '../services/api';
-import { assertCanRunImageTask } from '../services/billingService';
+import { authorizeImageTask, settleImageTask, createRequestId, registerTaskAuthorization } from '../services/billingService';
 import { setAsAvatarFromDataUrl } from '../services/avatarService';
 import type { ImageRecord, Task } from '../types';
 import { dedupeGalleryItems } from '../utils/galleryIdentity';
@@ -272,16 +272,18 @@ export default function Gallery() {
           }}
           onRegenerate={async task => {
             const { isLoggedIn } = useAuthStore.getState();
+            let billingRequestId: string | undefined;
             if (isLoggedIn) {
               try {
-                await assertCanRunImageTask('gpt-image-2', 1);
+                billingRequestId = createRequestId('regen');
+                await authorizeImageTask(billingRequestId, 1);
               } catch (err: any) {
-                toastError(err?.message || '余额不足，请先充值后再生成。');
+                toastError(err?.message || '余额不足，请充值后继续使用');
                 return;
               }
             }
             try {
-              await createAndExecuteTask({
+              const created = await createAndExecuteTask({
                 prompt: task.final_prompt || task.prompt,
                 negative_prompt: task.final_negative_prompt || task.negative_prompt,
                 user_prompt_raw: task.user_prompt_raw,
@@ -297,9 +299,11 @@ export default function Gallery() {
                 execution_mode: 'single',
                 task_source: 'manual',
               });
+              if (billingRequestId) registerTaskAuthorization(created.id, billingRequestId);
               setPreview(null);
               window.dispatchEvent(new CustomEvent('cyimage-navigate', { detail: { page: 'queue' } }));
             } catch (err: any) {
+              if (billingRequestId) void settleImageTask(billingRequestId, false, 0, 'regenerate failed');
               toastError(err?.message || '再来一张失败');
             }
           }}

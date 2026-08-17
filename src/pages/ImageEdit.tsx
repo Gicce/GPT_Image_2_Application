@@ -5,7 +5,7 @@ import { useImageStore } from '../store/useImageStore';
 import { useDraftStore } from '../store/useDraftStore';
 import { useAuthStore } from '../store/useAuthStore';
 import { api } from '../services/api';
-import { assertCanRunImageTask } from '../services/billingService';
+import { authorizeImageTask, settleImageTask, createRequestId, registerTaskAuthorization } from '../services/billingService';
 import { SIZES, QUALITIES, QUALITY_LABELS, FORMATS } from '../types';
 import SuccessDialog from '../components/SuccessDialog';
 import './ImageEdit.css';
@@ -183,14 +183,15 @@ export default function ImageEdit() {
     if (!prompt.trim()) { setError('请输入提示词'); return; }
     if (!outputDir.trim()) { setError('请选择输出目录'); return; }
 
-    // Balance check for logged-in users (server billing mode)
+    // 生成前预占额度（server billing mode）：余额不足在此阻断，不会调用上游
     const { isLoggedIn } = useAuthStore.getState();
+    let billingRequestId: string | undefined;
     if (isLoggedIn) {
       try {
-        // TODO: 后续支持从模型配置动态选择 model 名称
-        await assertCanRunImageTask('gpt-image-2', count);
+        billingRequestId = createRequestId('edit');
+        await authorizeImageTask(billingRequestId, count);
       } catch (err: any) {
-        setError(err?.message || '余额不足，请先充值后再生成。');
+        setError(err?.message || '余额不足，请充值后继续使用');
         return;
       }
     }
@@ -208,12 +209,14 @@ export default function ImageEdit() {
         source_images: sourceImages,
       });
       addTask(task);
+      if (billingRequestId) registerTaskAuthorization(task.id, billingRequestId);
       setPrompt('');
       setSourceImages([]);
       setPreviewUrls({});
       setCount(1);
       setShowSuccess(true);
     } catch (err: any) {
+      if (billingRequestId) void settleImageTask(billingRequestId, false, 0, 'create task failed');
       setError(err?.toString() || '创建任务失败');
     } finally {
       setSubmitting(false);
