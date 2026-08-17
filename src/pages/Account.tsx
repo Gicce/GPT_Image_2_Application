@@ -54,6 +54,7 @@ export default function Account() {
   const [statusMsg, setStatusMsg] = useState('');
   const [qrCodeUrl, setQrCodeUrl] = useState<string>('');
   const [qrCodeLink, setQrCodeLink] = useState<string>('');
+  const [qrRemainSec, setQrRemainSec] = useState(0);
   const [showPricingDialog, setShowPricingDialog] = useState(false);
   const [usageRecords, setUsageRecords] = useState<UsageRecord[]>([]);
   const [orders, setOrders] = useState<UserOrder[]>([]);
@@ -99,6 +100,13 @@ export default function Account() {
     if (allocTimerRef.current) clearInterval(allocTimerRef.current);
     if (refundTimerRef.current) clearInterval(refundTimerRef.current);
   }, []);
+
+  // 二维码剩余支付时间倒计时（与轮询窗口 5 分钟对齐）
+  useEffect(() => {
+    if (qrRemainSec <= 0) return;
+    const t = setTimeout(() => setQrRemainSec(s => (s > 0 ? s - 1 : 0)), 1000);
+    return () => clearTimeout(t);
+  }, [qrRemainSec]);
 
   async function loadOrders() {
     setOrdersLoading(true);
@@ -267,6 +275,7 @@ export default function Account() {
         const qrDataUrl = await generatePaymentQrCode(r.code_url);
         setQrCodeUrl(qrDataUrl);
         setQrCodeLink(r.code_url);
+        setQrRemainSec(300);
         setStatusMsg('请使用微信扫描二维码支付');
       } else {
         setStatusMsg('订单已创建，等待支付...');
@@ -323,6 +332,7 @@ export default function Account() {
           return next;
         });
         setQrCodeUrl('');
+        setQrRemainSec(0);
         setQrCodeLink('');
         setStatusMsg('支付超时，订单已关闭。如需充值请重新下单。');
         return;
@@ -354,6 +364,7 @@ export default function Account() {
       setAllocMap(next);
       if (anyPaid && qrCodeUrl) {
         setQrCodeUrl('');
+        setQrRemainSec(0);
         setQrCodeLink('');
         setStatusMsg('支付成功，等待充值到账...');
       }
@@ -362,12 +373,18 @@ export default function Account() {
         setPolling(false);
         setStatusMsg('充值到账完成！');
         await refreshUser();
+        const credited = polledOrders
+          .map(o => o.amount_usd)
+          .filter((v, i, a) => a.indexOf(v) === i)
+          .reduce((s, v) => s + v, 0);
+        toastSuccess(`充值成功，$${credited.toFixed(2)} 已到账`);
         setTimeout(() => {
           setPendingOrders([]);
           setAllocMap({});
           setAmount('');
           setQrCodeUrl('');
           setQrCodeLink('');
+          setQrRemainSec(0);
           setStatusMsg('');
         }, 3000);
       }
@@ -392,6 +409,7 @@ export default function Account() {
     });
     setQrCodeUrl('');
     setQrCodeLink('');
+    setQrRemainSec(0);
     setStatusMsg('订单已取消');
   }
 
@@ -638,6 +656,13 @@ export default function Account() {
               <div className="qr-pay-box">
                 <img className="qr-pay-img" src={qrCodeUrl} alt="微信支付二维码" />
                 <p className="qr-pay-hint">请使用微信扫描上方二维码完成支付</p>
+                {qrRemainSec > 0 && (
+                  <p className="qr-pay-timer">
+                    订单号 {pendingOrders[0]?.out_trade_no ?? ''} · 剩余时间{" "}
+                    {String(Math.floor(qrRemainSec / 60)).padStart(2, '0')}:
+                    {String(qrRemainSec % 60).padStart(2, '0')}
+                  </p>
+                )}
                 {qrCodeLink && (
                   <a className="qr-pay-link" href={qrCodeLink} target="_blank" rel="noopener noreferrer">
                     无法扫码？点击链接支付
