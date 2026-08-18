@@ -55,6 +55,18 @@ export default function VersionModal({ version, onClose }: { version: string; on
             </div>
           )}
 
+          {status.phase === 'download_failed' && (
+            <div className="update-available">
+              <span className="update-available-text">发现新版本 v{status.latestVersion}</span>
+              <div className="update-error">{status.error ?? '更新下载失败，请检查网络后重试。'}</div>
+              <div className="update-version-row">
+                <span className="update-version-item">当前版本 v{installedVersion}</span>
+                <span className="update-version-item update-version-item--new">最新版本 v{status.latestVersion}</span>
+              </div>
+              <button className="btn-update-now" onClick={() => void applyUpdate()}>重试更新</button>
+            </div>
+          )}
+
           {status.phase === 'downloading' && (
             <div className="update-progress">
               <span>正在下载更新 v{status.latestVersion}... {progress}%</span>
@@ -131,7 +143,8 @@ export default function VersionModal({ version, onClose }: { version: string; on
         </div>
 
         <div className="version-modal-footer">
-          {status.phase !== 'downloading' && status.phase !== 'installing' && status.phase !== 'restart_required' && (
+          {status.phase !== 'downloading' && status.phase !== 'installing' && status.phase !== 'restart_required'
+            && status.phase !== 'check_failed' && status.phase !== 'download_failed' && (
             <button className="btn-check-update" onClick={() => void checkUpdate(true)} disabled={status.phase === 'checking'}>
               {status.phase === 'checking' ? '检查中...' : '检查更新'}
             </button>

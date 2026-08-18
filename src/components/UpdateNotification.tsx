@@ -8,7 +8,7 @@ export default function UpdateNotification() {
     ? Math.round((status.downloaded / status.contentLength) * 100)
     : 0;
 
-  const visible = status.phase === 'update_available' || status.phase === 'downloading' || status.phase === 'installing' || status.phase === 'restart_required';
+  const visible = status.phase === 'update_available' || status.phase === 'downloading' || status.phase === 'download_failed' || status.phase === 'installing' || status.phase === 'restart_required';
 
   return (
     <>
@@ -20,6 +20,13 @@ export default function UpdateNotification() {
               <div className="update-notif-progress">
                 <div className="update-notif-fill" style={{ width: `${progress}%` }} />
               </div>
+            </div>
+          ) : status.phase === 'download_failed' ? (
+            <div className="update-notif-available">
+              <span>v{status.latestVersion} 下载失败：{status.error ?? '暂时无法连接更新服务器，请稍后重试。'}</span>
+              <button className="update-notif-log-btn" onClick={openChangelog}>查看更新日志</button>
+              <button className="update-notif-btn" onClick={() => void applyUpdate()}>重试更新</button>
+              <button className="update-notif-dismiss" onClick={reset}>稍后</button>
             </div>
           ) : status.phase === 'installing' ? (
             <span>正在安装更新，应用将自动重启...</span>

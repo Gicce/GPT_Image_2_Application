@@ -31,10 +31,12 @@ export default function Sidebar({ currentPage, onNavigate }: SidebarProps) {
     checkUpdate();
   }, []);
 
-  const hasUpdate = status.phase === 'update_available' || status.phase === 'restart_required';
+  const hasUpdate = status.phase === 'update_available' || status.phase === 'download_failed' || status.phase === 'restart_required';
   const updateTitle = status.phase === 'restart_required'
     ? `新版本 v${status.latestVersion} 已下载，点击重启安装`
-    : `发现新版本 v${status.latestVersion}`;
+    : status.phase === 'download_failed'
+      ? `v${status.latestVersion} 下载失败，点击重试更新`
+      : `发现新版本 v${status.latestVersion}`;
 
   return (
     <aside className="sidebar">

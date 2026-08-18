@@ -11,7 +11,7 @@ const fetchRecentReleasesMock = vi.fn();
 const downloadUpdateMock = vi.fn();
 const installUpdateMock = vi.fn();
 const restartAppMock = vi.fn();
-const describeUpdateErrorMock = vi.fn((e: unknown) => `err:${String(e)}`);
+const describeUpdateErrorMock = vi.fn((e: unknown, ctx?: string) => `err:${ctx}:${String(e)}`);
 
 vi.mock('../../services/updateService', () => ({
   checkForUpdate: (...args: unknown[]) => checkForUpdateMock(...args),
@@ -19,7 +19,7 @@ vi.mock('../../services/updateService', () => ({
   downloadUpdate: (...args: unknown[]) => downloadUpdateMock(...args),
   installUpdate: (...args: unknown[]) => installUpdateMock(...args),
   restartApp: (...args: unknown[]) => restartAppMock(...args),
-  describeUpdateError: (e: unknown) => describeUpdateErrorMock(e),
+  describeUpdateError: (e: unknown, ctx?: string) => describeUpdateErrorMock(e, ctx),
 }));
 
 import { useUpdateStore, type UpdateStatus } from '../useUpdateStore';
@@ -170,18 +170,44 @@ describe('applyUpdate / installAndRestart 下载安装流', () => {
     expect(s.contentLength).toBe(200);
   });
 
-  it('下载失败 => 回到 update_available 且带 error（可重试）', async () => {
+  it('下载失败 => download_failed（锁死：不是 check_failed），保留 updateInfo 与 changelog 可重试', async () => {
     checkForUpdateMock.mockResolvedValue(makeUpdate('4.0.2'));
+    fetchRecentReleasesMock.mockResolvedValue([{ version: '4.0.2', date: '2026-08-19', notes: 'x' }]);
     await useUpdateStore.getState().checkUpdate(true);
     await flush();
 
-    downloadUpdateMock.mockRejectedValue(new Error('network reset'));
+    downloadUpdateMock.mockRejectedValue(new Error('error sending request for url (https://www.zjcypc.com/...)'));
     await useUpdateStore.getState().applyUpdate();
     await flush();
     const s = useUpdateStore.getState().status;
-    expect(s.phase).toBe('update_available');
+    expect(s.phase).toBe('download_failed');
+    expect(s.phase).not.toBe('check_failed');
     expect(s.updateInfo).not.toBeNull();
+    expect(s.latestVersion).toBe('4.0.2');
     expect(s.error).toBeTruthy();
+    // 错误映射必须带 download 语境（UI 显示「更新下载失败」而非「检查更新失败」）
+    expect(describeUpdateErrorMock).toHaveBeenCalledWith(expect.anything(), 'download');
+    // 下载失败不影响 changelog 展示
+    expect(s.recentReleases).toHaveLength(1);
+  });
+
+  it('download_failed 状态下重试下载成功 => restart_required', async () => {
+    checkForUpdateMock.mockResolvedValue(makeUpdate('4.0.2'));
+    fetchRecentReleasesMock.mockResolvedValue([]);
+    await useUpdateStore.getState().checkUpdate(true);
+    await flush();
+
+    downloadUpdateMock.mockRejectedValueOnce(new Error('network reset'));
+    await useUpdateStore.getState().applyUpdate();
+    await flush();
+    expect(useUpdateStore.getState().status.phase).toBe('download_failed');
+
+    downloadUpdateMock.mockResolvedValue(undefined);
+    await useUpdateStore.getState().applyUpdate();
+    await flush();
+    const s = useUpdateStore.getState().status;
+    expect(s.phase).toBe('restart_required');
+    expect(s.error).toBeNull();
   });
 
   it('installAndRestart 成功 => installing 并触发 relaunch', async () => {

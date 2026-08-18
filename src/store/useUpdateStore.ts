@@ -23,6 +23,7 @@ export interface ReleaseNote {
  *   latest             updater 正常响应且确认已是最新
  *   check_failed       updater 请求/解析失败（绝不视为 latest）
  *   downloading        正在下载更新包
+ *   download_failed    下载失败（版本发现已成功，保留 updateInfo/changelog 可重试）
  *   restart_required   下载完成，等待用户确认重启安装
  *   installing         正在安装（随后自动重启）
  */
@@ -33,6 +34,7 @@ export type UpdatePhase =
   | 'latest'
   | 'check_failed'
   | 'downloading'
+  | 'download_failed'
   | 'restart_required'
   | 'installing';
 
@@ -54,7 +56,7 @@ interface UpdateState {
   status: UpdateStatus;
   /** 检查更新。force=false 且已检查过时跳过；checking/downloading/installing 期间不重入。 */
   checkUpdate: (force?: boolean) => Promise<void>;
-  /** 下载更新包（不安装），完成后进入 restart_required。 */
+  /** 下载更新包（不安装），完成后进入 restart_required；update_available/download_failed 状态可调用（失败重试）。 */
   applyUpdate: () => Promise<void>;
   /** 安装已下载的更新并重启应用。 */
   installAndRestart: () => Promise<void>;
@@ -150,7 +152,7 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
 
   applyUpdate: async () => {
     const { status } = get();
-    if (!status.updateInfo || status.phase !== 'update_available') return;
+    if (!status.updateInfo || (status.phase !== 'update_available' && status.phase !== 'download_failed')) return;
 
     set({ status: { ...status, phase: 'downloading', error: null, downloaded: 0, contentLength: 0 } });
     try {
@@ -159,8 +161,9 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
       });
       set(s => ({ status: { ...s.status, phase: 'restart_required' } }));
     } catch (e) {
-      // 下载失败：保留 updateInfo，回到 update_available 允许重试；旧客户端不受影响
-      set(s => ({ status: { ...s.status, phase: 'update_available', error: describeUpdateError(e) } }));
+      // 下载失败：版本发现已成功，进入 download_failed（区别于 check_failed），
+      // 保留 updateInfo 与 changelog，允许用户重试
+      set(s => ({ status: { ...s.status, phase: 'download_failed', error: describeUpdateError(e, 'download') } }));
     }
   },
 
@@ -173,7 +176,7 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
       await installUpdate(status.updateInfo);
     } catch (e) {
       // 安装失败：回到 update_available 重新下载重试
-      set(s => ({ status: { ...s.status, phase: 'update_available', error: describeUpdateError(e) } }));
+      set(s => ({ status: { ...s.status, phase: 'update_available', error: describeUpdateError(e, 'install') } }));
       return;
     }
     try {

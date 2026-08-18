@@ -49,24 +49,28 @@ export async function restartApp(): Promise<void> {
   await relaunch();
 }
 
+/** 错误发生的阶段：决定用户可读文案的前缀与语义（检查 / 下载 / 安装） */
+export type UpdateErrorContext = 'check' | 'download' | 'install';
+
 /**
- * 将 updater 异常映射为用户可读的中文提示。
- * 只描述错误类别，绝不输出签名密钥等内容。
+ * 将 updater 异常映射为用户可读的中文提示（按发生阶段区分语义）。
+ * 只描述错误类别；原始错误（含 reqwest 的 URL 明文）仅进入诊断日志，绝不展示给用户，
+ * 也绝不输出签名密钥等内容。
  */
-export function describeUpdateError(error: unknown): string {
+export function describeUpdateError(error: unknown, context: UpdateErrorContext = 'check'): string {
   const message = error instanceof Error ? error.message : String(error ?? '');
   const text = message.toLowerCase();
-  if (text.includes('network') || text.includes('timeout') || text.includes('timed out') || text.includes('connect')) {
-    return '网络错误：无法连接更新服务器，请检查网络后重试。';
+  const prefix = context === 'download' ? '更新下载失败' : context === 'install' ? '更新安装失败' : '检查更新失败';
+  if (text.includes('signature')) {
+    return `${prefix}：安装包签名校验失败，已中止。`;
+  }
+  if (text.includes('network') || text.includes('timeout') || text.includes('timed out')
+    || text.includes('connect') || text.includes('error sending request')) {
+    return `${prefix}：暂时无法连接更新服务器，请检查网络后重试。`;
   }
   if (text.includes('404') || text.includes('not found')) {
-    return '未找到更新信息（latest.json 缺失），请稍后重试。';
+    return `${prefix}：未找到更新文件，请稍后重试。`;
   }
-  if (text.includes('signature')) {
-    return '更新包签名校验失败，已中止下载。';
-  }
-  if (message && message.length <= 160) {
-    return `检查更新失败：${message}`;
-  }
-  return '检查更新失败，请稍后重试。';
+  console.warn(`[updater:${context}] ${message}`);
+  return `${prefix}，请稍后重试。`;
 }

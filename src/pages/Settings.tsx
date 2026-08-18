@@ -1023,6 +1023,9 @@ export default function Settings() {
           {updateStatus.phase === 'downloading' && (
             <span className="form-hint form-hint-warning">正在下载更新 V{updateStatus.latestVersion}...</span>
           )}
+          {updateStatus.phase === 'download_failed' && (
+            <span className="form-hint form-hint-error">V{updateStatus.latestVersion} 下载失败：{updateStatus.error ?? '暂时无法连接更新服务器，请检查网络后重试。'}请通过侧边栏版本入口重试更新。</span>
+          )}
           {updateStatus.phase === 'installing' && (
             <span className="form-hint form-hint-warning">正在安装更新，应用将自动重启...</span>
           )}
@@ -1035,7 +1038,7 @@ export default function Settings() {
         </div>
         <div className="form-group">
           <label>应用信息</label>
-          <p className="form-hint">更新通道：GitHub Releases · 安装模式：passive（下载完成后询问安装）。</p>
+          <p className="form-hint">更新通道：官方服务器（www.zjcypc.com，GitHub Releases 备用）· 安装模式：passive（下载完成后询问安装）。</p>
         </div>
       </section>
     );

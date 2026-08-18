@@ -170,33 +170,148 @@ jobs:
             src-tauri/target/release/bundle/msi/*.msi.sig
           if-no-files-found: warn
 
-      # Updater 产物自检：正式 Release 必须包含 latest.json，
-      # 且 version 必须等于 tag 版本、windows-x86_64 必须带 url + signature。
-      # 任何一项缺失 => 本次发布失败，禁止产出“检测不到更新”的假 Release。
+      # ===== 官方镜像分发音（与 GitHub Release 同一次构建、同一签名，byte-for-byte）=====
+      # 策略：GitHub Release 与官方服务器 www.zjcypc.com 两处 manifest 内容恒相同，
+      # 所有 installer url 一律指向官方镜像；GitHub 仅作为元数据备用通道与人工下载渠道。
+
+      - name: Collect bundle files and hashes
+        id: bundles
+        shell: bash
+        run: |
+          TAG="${{ steps.meta.outputs.release_tag }}"
+          VER="${TAG#v}"
+          NSIS_EXE=$(ls src-tauri/target/release/bundle/nsis/*-setup.exe | head -1)
+          MSI_BIN=$(ls src-tauri/target/release/bundle/msi/*.msi | head -1)
+          for f in "$NSIS_EXE" "$NSIS_EXE.sig" "$MSI_BIN" "$MSI_BIN.sig"; do
+            [ -f "$f" ] || { echo "::error::缺少构建产物 $f"; exit 1; }
+          done
+          NSIS_SHA=$(sha256sum "$NSIS_EXE" | cut -d' ' -f1)
+          MSI_SHA=$(sha256sum "$MSI_BIN" | cut -d' ' -f1)
+          echo "nsis_exe=$NSIS_EXE" >> "$GITHUB_OUTPUT"
+          echo "nsis_sig=$NSIS_EXE.sig" >> "$GITHUB_OUTPUT"
+          echo "msi_bin=$MSI_BIN" >> "$GITHUB_OUTPUT"
+          echo "msi_sig=$MSI_BIN.sig" >> "$GITHUB_OUTPUT"
+          echo "nsis_sha=$NSIS_SHA" >> "$GITHUB_OUTPUT"
+          echo "msi_sha=$MSI_SHA" >> "$GITHUB_OUTPUT"
+          echo "构建产物 SHA256: nsis=$NSIS_SHA msi=$MSI_SHA"
+
+      - name: Generate official manifest from release manifest
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.meta.outputs.release_tag }}"
+          VER="${TAG#v}"
+          sleep 10
+          curl -sL --retry 5 --retry-delay 5 "https://github.com/Gicce/GPT_Image_2_Application/releases/download/${TAG}/latest.json" -o github-latest.json
+          node -e '
+            const fs = require("fs");
+            const ver = process.argv[1];
+            let m;
+            try { m = JSON.parse(fs.readFileSync("github-latest.json", "utf8")); }
+            catch { console.error("::error::Release 缺少 tauri-action 生成的 latest.json"); process.exit(1); }
+            const base = `https://www.zjcypc.com/client-updates/v${ver}/`;
+            for (const e of Object.values(m.platforms || {})) {
+              e.url = base + e.url.split("/").pop() + `?v=${ver}`;
+            }
+            fs.writeFileSync("official-latest.json", JSON.stringify(m, null, 2) + "\n");
+            console.log("official manifest generated (version=" + m.version + ")");
+          ' "$VER"
+
+      # 用官方 manifest 覆盖 Release 上的 latest.json 资产（version/signature/pub_date 不变，仅 url 指向官方镜像）
+      - name: Replace release latest.json asset with official manifest
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.meta.outputs.release_tag }}"
+          RELEASE_ID=$(gh api "repos/Gicce/GPT_Image_2_Application/releases/tags/${TAG}" --jq .id)
+          ASSET_ID=$(gh api "repos/Gicce/GPT_Image_2_Application/releases/${RELEASE_ID}/assets" --jq '.[] | select(.name=="latest.json") | .id')
+          if [ -n "$ASSET_ID" ]; then
+            gh api -X DELETE "repos/Gicce/GPT_Image_2_Application/releases/assets/${ASSET_ID}"
+            echo "旧 latest.json 资产已删除 (asset ${ASSET_ID})"
+          fi
+          gh api --method POST -H "Content-Type: application/octet-stream" --input official-latest.json \
+            "uploads/repos/Gicce/GPT_Image_2_Application/releases/${RELEASE_ID}/assets?name=latest.json" --jq .browser_download_url
+
+      - name: Upload artifacts to official mirror
+        shell: bash
+        env:
+          MIRROR_KEY: ${{ secrets.OFFICIAL_MIRROR_SSH_KEY }}
+          MIRROR_HOST: ${{ secrets.OFFICIAL_MIRROR_HOST }}
+          MIRROR_USER: ${{ secrets.OFFICIAL_MIRROR_USER }}
+        run: |
+          TAG="${{ steps.meta.outputs.release_tag }}"
+          VER="${TAG#v}"
+          set -euo pipefail
+          KEY_FILE=$(mktemp)
+          printf '%s\n' "$MIRROR_KEY" > "$KEY_FILE"
+          chmod 600 "$KEY_FILE"
+          SSH_OPTS="-i $KEY_FILE -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20"
+          STAGE="/tmp/cyimagepro-release-${VER}-$$"
+          ssh $SSH_OPTS "${MIRROR_USER}@${MIRROR_HOST}" "mkdir -p '${STAGE}/v${VER}'"
+          scp $SSH_OPTS \
+            "${{ steps.bundles.outputs.nsis_exe }}" \
+            "${{ steps.bundles.outputs.nsis_sig }}" \
+            "${{ steps.bundles.outputs.msi_bin }}" \
+            "${{ steps.bundles.outputs.msi_sig }}" \
+            "${MIRROR_USER}@${MIRROR_HOST}:${STAGE}/v${VER}/"
+          scp $SSH_OPTS official-latest.json "${MIRROR_USER}@${MIRROR_HOST}:${STAGE}/latest.json"
+          ssh $SSH_OPTS "${MIRROR_USER}@${MIRROR_HOST}" "set -euo pipefail; \
+            DEST=/opt/GPT_Image_2_service/client-updates; \
+            if [ -e \"\$DEST/v${VER}\" ]; then echo '::error::官方镜像已存在 v${VER}，禁止覆盖已发布产物'; exit 1; fi; \
+            mv '${STAGE}/v${VER}' \"\$DEST/v${VER}\" && \
+            mv '${STAGE}/latest.json' \"\$DEST/latest.json\" && \
+            rmdir '${STAGE}' && \
+            sha256sum \"\$DEST/v${VER}\"/* \"\$DEST/latest.json\""
+          rm -f "$KEY_FILE"
+
+      # Updater 产物自检：Release 与官方镜像的 manifest 必须一致，
+      # version 必须等于 tag 版本，三个 windows 平台键必须带 url + signature，
+      # 且所有 url host 必须是官方镜像（Official Manifest Guard：禁止 github.com）。
+      # 任何一项缺失 => 本次发布失败，禁止产出“检测不到更新”或“下载走 GitHub”的假 Release。
       - name: Verify updater manifest on release
         shell: bash
         run: |
           TAG="${{ steps.meta.outputs.release_tag }}"
           VER="${TAG#v}"
-          sleep 10
+          sleep 5
           curl -sL --retry 5 --retry-delay 5 "https://github.com/Gicce/GPT_Image_2_Application/releases/download/${TAG}/latest.json" -o latest-check.json
-          MANIFEST_VERSION=$(node -e '
-            const fs = require("fs");
-            let m;
-            try { m = JSON.parse(fs.readFileSync("latest-check.json", "utf8")); } catch { console.error("latest.json 解析失败或不存在"); process.exit(2); }
-            console.log(m.version || "");
-          ' 2>manifest_err.txt) || { cat manifest_err.txt; echo "::error::Release 缺少 latest.json，updater 将无法发现新版本"; exit 1; }
-          echo "latest.json version=${MANIFEST_VERSION} (expect ${VER})"
+          curl -sL --retry 5 --retry-delay 5 "https://www.zjcypc.com/client-updates/latest.json" -o official-check.json
           node -e '
-            const m = require("./latest-check.json");
+            const fs = require("fs");
+            let m, o;
+            try { m = JSON.parse(fs.readFileSync("latest-check.json", "utf8")); }
+            catch { console.error("::error::Release 缺少 latest.json，updater 将无法发现新版本"); process.exit(1); }
+            try { o = JSON.parse(fs.readFileSync("official-check.json", "utf8")); }
+            catch { console.error("::error::官方镜像 latest.json 不可用"); process.exit(1); }
             const errors = [];
             if (m.version !== process.argv[1]) errors.push(`version ${m.version} != tag ${process.argv[1]}`);
-            const win = m.platforms && m.platforms["windows-x86_64"];
-            if (!win) errors.push("缺少 windows-x86_64 平台条目");
-            else {
-              if (!win.url) errors.push("windows-x86_64 缺少 url");
-              if (!win.signature) errors.push("windows-x86_64 缺少 signature");
+            for (const key of ["windows-x86_64", "windows-x86_64-msi", "windows-x86_64-nsis"]) {
+              const e = m.platforms && m.platforms[key];
+              if (!e) { errors.push(`缺少 ${key} 平台条目`); continue; }
+              if (!e.url) errors.push(`${key} 缺少 url`);
+              if (!e.signature) errors.push(`${key} 缺少 signature`);
             }
+            const hosts = [...new Set(Object.values(m.platforms || {}).map(e => new URL(e.url).host))];
+            if (hosts.some(h => h !== "www.zjcypc.com")) errors.push(`manifest url host 非官方镜像: ${hosts.join(",")}`);
+            if (JSON.stringify(m) !== JSON.stringify(o)) errors.push("GitHub manifest 与官方 manifest 内容不一致");
             if (errors.length) { errors.forEach(e => console.error("::error::" + e)); process.exit(1); }
-            console.log("updater manifest OK: version=" + m.version + " url=" + win.url);
+            console.log("updater manifest OK（GitHub + Official 一致）: version=" + m.version + " hosts=" + hosts.join(","));
           ' "$VER"
+
+      # 公网下载冒烟 + 签名实测：从官方镜像真实下载全部平台安装包，
+      # SHA256 与本地构建产物比对（byte-for-byte），并用客户端内置公钥做 minisign 验签。
+      - name: Verify official mirror download and signatures
+        shell: bash
+        run: |
+          VER="${{ steps.meta.outputs.release_tag }}"
+          VER="${VER#v}"
+          PUBKEY=$(node -p "require('./src-tauri/tauri.conf.json').plugins.updater.pubkey")
+          EXPECT="windows-x86_64-nsis=${{ steps.bundles.outputs.nsis_sha }},windows-x86_64-msi=${{ steps.bundles.outputs.msi_sha }},windows-x86_64=${{ steps.bundles.outputs.msi_sha }}"
+          node scripts/verify-updater-artifacts.mjs \
+            --manifest "https://www.zjcypc.com/client-updates/latest.json" \
+            --pubkey "$PUBKEY" \
+            --expect-version "$VER" \
+            --allow-host "www.zjcypc.com" \
+            --expect-sha256 "$EXPECT"
