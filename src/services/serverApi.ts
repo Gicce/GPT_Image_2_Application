@@ -66,6 +66,21 @@ export interface PayLimits {
   min_per_item_usd?: number;
 }
 
+export interface RefundRequestInfo {
+  id: string;
+  source: string;
+  status: 'requested' | 'approved' | 'processing' | 'success' | 'rejected' | 'failed';
+  requested_amount_cny: number;
+  requested_amount_usd: number;
+  reason: string | null;
+  review_note: string | null;
+  out_refund_no: string | null;
+  failure_reason: string | null;
+  requested_at: string | null;
+  reviewed_at: string | null;
+  completed_at: string | null;
+}
+
 export interface UserOrder {
   out_trade_no: string;
   /** V4 订单不再绑定分组；历史订单可能仍有值 */
@@ -75,12 +90,14 @@ export interface UserOrder {
   total_usd?: number;
   total_cny?: number;
   exchange_rate: number | null;
-  status: 'pending' | 'paid' | 'assigned' | 'allocated' | 'refunding' | 'refunded' | 'refund_change' | 'closed';
+  refunded_cny?: number;
+  status: 'pending' | 'paid' | 'assigned' | 'allocated' | 'refund_requested' | 'refunding' | 'partially_refunded' | 'refunded' | 'refund_change' | 'closed';
   pay_type: string;
   items?: { group: string; amount_usd: number }[];
   created_at: string;
   paid_at: string | null;
   allocated_at?: string | null;
+  refund_request?: RefundRequestInfo | null;
 }
 
 export interface UsageRecord {
@@ -550,9 +567,6 @@ export const serverApi = {
   getRuntimeToken: () =>
     request<RuntimeTokenStatus>('/api/users/me/runtime-token', {}, true),
 
-  replaceRuntimeToken: () =>
-    request<RuntimeTokenStatus & { replaced: boolean }>('/api/users/me/runtime-token/replace', { method: 'POST' }, true),
-
   getUsage: () =>
     request<any[]>('/api/users/me/usage', {}, true),
 
@@ -597,14 +611,14 @@ export const serverApi = {
     ),
 
   refundOrder: (out_trade_no: string) =>
-    request<{ status: string; out_trade_no: string; message: string }>(
+    request<{ status: string; out_trade_no: string; message: string; refund_request?: RefundRequestInfo | null }>(
       `/api/pay/refund_order/${out_trade_no}`,
       { method: 'POST' },
       true
     ),
 
   refundStatus: (out_trade_no: string) =>
-    request<{ status: string; out_refund_no: string | null; amount_cny: number }>(
+    request<{ status: string; out_refund_no: string | null; amount_cny: number; refunded_cny?: number; refund_request?: RefundRequestInfo | null }>(
       `/api/pay/refund_status/${out_trade_no}`,
       {},
       true

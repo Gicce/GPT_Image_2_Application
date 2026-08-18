@@ -4,7 +4,7 @@ import { useSettingsStore } from '../store/useSettingsStore';
 import { serverApi, type ServerModel, type PayLimits, type UserOrder, type UsageRecord, type PackagesResponse, type RuntimeTokenStatus } from '../services/serverApi';
 import { api } from '../services/api';
 import { setAsAvatarFromPath, clearAvatar } from '../services/avatarService';
-import { clearRuntimeConfig } from '../services/runtimeTokenService';
+import { clearRuntimeConfig, loadRuntimeConfig } from '../services/runtimeTokenService';
 import { toastError, toastSuccess } from '../components/Toast';
 import AccountUsagePanel from '../components/AccountUsagePanel';
 import { explainError } from '../utils/errors';
@@ -44,7 +44,6 @@ export default function Account() {
   const [models, setModels] = useState<ServerModel[]>([]);
   const [pkg, setPkg] = useState<PackagesResponse | null>(null);
   const [runtimeToken, setRuntimeToken] = useState<RuntimeTokenStatus | null>(null);
-  const [replacingToken, setReplacingToken] = useState(false);
   const [amount, setAmount] = useState('');
   const [ordering, setOrdering] = useState(false);
   const [rechargeConfirmOpen, setRechargeConfirmOpen] = useState(false);
@@ -120,11 +119,13 @@ export default function Account() {
         total_usd: Number(o.total_usd ?? o.amount_usd ?? 0),
         total_cny: Number(o.total_cny ?? o.amount_cny ?? 0),
         exchange_rate: o.exchange_rate ?? null,
+        refunded_cny: Number(o.refunded_cny ?? 0),
         status: o.status === 'assigned' ? 'allocated' : o.status,
         pay_type: o.pay_type ?? '',
         items: Array.isArray(o.items) ? o.items : [],
         created_at: o.created_at ?? '',
         paid_at: o.paid_at ?? null,
+        refund_request: o.refund_request ?? null,
       }));
       setOrders(data);
     } catch {} finally {
@@ -148,8 +149,9 @@ export default function Account() {
     setOrderActionLoading(id);
     try {
       const res = await serverApi.refundOrder(id);
+      // 服务端已持久化退款申请并更新订单状态，立即重拉列表反映"退款申请中"
       await loadOrders();
-      setRefundStatusMsg(res.message || '退款申请已提交，等待确认');
+      setRefundStatusMsg(res.message || '退款申请已提交，等待审核');
       startRefundPolling(id);
     } catch (e: any) {
       toastError(e.message || '退款申请失败');
@@ -174,19 +176,28 @@ export default function Account() {
       }
       try {
         const res = await serverApi.refundStatus(out_trade_no);
-        if (res.status === 'refunded') {
-          if (refundTimerRef.current) clearInterval(refundTimerRef.current);
-          setRefundPollingId(null);
-          setRefundStatusMsg('退款已完成，余额已返还');
+        if (res.status === 'refunded' || res.status === 'partially_refunded') {
+          if (res.status === 'refunded') {
+            if (refundTimerRef.current) clearInterval(refundTimerRef.current);
+            setRefundPollingId(null);
+          }
+          setRefundStatusMsg(res.status === 'refunded' ? '退款已完成，余额已冲正' : '部分退款已完成');
           await loadOrders();
           await refreshUser();
-          setTimeout(() => setRefundStatusMsg(''), 5000);
+          if (res.status === 'refunded') setTimeout(() => setRefundStatusMsg(''), 5000);
         } else if (res.status === 'paid' || res.status === 'assigned' || res.status === 'allocated') {
+          // 订单回到可用状态：退款申请被拒绝（或处理失败回退）
           if (refundTimerRef.current) clearInterval(refundTimerRef.current);
           setRefundPollingId(null);
-          setRefundStatusMsg('退款申请被拒绝，订单状态已恢复');
+          const note = res.refund_request?.review_note;
+          const failure = res.refund_request?.failure_reason;
+          setRefundStatusMsg(
+            res.refund_request?.status === 'rejected'
+              ? `退款申请被拒绝${note ? `：${note}` : ''}`
+              : failure ? `退款失败：${failure}` : '退款申请被拒绝，订单状态已恢复',
+          );
           await loadOrders();
-          setTimeout(() => setRefundStatusMsg(''), 5000);
+          setTimeout(() => setRefundStatusMsg(''), 8000);
         } else if (res.status === 'refund_change') {
           if (refundTimerRef.current) clearInterval(refundTimerRef.current);
           setRefundPollingId(null);
@@ -194,6 +205,7 @@ export default function Account() {
           await loadOrders();
           setTimeout(() => setRefundStatusMsg(''), 8000);
         }
+        // refund_requested / refunding：继续轮询等待后台审核与微信确认
       } catch {
         // transient error, continue polling
       }
@@ -201,7 +213,7 @@ export default function Account() {
   }, [loadOrders, refreshUser]);
 
   useEffect(() => {
-    const refundingOrder = orders.find(o => o.status === 'refunding');
+    const refundingOrder = orders.find(o => o.status === 'refunding' || o.status === 'refund_requested');
     if (refundingOrder && !refundPollingId) {
       startRefundPolling(refundingOrder.out_trade_no);
     }
@@ -290,28 +302,6 @@ export default function Account() {
     }
   }
 
-  async function handleReplaceToken() {
-    if (replacingToken) return;
-    setReplacingToken(true);
-    try {
-      const res = await serverApi.replaceRuntimeToken();
-      setRuntimeToken(res);
-      // 立刻失效本地 runtime 缓存，下次生图即使用新 Token
-      clearRuntimeConfig();
-      toastSuccess(res.replaced
-        ? `Runtime Token 已更换为 ${res.masked_token}`
-        : `已分配 Runtime Token ${res.masked_token}`);
-    } catch (e: any) {
-      if (e?.code === 'NO_AVAILABLE_RUNTIME_TOKEN' || e?.detail?.code === 'NO_AVAILABLE_RUNTIME_TOKEN') {
-        toastError('当前没有可更换的 Image2 Runtime Token，请联系管理员');
-      } else {
-        toastError(explainError(e));
-      }
-    } finally {
-      setReplacingToken(false);
-    }
-  }
-
   const startPaymentPolling = useCallback((polledOrders: PendingOrder[]) => {
     if (allocTimerRef.current) clearInterval(allocTimerRef.current);
     setPolling(true);
@@ -373,6 +363,10 @@ export default function Account() {
         setPolling(false);
         setStatusMsg('充值到账完成！');
         await refreshUser();
+        // 到账后刷新 Runtime 配置（服务端已自动绑定默认正式 Token）
+        clearRuntimeConfig();
+        loadRuntimeToken();
+        try { await loadRuntimeConfig(); } catch {}
         const credited = polledOrders
           .map(o => o.amount_usd)
           .filter((v, i, a) => a.indexOf(v) === i)
@@ -462,13 +456,24 @@ export default function Account() {
   }
 
   const statusMap: Record<string, { label: string; cls: string }> = {
-    pending:       { label: '待支付',   cls: 'pending' },
-    paid:          { label: '已支付',   cls: 'paid' },
-    allocated:     { label: '已到账',   cls: 'allocated' },
-    closed:        { label: '已关闭',   cls: 'closed' },
-    refunding:     { label: '退款中',   cls: 'refunding' },
-    refunded:      { label: '已退款',   cls: 'refunded' },
-    refund_change: { label: '退款异常', cls: 'refund_change' },
+    pending:            { label: '待支付',     cls: 'pending' },
+    paid:               { label: '已支付',     cls: 'paid' },
+    allocated:          { label: '已到账',     cls: 'allocated' },
+    closed:             { label: '已关闭',     cls: 'closed' },
+    refund_requested:   { label: '退款申请中', cls: 'refunding' },
+    refunding:          { label: '退款处理中', cls: 'refunding' },
+    partially_refunded: { label: '已部分退款', cls: 'refunding' },
+    refunded:           { label: '已退款',     cls: 'refunded' },
+    refund_change:      { label: '退款异常',   cls: 'refund_change' },
+  };
+
+  const refundRequestStatusMap: Record<string, { label: string; cls: string }> = {
+    requested:  { label: '退款待审核', cls: 'refunding' },
+    approved:   { label: '退款已批准', cls: 'refunding' },
+    processing: { label: '微信退款中', cls: 'refunding' },
+    success:    { label: '退款成功',   cls: 'refunded' },
+    rejected:   { label: '退款被拒绝', cls: 'refund_change' },
+    failed:     { label: '退款失败',   cls: 'refund_change' },
   };
 
   const presets = [5, 10, 20, 50];
@@ -567,9 +572,9 @@ export default function Account() {
               </div>
             )}
           </div>
-          <button className="runtime-replace-btn" onClick={handleReplaceToken} disabled={replacingToken}>
-            {replacingToken ? '更换中...' : runtimeToken?.source === 'assigned' ? '更换 Token' : '领取可用 Token'}
-          </button>
+          {runtimeToken?.source === 'assigned' && (
+            <span className="runtime-card-hint">由系统自动分配（注册 / 充值时绑定），如需调整请联系管理员</span>
+          )}
         </div>
       </div>
 
@@ -742,8 +747,15 @@ export default function Account() {
             <tbody>
               {orders.map(o => {
                 const sm = statusMap[o.status] ?? { label: o.status, cls: 'pending' };
+                const rsm = o.refund_request && o.refund_request.status !== 'success'
+                  ? refundRequestStatusMap[o.refund_request.status]
+                  : null;
                 const payCny = o.amount_cny ?? o.total_cny ?? 0;
                 const gotUsd = o.amount_usd ?? o.total_usd ?? 0;
+                const refundedCny = o.refunded_cny ?? 0;
+                const remainingCny = Math.max(0, Number(payCny) - refundedCny);
+                const hasOpenRefund = o.refund_request
+                  && ['requested', 'approved', 'processing'].includes(o.refund_request.status);
                 return (
                   <tr key={o.out_trade_no}>
                     <td className="order-cell-id">{o.out_trade_no.slice(-8)}</td>
@@ -751,16 +763,23 @@ export default function Account() {
                     <td>{o.paid_at?.replace('T', ' ').slice(0, 16) || '-'}</td>
                     <td>¥{Number(payCny).toFixed(2)}</td>
                     <td>${Number(gotUsd).toFixed(2)}</td>
-                    <td><span className={`order-item-tag ${sm.cls}`}>{sm.label}</span>{refundPollingId === o.out_trade_no && <span className="refund-polling-spinner" />}</td>
+                    <td>
+                      <span className={`order-item-tag ${sm.cls}`}>{sm.label}</span>
+                      {rsm && <span className={`order-item-tag ${rsm.cls}`} style={{ marginLeft: 4 }}>{rsm.label}</span>}
+                      {o.refund_request?.status === 'rejected' && o.refund_request.review_note && (
+                        <div className="order-refund-note">拒绝原因：{o.refund_request.review_note}</div>
+                      )}
+                      {refundPollingId === o.out_trade_no && <span className="refund-polling-spinner" />}
+                    </td>
                     <td className="order-cell-actions">
                       {o.status === 'pending' && (
                         <button className="order-action-btn cancel" disabled={orderActionLoading === o.out_trade_no} onClick={() => handleCancelOrder(o.out_trade_no)}>
                           {orderActionLoading === o.out_trade_no ? '...' : '取消'}
                         </button>
                       )}
-                      {(o.status === 'paid' || o.status === 'allocated') && (
+                      {(o.status === 'paid' || o.status === 'allocated' || o.status === 'partially_refunded') && !hasOpenRefund && remainingCny > 0 && (
                         <button className="order-action-btn refund" disabled={orderActionLoading === o.out_trade_no} onClick={() => setRefundConfirmId(o.out_trade_no)}>
-                          {orderActionLoading === o.out_trade_no ? '...' : '退款'}
+                          {orderActionLoading === o.out_trade_no ? '...' : o.status === 'partially_refunded' ? '退剩余款' : '退款'}
                         </button>
                       )}
                     </td>
@@ -811,26 +830,46 @@ export default function Account() {
         </div>
       )}
 
-      {/* 退款确认弹窗 */}
+      {/* 退款申请弹窗 */}
       {refundConfirmId && (() => {
         const ro = orders.find(o => o.out_trade_no === refundConfirmId);
+        const payCny = Number(ro?.total_cny ?? ro?.amount_cny ?? 0);
+        const gotUsd = Number(ro?.total_usd ?? ro?.amount_usd ?? 0);
+        const remainingCny = Math.max(0, payCny - (ro?.refunded_cny ?? 0));
         return (
           <div className="refund-confirm-overlay" onClick={() => setRefundConfirmId(null)}>
             <div className="refund-confirm-dialog" onClick={e => e.stopPropagation()}>
               <h3>申请退款</h3>
-              <p className="refund-confirm-hint">
-                {ro
-                  ? <>订单 <strong>{ro.out_trade_no}</strong>，金额 <strong>${Number(ro.total_usd ?? ro.amount_usd).toFixed(2)}</strong>{(ro.total_cny ?? ro.amount_cny ?? 0) > 0 && <>（¥{Number(ro.total_cny ?? ro.amount_cny).toFixed(2)}）</>}<br />提交退款申请后需等待管理员确认，确认后余额将返还。是否提交退款申请？</>
-                  : '提交退款申请后需等待管理员确认，确认后余额将返还。是否提交退款申请？'}
-              </p>
+              <div className="recharge-confirm-rows">
+                <div className="recharge-confirm-row">
+                  <span>订单号</span>
+                  <strong className="order-refund-no">{refundConfirmId}</strong>
+                </div>
+                <div className="recharge-confirm-row">
+                  <span>充值金额</span>
+                  <strong>${gotUsd.toFixed(2)}</strong>
+                </div>
+                <div className="recharge-confirm-row">
+                  <span>微信付款</span>
+                  <strong>¥{payCny.toFixed(2)}</strong>
+                </div>
+                <div className="recharge-confirm-row">
+                  <span>可申请退款</span>
+                  <strong>${gotUsd.toFixed(2)} / ¥{remainingCny.toFixed(2)}</strong>
+                </div>
+                <div className="recharge-confirm-row muted">
+                  <span>退款说明</span>
+                  <span>退款申请需后台审核，批准后原路退回微信支付账户。</span>
+                </div>
+              </div>
               <div className="refund-confirm-actions">
                 <button className="refund-confirm-cancel" onClick={() => setRefundConfirmId(null)}>取消</button>
                 <button
-                  className="refund-confirm-ok"
+                  className="refund-confirm-ok danger"
                   disabled={orderActionLoading === refundConfirmId}
                   onClick={() => handleRefundOrder(refundConfirmId)}
                 >
-                  {orderActionLoading === refundConfirmId ? '提交中...' : '提交申请'}
+                  {orderActionLoading === refundConfirmId ? '提交中...' : '提交退款申请'}
                 </button>
               </div>
             </div>

@@ -1456,29 +1456,58 @@
   padding: 8px 20px;
   border-radius: 6px;
   border: 1px solid var(--border);
-  background: var(--bg-primary);
+  background: var(--bg-subtle);
   color: var(--text-secondary);
   cursor: pointer;
   font-size: 14px;
+  transition: background 0.15s ease;
 }
 .refund-confirm-cancel:hover {
-  background: var(--bg-tertiary);
+  background: var(--bg-card);
+  border-color: var(--accent-primary);
+  color: var(--text-primary);
 }
+/* 主确认按钮（确认充值）：主题主色背景 + 白字，保证浅色/深色主题下均清晰可见 */
 .refund-confirm-ok {
   padding: 8px 20px;
   border-radius: 6px;
   border: none;
-  background: var(--error);
-  color: #fff;
+  background: var(--accent-primary);
+  color: var(--text-on-accent);
   cursor: pointer;
   font-size: 14px;
+  font-weight: 600;
+  transition: filter 0.15s ease, transform 0.05s ease;
 }
 .refund-confirm-ok:hover {
-  opacity: 0.9;
+  filter: brightness(1.1);
+}
+.refund-confirm-ok:active {
+  transform: scale(0.97);
 }
 .refund-confirm-ok:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+  filter: none;
+}
+/* 危险确认按钮（提交退款申请）：明确红色，区别于普通主按钮 */
+.refund-confirm-ok.danger {
+  background: var(--accent-danger);
+  color: #fff;
+}
+.refund-confirm-ok.danger:hover {
+  filter: brightness(1.1);
+}
+.order-refund-no {
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  word-break: break-all;
+}
+.order-refund-note {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  max-width: 220px;
 }
 @keyframes fadeIn {
   from { opacity: 0; }

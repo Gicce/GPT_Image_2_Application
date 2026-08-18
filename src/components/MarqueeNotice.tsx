@@ -1,9 +1,10 @@
 import { useState, useEffect, useLayoutEffect, useRef } from 'react';
-import { serverApi } from '../services/serverApi';
+import { serverApi, getConfiguredServerUrl } from '../services/serverApi';
 import { useSettingsStore } from '../store/useSettingsStore';
 import './MarqueeNotice.css';
 
-const POLL_INTERVAL = 3 * 60 * 1000;
+// SSE 为主通道（秒级实时）；低频轮询兜底（SSE 断开 / 服务端不支持时仍可拿到更新）
+const POLL_INTERVAL = 10 * 60 * 1000;
 const SPEED = 40;
 const SPACER = 120;
 
@@ -12,6 +13,7 @@ export default function MarqueeNotice() {
   const [dismissedKey, setDismissedKey] = useState<string>('');
   const noticeEnabled = useSettingsStore(s => s.settings.notice_enabled);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const esRef = useRef<EventSource | null>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const firstSpanRef = useRef<HTMLSpanElement>(null);
   const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -32,7 +34,22 @@ export default function MarqueeNotice() {
     if (!noticeEnabled) return;
     fetchNotice();
     timerRef.current = setInterval(fetchNotice, POLL_INTERVAL);
-    return () => { if (timerRef.current) clearInterval(timerRef.current); };
+
+    // SSE 实时通知：后台保存公告 → 服务端广播 notice.updated → 立即重新 GET（数据真相仍走 GET）
+    try {
+      const base = getConfiguredServerUrl().replace(/\/+$/, '');
+      const es = new EventSource(`${base}/api/notice/stream`);
+      esRef.current = es;
+      es.addEventListener('notice.updated', () => { void fetchNotice(); });
+      es.onerror = () => { /* EventSource 原生自动重连（服务端下发 retry: 5000） */ };
+    } catch {
+      // EventSource 不可用时仅依赖轮询兜底
+    }
+
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+      if (esRef.current) { esRef.current.close(); esRef.current = null; }
+    };
   }, [noticeEnabled]);
 
   useLayoutEffect(() => {
