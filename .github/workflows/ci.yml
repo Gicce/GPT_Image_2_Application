@@ -30,6 +30,22 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      # 版本一致性守卫（与 release.yml 同源）：package.json / tauri.conf.json /
+      # Cargo.toml / src/config/release.ts（心跳上报版本）必须完全一致，
+      # 不一致直接 FAIL，禁止带版本漂移的代码进入 main / 发布。
+      - name: Verify version consistency
+        shell: bash
+        run: |
+          PKG=$(node -p "require('./package.json').version")
+          TAURI=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          CARGO=$(sed -n 's/^version = "\(.*\)"/\1/p' src-tauri/Cargo.toml | head -1)
+          REL=$(sed -n "s/.*version: '\([0-9][^']*\)'.*/\1/p" src/config/release.ts | head -1)
+          echo "package.json=${PKG} tauri.conf.json=${TAURI} Cargo.toml=${CARGO} release.ts=${REL}"
+          if [ "$PKG" != "$TAURI" ] || [ "$PKG" != "$CARGO" ] || [ "$PKG" != "$REL" ]; then
+            echo "::error::版本不一致：package.json=${PKG} tauri.conf.json=${TAURI} Cargo.toml=${CARGO} release.ts=${REL}"
+            exit 1
+          fi
+
       - name: Typecheck
         run: npm run typecheck
 

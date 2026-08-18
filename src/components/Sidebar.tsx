@@ -31,7 +31,10 @@ export default function Sidebar({ currentPage, onNavigate }: SidebarProps) {
     checkUpdate();
   }, []);
 
-  const hasUpdate = status.updateAvailable;
+  const hasUpdate = status.phase === 'update_available' || status.phase === 'restart_required';
+  const updateTitle = status.phase === 'restart_required'
+    ? `新版本 v${status.latestVersion} 已下载，点击重启安装`
+    : `发现新版本 v${status.latestVersion}`;
 
   return (
     <aside className="sidebar">
@@ -56,7 +59,7 @@ export default function Sidebar({ currentPage, onNavigate }: SidebarProps) {
         <button
           className={`version-button${hasUpdate ? ' version-button--update' : ''}`}
           onClick={() => setShowVersionModal(true)}
-          title={hasUpdate ? `发现新版本 v${status.updateInfo?.version}` : '查看版本信息'}
+          title={hasUpdate ? updateTitle : '查看版本信息'}
         >
           {appVersion || '...'}
           {hasUpdate && <span className="version-update-dot">●</span>}

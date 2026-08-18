@@ -1,6 +1,13 @@
 import { create } from 'zustand';
-import { checkForUpdate, downloadAndInstallUpdate, fetchRecentReleases } from '../services/updateService';
-import type { Update } from '@tauri-apps/plugin-updater';
+import {
+  checkForUpdate,
+  downloadUpdate,
+  installUpdate,
+  restartApp,
+  fetchRecentReleases,
+  describeUpdateError,
+  type Update,
+} from '../services/updateService';
 
 export interface ReleaseNote {
   version: string;
@@ -8,15 +15,36 @@ export interface ReleaseNote {
   notes: string;
 }
 
+/**
+ * 更新状态机（互斥 phase）：
+ *   idle               尚未执行过检查
+ *   checking           检查中
+ *   update_available   updater 确认存在更高版本
+ *   latest             updater 正常响应且确认已是最新
+ *   check_failed       updater 请求/解析失败（绝不视为 latest）
+ *   downloading        正在下载更新包
+ *   restart_required   下载完成，等待用户确认重启安装
+ *   installing         正在安装（随后自动重启）
+ */
+export type UpdatePhase =
+  | 'idle'
+  | 'checking'
+  | 'update_available'
+  | 'latest'
+  | 'check_failed'
+  | 'downloading'
+  | 'restart_required'
+  | 'installing';
+
 export interface UpdateStatus {
-  initialized: boolean;  // 是否已完成过一次检查
-  checking: boolean;
-  updateAvailable: boolean;
-  downloading: boolean;
+  phase: UpdatePhase;
+  /** updater 明确返回的最新版本号（update_available 时必有）；latest/failed 时可能为 null */
+  latestVersion: string | null;
+  /** phase 为 check_failed / 下载安装失败时的用户可读错误信息 */
+  error: string | null;
+  lastCheckedAt: number | null;
   downloaded: number;
   contentLength: number;
-  installing: boolean;
-  error: string | null;
   updateInfo: Update | null;
   showChangelog: boolean;
   recentReleases: ReleaseNote[];
@@ -24,71 +52,138 @@ export interface UpdateStatus {
 
 interface UpdateState {
   status: UpdateStatus;
+  /** 检查更新。force=false 且已检查过时跳过；checking/downloading/installing 期间不重入。 */
   checkUpdate: (force?: boolean) => Promise<void>;
+  /** 下载更新包（不安装），完成后进入 restart_required。 */
   applyUpdate: () => Promise<void>;
+  /** 安装已下载的更新并重启应用。 */
+  installAndRestart: () => Promise<void>;
   openChangelog: () => void;
   closeChangelog: () => void;
   reset: () => void;
 }
 
 const initialStatus: UpdateStatus = {
-  initialized: false,
-  checking: false,
-  updateAvailable: false,
-  downloading: false,
+  phase: 'idle',
+  latestVersion: null,
+  error: null,
+  lastCheckedAt: null,
   downloaded: 0,
   contentLength: 0,
-  installing: false,
-  error: null,
   updateInfo: null,
   showChangelog: false,
   recentReleases: [],
 };
+
+function isBusy(status: UpdateStatus): boolean {
+  return status.phase === 'checking' || status.phase === 'downloading' || status.phase === 'installing';
+}
 
 export const useUpdateStore = create<UpdateState>((set, get) => ({
   status: { ...initialStatus },
 
   checkUpdate: async (force = false) => {
     const { status } = get();
+    // 检查/下载/安装期间禁止重入（按钮防连点、自动+手动并发均由此拦截）
+    if (isBusy(status)) return;
+    // 已完成过检查且非强制刷新则跳过（自动检查 + 手动检查共用一份结果）
+    if (status.lastCheckedAt !== null && !force) return;
 
-    // 已初始化且不是强制刷新则跳过
-    if (status.initialized && !force) return;
+    set({ status: { ...status, phase: 'checking', error: null } });
 
-    // 下载/安装中不打断
-    if (status.downloading || status.installing) return;
+    // changelog 与 updater 是两条独立链路：changelog 失败绝不影响 updater 判定，反之亦然。
+    const releasesPromise: Promise<ReleaseNote[] | null> = fetchRecentReleases().catch(() => null);
 
-    set({ status: { ...status, checking: true } });
+    let update: Update | null = null;
+    let checkError: string | null = null;
+    try {
+      update = await checkForUpdate();
+    } catch (e) {
+      // updater 异常必须显式进入 check_failed，禁止当作“已是最新”
+      checkError = describeUpdateError(e);
+    }
 
-    const [updateResult, releases] = await Promise.allSettled([
-      checkForUpdate(),
-      fetchRecentReleases(),
-    ]);
+    const releases = await releasesPromise;
+    const recentReleases = releases ?? get().status.recentReleases;
+    const lastCheckedAt = Date.now();
 
-    const update = updateResult.status === 'fulfilled' ? updateResult.value : null;
-    const releaseList = releases.status === 'fulfilled' ? releases.value : get().status.recentReleases;
-
-    if (update) {
-      set({ status: { ...get().status, initialized: true, checking: false, updateAvailable: true, updateInfo: update, recentReleases: releaseList } });
+    if (checkError !== null) {
+      set({
+        status: {
+          ...get().status,
+          phase: 'check_failed',
+          error: checkError,
+          lastCheckedAt,
+          latestVersion: null,
+          updateInfo: null,
+          recentReleases,
+        },
+      });
+    } else if (update) {
+      set({
+        status: {
+          ...get().status,
+          phase: 'update_available',
+          error: null,
+          lastCheckedAt,
+          latestVersion: update.version,
+          updateInfo: update,
+          downloaded: 0,
+          contentLength: 0,
+          recentReleases,
+        },
+      });
     } else {
-      set({ status: { ...get().status, initialized: true, checking: false, updateAvailable: false, updateInfo: null, recentReleases: releaseList } });
+      set({
+        status: {
+          ...get().status,
+          phase: 'latest',
+          error: null,
+          lastCheckedAt,
+          latestVersion: null,
+          updateInfo: null,
+          recentReleases,
+        },
+      });
     }
   },
 
   applyUpdate: async () => {
     const { status } = get();
-    if (!status.updateInfo) return;
-    set({ status: { ...status, downloading: true, showChangelog: false } });
+    if (!status.updateInfo || status.phase !== 'update_available') return;
+
+    set({ status: { ...status, phase: 'downloading', error: null, downloaded: 0, contentLength: 0 } });
     try {
-      await downloadAndInstallUpdate(status.updateInfo, (downloaded, contentLength) => {
+      await downloadUpdate(status.updateInfo, (downloaded, contentLength) => {
         set(s => ({ status: { ...s.status, downloaded, contentLength } }));
       });
-      set({ status: { ...get().status, downloading: false, installing: true } });
-    } catch (e: any) {
-      set({ status: { ...get().status, downloading: false, error: e?.toString() || '更新失败' } });
+      set(s => ({ status: { ...s.status, phase: 'restart_required' } }));
+    } catch (e) {
+      // 下载失败：保留 updateInfo，回到 update_available 允许重试；旧客户端不受影响
+      set(s => ({ status: { ...s.status, phase: 'update_available', error: describeUpdateError(e) } }));
+    }
+  },
+
+  installAndRestart: async () => {
+    const { status } = get();
+    if (!status.updateInfo || status.phase !== 'restart_required') return;
+
+    set(s => ({ status: { ...s.status, phase: 'installing', error: null } }));
+    try {
+      await installUpdate(status.updateInfo);
+    } catch (e) {
+      // 安装失败：回到 update_available 重新下载重试
+      set(s => ({ status: { ...s.status, phase: 'update_available', error: describeUpdateError(e) } }));
+      return;
+    }
+    try {
+      await restartApp();
+    } catch {
+      // 安装器可能已接管进程导致 relaunch 失败，忽略即可
     }
   },
 
   openChangelog: () => set(s => ({ status: { ...s.status, showChangelog: true } })),
   closeChangelog: () => set(s => ({ status: { ...s.status, showChangelog: false } })),
-  reset: () => set({ status: { ...get().status, updateAvailable: false, updateInfo: null, showChangelog: false } }),
+  reset: () => set(s => ({ status: { ...s.status, phase: 'idle', latestVersion: null, error: null, updateInfo: null, showChangelog: false } })),
 }));

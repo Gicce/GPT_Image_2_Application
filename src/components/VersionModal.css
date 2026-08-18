@@ -238,6 +238,92 @@
   text-align: center;
 }
 
+.update-checking {
+  padding: 8px 14px;
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 14px;
+}
+
+.update-available {
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+}
+
+.update-version-row {
+  display: flex;
+  gap: 14px;
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 6px;
+}
+
+.update-version-item--new {
+  color: var(--accent-primary-text);
+  font-weight: 600;
+}
+
+.update-restart-required {
+  padding: 10px 14px;
+  background: var(--accent-primary-light);
+  border: 1px solid var(--accent-primary);
+  border-radius: 8px;
+  margin-bottom: 14px;
+}
+
+.update-restart-text {
+  font-size: 13px;
+  color: var(--accent-primary-text);
+  margin-bottom: 10px;
+}
+
+.update-restart-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.btn-update-later {
+  padding: 7px 18px;
+  border-radius: 8px;
+  border: 1px solid var(--border-default);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.btn-update-later:hover {
+  background: var(--bg-hover);
+}
+
+.update-check-failed {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.update-check-failed .update-error {
+  margin-top: 0;
+}
+
+.update-check-failed .btn-check-update {
+  align-self: flex-end;
+}
+
+.update-release-pending {
+  padding: 8px 14px;
+  background: var(--badge-warning-bg, rgba(240, 180, 60, 0.12));
+  border: 1px solid var(--accent-warning, #e0a030);
+  border-radius: 8px;
+  color: var(--accent-warning, #e0a030);
+  font-size: 13px;
+  text-align: center;
+  margin-bottom: 14px;
+}
+
 /* Changelog list in modal */
 .changelog-loading,
 .changelog-empty-tip {

@@ -251,7 +251,6 @@ export default function Settings() {
   // 更新与关于
   const { status: updateStatus, checkUpdate } = useUpdateStore();
   const [appVersion, setAppVersion] = useState('');
-  const [checkingUpdate, setCheckingUpdate] = useState(false);
 
   const hydrateProfiles = useAIProviderStore(state => state.hydrate);
 
@@ -618,12 +617,7 @@ export default function Settings() {
   }
 
   async function handleCheckUpdate() {
-    setCheckingUpdate(true);
-    try {
-      await checkUpdate(true);
-    } finally {
-      setCheckingUpdate(false);
-    }
+    await checkUpdate(true);
   }
 
   // ============ 子页渲染 ============
@@ -976,6 +970,7 @@ export default function Settings() {
   }
 
   function renderUpdate() {
+    const busy = updateStatus.phase === 'checking' || updateStatus.phase === 'downloading' || updateStatus.phase === 'installing';
     return (
       <section className="settings-card">
         <h3 className="settings-section-title">CyImagePro</h3>
@@ -987,16 +982,29 @@ export default function Settings() {
           </div>
         </div>
         <div className="settings-actions-row">
-          <button className="settings-btn settings-btn-primary" disabled={checkingUpdate} onClick={() => void handleCheckUpdate()}>
-            {checkingUpdate ? '检查中...' : '检查更新'}
+          <button className="settings-btn settings-btn-primary" disabled={busy} onClick={() => void handleCheckUpdate()}>
+            {updateStatus.phase === 'checking' ? '检查中...' : updateStatus.phase === 'check_failed' ? '重新检查' : '检查更新'}
           </button>
-          {updateStatus.updateAvailable && (
-            <span className="form-hint form-hint-warning">发现新版本 {updateStatus.updateInfo?.version}，请通过侧边栏版本按钮下载更新。</span>
+          {updateStatus.phase === 'update_available' && (
+            <span className="form-hint form-hint-warning">
+              发现新版本 V{updateStatus.latestVersion}（当前 V{appVersion || '?'}），请点击左侧「关于我们」下方的版本按钮，或前往侧边栏底部版本入口立即更新。
+            </span>
           )}
-          {!updateStatus.updateAvailable && updateStatus.initialized && (
-            <span className="form-hint form-hint-success">当前已是最新版本。</span>
+          {updateStatus.phase === 'restart_required' && (
+            <span className="form-hint form-hint-warning">更新 V{updateStatus.latestVersion} 已下载完成，请通过侧边栏版本入口重启安装。</span>
           )}
-          {updateStatus.error && <span className="form-hint form-hint-error">更新检查失败：{updateStatus.error}</span>}
+          {updateStatus.phase === 'downloading' && (
+            <span className="form-hint form-hint-warning">正在下载更新 V{updateStatus.latestVersion}...</span>
+          )}
+          {updateStatus.phase === 'installing' && (
+            <span className="form-hint form-hint-warning">正在安装更新，应用将自动重启...</span>
+          )}
+          {updateStatus.phase === 'latest' && (
+            <span className="form-hint form-hint-success">✓ 当前已是最新版本。</span>
+          )}
+          {updateStatus.phase === 'check_failed' && (
+            <span className="form-hint form-hint-error">检查更新失败：{updateStatus.error ?? '无法获取最新版本信息，请检查网络后重试。'}</span>
+          )}
         </div>
         <div className="form-group">
           <label>应用信息</label>

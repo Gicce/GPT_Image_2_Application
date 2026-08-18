@@ -121,7 +121,7 @@ export default function About() {
       <div className="about-page-footer">
         <p>CyImagePro {appVersion ? `V${appVersion}` : ''} · Powered by GPT Image 2</p>
         <button className="about-changelog-btn" onClick={handleOpenChangelog}>
-          {status.checking ? '加载中...' : '查看更新日志'}
+          {status.phase === 'checking' ? '加载中...' : '查看更新日志'}
         </button>
       </div>
     </div>

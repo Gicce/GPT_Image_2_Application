@@ -30,7 +30,8 @@ jobs:
         with:
           workspaces: './src-tauri -> target'
 
-      # 版本一致性守卫：Tag 版本必须与项目内三处版本字段完全一致，
+      # 版本一致性守卫：Tag 版本必须与项目内四处版本字段完全一致
+      # （package.json / tauri.conf.json / Cargo.toml / release.ts 心跳上报版本），
       # 不一致直接失败，禁止发布错误版本。
       - name: Verify version consistency
         shell: bash
@@ -43,9 +44,10 @@ jobs:
           PKG=$(node -p "require('./package.json').version")
           TAURI=$(node -p "require('./src-tauri/tauri.conf.json').version")
           CARGO=$(sed -n 's/^version = "\(.*\)"/\1/p' src-tauri/Cargo.toml | head -1)
-          echo "tag=${VER} package.json=${PKG} tauri.conf.json=${TAURI} Cargo.toml=${CARGO}"
-          if [ "$VER" != "$PKG" ] || [ "$VER" != "$TAURI" ] || [ "$VER" != "$CARGO" ]; then
-            echo "::error::版本不一致：tag=${VER} package.json=${PKG} tauri.conf.json=${TAURI} Cargo.toml=${CARGO}"
+          REL=$(sed -n "s/.*version: '\([0-9][^']*\)'.*/\1/p" src/config/release.ts | head -1)
+          echo "tag=${VER} package.json=${PKG} tauri.conf.json=${TAURI} Cargo.toml=${CARGO} release.ts=${REL}"
+          if [ "$VER" != "$PKG" ] || [ "$VER" != "$TAURI" ] || [ "$VER" != "$CARGO" ] || [ "$VER" != "$REL" ]; then
+            echo "::error::版本不一致：tag=${VER} package.json=${PKG} tauri.conf.json=${TAURI} Cargo.toml=${CARGO} release.ts=${REL}"
             exit 1
           fi
 
@@ -163,5 +165,38 @@ jobs:
           name: ${{ steps.meta.outputs.artifact_name }}
           path: |
             src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/nsis/*.exe.sig
             src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/bundle/msi/*.msi.sig
           if-no-files-found: warn
+
+      # Updater 产物自检：正式 Release 必须包含 latest.json，
+      # 且 version 必须等于 tag 版本、windows-x86_64 必须带 url + signature。
+      # 任何一项缺失 => 本次发布失败，禁止产出“检测不到更新”的假 Release。
+      - name: Verify updater manifest on release
+        shell: bash
+        run: |
+          TAG="${{ steps.meta.outputs.release_tag }}"
+          VER="${TAG#v}"
+          sleep 10
+          curl -sL --retry 5 --retry-delay 5 "https://github.com/Gicce/GPT_Image_2_Application/releases/download/${TAG}/latest.json" -o latest-check.json
+          MANIFEST_VERSION=$(node -e '
+            const fs = require("fs");
+            let m;
+            try { m = JSON.parse(fs.readFileSync("latest-check.json", "utf8")); } catch { console.error("latest.json 解析失败或不存在"); process.exit(2); }
+            console.log(m.version || "");
+          ' 2>manifest_err.txt) || { cat manifest_err.txt; echo "::error::Release 缺少 latest.json，updater 将无法发现新版本"; exit 1; }
+          echo "latest.json version=${MANIFEST_VERSION} (expect ${VER})"
+          node -e '
+            const m = require("./latest-check.json");
+            const errors = [];
+            if (m.version !== process.argv[1]) errors.push(`version ${m.version} != tag ${process.argv[1]}`);
+            const win = m.platforms && m.platforms["windows-x86_64"];
+            if (!win) errors.push("缺少 windows-x86_64 平台条目");
+            else {
+              if (!win.url) errors.push("windows-x86_64 缺少 url");
+              if (!win.signature) errors.push("windows-x86_64 缺少 signature");
+            }
+            if (errors.length) { errors.forEach(e => console.error("::error::" + e)); process.exit(1); }
+            console.log("updater manifest OK: version=" + m.version + " url=" + win.url);
+          ' "$VER"
