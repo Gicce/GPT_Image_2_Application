@@ -23,8 +23,10 @@ interface ServerStatusState {
   sendHeartbeat: () => Promise<boolean>;
 }
 
-const HEALTH_CHECK_INTERVAL_MS = 60 * 1000; // 60 seconds
-const HEARTBEAT_INTERVAL_MS = 60 * 1000; // 60 seconds
+const HEALTH_CHECK_INTERVAL_MS = 60 * 1000;
+// 服务器 online TTL 为 180s（Redis key 过期即离线），60s 上报间隔允许连续丢失 2 次仍有容错
+const HEARTBEAT_INTERVAL_MS = 60 * 1000;
+const HEARTBEAT_TIMEOUT_MS = 10 * 1000;
 
 let healthCheckTimer: ReturnType<typeof setInterval> | null = null;
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
@@ -48,6 +50,7 @@ export const useServerStatusStore = create<ServerStatusState>((set, get) => ({
       return false;
     }
 
+    const wasConnected = get().connectionStatus === 'connected';
     set({ checking: true, connectionStatus: 'connecting' });
 
     const result = await testServerConnection(baseUrl);
@@ -63,6 +66,11 @@ export const useServerStatusStore = create<ServerStatusState>((set, get) => ({
       serverVersion: result.version,
     });
 
+    // 连接首次建立或从离线恢复时：已登录用户立即补一次心跳，不等下一个上报周期
+    if (result.ok && !wasConnected && useAuthStore.getState().isLoggedIn) {
+      void useServerStatusStore.getState().sendHeartbeat();
+    }
+
     return result.ok;
   },
 
@@ -71,39 +79,27 @@ export const useServerStatusStore = create<ServerStatusState>((set, get) => ({
     const { isLoggedIn } = useAuthStore.getState();
     const settings = useSettingsStore.getState().settings;
 
-    console.log('[heartbeat] start');
-    console.log('[heartbeat] connectionStatus:', connectionStatus);
-    console.log('[heartbeat] isLoggedIn:', isLoggedIn);
-
-    // Only send heartbeat if connected and logged in
     if (connectionStatus !== 'connected' || !isLoggedIn) {
-      console.log('[heartbeat] skipped: not connected or not logged in');
       return false;
     }
 
     const baseUrl = getConfiguredServerUrl();
     const deviceId = settings.device_id;
 
-    console.log('[heartbeat] baseUrl:', baseUrl);
-    console.log('[heartbeat] deviceId:', deviceId ? 'exists' : 'missing');
-
     if (!baseUrl || !deviceId) {
-      console.log('[heartbeat] skipped: no baseUrl or deviceId');
       return false;
     }
 
-    // Get JWT token
     const jwt = localStorage.getItem('cy_jwt');
-    console.log('[heartbeat] token exists:', !!jwt);
     if (!jwt) {
-      console.log('[heartbeat] skipped: no JWT token');
       return false;
     }
 
     const appName = 'CyImagePro';
     const appVersion = RELEASE_INFO.version;
-    const platform = 'windows';
-    const deviceName = navigator.userAgent.includes('Windows') ? 'Windows PC' : 'Desktop';
+    const ua = navigator.userAgent.toLowerCase();
+    const platform = ua.includes('win') ? 'windows' : ua.includes('mac') ? 'macos' : ua.includes('linux') ? 'linux' : 'unknown';
+    const deviceName = platform === 'windows' ? 'Windows PC' : platform === 'macos' ? 'Mac' : 'Desktop';
 
     const finalUrl = `${baseUrl}/api/client/heartbeat`;
     const payload = {
@@ -115,14 +111,11 @@ export const useServerStatusStore = create<ServerStatusState>((set, get) => ({
       app_name: appName,
     };
 
-    console.log('[heartbeat] final url:', finalUrl);
-    console.log('[heartbeat] payload:', JSON.stringify(payload));
-
     set({ heartbeatStatus: 'pending' });
 
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000);
+      const timeoutId = setTimeout(() => controller.abort(), HEARTBEAT_TIMEOUT_MS);
 
       const response = await fetch(finalUrl, {
         method: 'POST',
@@ -136,11 +129,7 @@ export const useServerStatusStore = create<ServerStatusState>((set, get) => ({
 
       clearTimeout(timeoutId);
 
-      console.log('[heartbeat] response status:', response.status);
-
       if (response.ok) {
-        const data = await response.json();
-        console.log('[heartbeat] response body:', JSON.stringify(data));
         set({
           heartbeatStatus: 'success',
           lastHeartbeatAt: new Date().toISOString(),
@@ -148,8 +137,8 @@ export const useServerStatusStore = create<ServerStatusState>((set, get) => ({
         });
         return true;
       } else {
-        const errorText = await response.text();
-        console.error('[heartbeat] failed with status:', response.status, errorText);
+        // 心跳失败是运维辅助能力的问题，不影响连接状态与用户创作，下一周期自动重试
+        console.warn(`[heartbeat] failed with status ${response.status}`);
         set({
           heartbeatStatus: 'failed',
           heartbeatError: `HTTP ${response.status}`,
@@ -157,9 +146,8 @@ export const useServerStatusStore = create<ServerStatusState>((set, get) => ({
         return false;
       }
     } catch (error) {
-      console.error('[heartbeat] failed:', error);
+      console.warn('[heartbeat] network error:', error instanceof Error ? error.message : error);
       set({
-        connectionStatus: 'disconnected',
         heartbeatStatus: 'failed',
         heartbeatError: error instanceof Error ? error.message : 'network error',
       });
@@ -169,31 +157,32 @@ export const useServerStatusStore = create<ServerStatusState>((set, get) => ({
 }));
 
 export function startHealthCheckLoop() {
-  if (healthCheckTimer) {
-    clearInterval(healthCheckTimer);
-  }
+  if (healthCheckTimer) return;
 
-  // Check immediately on start
-  useServerStatusStore.getState().checkConnection();
+  void useServerStatusStore.getState().checkConnection();
 
-  // Then check every 60 seconds
   healthCheckTimer = setInterval(() => {
-    useServerStatusStore.getState().checkConnection();
+    void useServerStatusStore.getState().checkConnection();
   }, HEALTH_CHECK_INTERVAL_MS);
 }
 
 export function startHeartbeatLoop() {
-  if (heartbeatTimer) {
-    clearInterval(heartbeatTimer);
-  }
+  if (heartbeatTimer) return;
 
-  // Send heartbeat immediately on start
-  useServerStatusStore.getState().sendHeartbeat();
+  // 立即尝试一次；未连接/未登录时由内部守卫跳过，待连接建立后经 checkConnection 触发
+  void useServerStatusStore.getState().sendHeartbeat();
 
-  // Then send heartbeat every 60 seconds
   heartbeatTimer = setInterval(() => {
-    useServerStatusStore.getState().sendHeartbeat();
+    void useServerStatusStore.getState().sendHeartbeat();
   }, HEARTBEAT_INTERVAL_MS);
+}
+
+export function isHeartbeatLoopRunning() {
+  return heartbeatTimer !== null;
+}
+
+export function isHealthCheckLoopRunning() {
+  return healthCheckTimer !== null;
 }
 
 export function stopHealthCheckLoop() {

@@ -3,7 +3,7 @@ import { api } from '../services/api';
 import { serverApi, type ServerModel, testServerConnection } from '../services/serverApi';
 import { useImageStore } from '../store/useImageStore';
 import { useSettingsStore } from '../store/useSettingsStore';
-import { useServerStatusStore, startHealthCheckLoop, startHeartbeatLoop } from '../store/useServerStatusStore';
+import { useServerStatusStore } from '../store/useServerStatusStore';
 import { useAuthStore } from '../store/useAuthStore';
 import { useUpdateStore } from '../store/useUpdateStore';
 import { RELEASE_INFO } from '../config/release';
@@ -259,8 +259,7 @@ export default function Settings() {
     void loadSettings();
     void refreshTemplateCenter();
     hydrateProfiles();
-    startHealthCheckLoop();
-    startHeartbeatLoop();
+    // 连接检查与心跳调度由 App 级单例负责，页面不再自行启动 timer
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -739,14 +738,15 @@ export default function Settings() {
               heartbeatStatus === 'failed' ? 'form-hint-error' :
               heartbeatStatus === 'pending' ? 'form-hint-info' : 'form-hint-muted'
             }`}>
-              {heartbeatStatus === 'success' && `已登录，心跳正常 (${lastHeartbeatAt ? new Date(lastHeartbeatAt).toLocaleTimeString() : ''})`}
-              {heartbeatStatus === 'failed' && `已登录，心跳失败 (${heartbeatError || '网络错误'})`}
+              {heartbeatStatus === 'success' && `已登录，心跳正常 (最后成功心跳 ${lastHeartbeatAt ? new Date(lastHeartbeatAt).toLocaleTimeString() : '-'})`}
+              {heartbeatStatus === 'failed' && `已登录，心跳失败 (${heartbeatError || '网络错误'})，下一周期自动重试${lastHeartbeatAt ? `；最后成功心跳 ${new Date(lastHeartbeatAt).toLocaleTimeString()}` : ''}`}
               {heartbeatStatus === 'pending' && '已登录，心跳发送中...'}
-              {heartbeatStatus === 'idle' && '已登录，心跳未上报'}
+              {heartbeatStatus === 'idle' && `已登录，心跳未上报${lastHeartbeatAt ? `（历史最后心跳 ${new Date(lastHeartbeatAt).toLocaleTimeString()}）` : ''}`}
             </span>
             <button
               className="settings-btn settings-btn-sm settings-btn-outline"
               disabled={heartbeatStatus === 'pending'}
+              title="手动诊断：强制立即发送一次心跳"
               onClick={() => void sendHeartbeat()}
             >
               立即上报

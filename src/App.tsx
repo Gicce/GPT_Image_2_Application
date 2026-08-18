@@ -7,7 +7,7 @@ import { useSettingsStore } from './store/useSettingsStore';
 import { useUpdateStore } from './store/useUpdateStore';
 import { useAuthStore, setGroupTypeMap } from './store/useAuthStore';
 import { useAccountStore } from './store/useAccountStore';
-import { useServerStatusStore, startHealthCheckLoop, startHeartbeatLoop } from './store/useServerStatusStore';
+import { useServerStatusStore, startHealthCheckLoop, startHeartbeatLoop, stopHeartbeatLoop } from './store/useServerStatusStore';
 import { ensureTaskEventBridge } from './store/useTaskStore';
 import { loadRuntimeConfig } from './services/runtimeTokenService';
 import { serverApi } from './services/serverApi';
@@ -81,28 +81,34 @@ export default function App() {
     return () => { clearTimeout(timer); stopAvatarSync(); };
   }, []);
 
-  // Auto-check server connection on startup if server_url is configured
+  // App 级单例调度器：等 settings 加载完成（server_url / device_id 就绪）后再启动，
+  // 避免启动瞬间读到默认值导致首次心跳被守卫跳过
+  const settingsLoaded = useSettingsStore(s => s.settingsLoaded);
   useEffect(() => {
-    const settings = useSettingsStore.getState().settings;
-    const serverUrl = settings.server_url?.trim();
-
-    // Only start health check loop if server_url is configured
+    if (!settingsLoaded) return;
+    const serverUrl = useSettingsStore.getState().settings.server_url?.trim();
     if (serverUrl) {
-      // Check connection once on startup (lightweight health check)
-      useServerStatusStore.getState().checkConnection();
-
-      // Start health check loop (every 60 seconds)
       startHealthCheckLoop();
-
-      // Start heartbeat loop for logged-in users (every 60 seconds)
       startHeartbeatLoop();
     }
+  }, [settingsLoaded]);
 
-    // Cleanup on unmount
-    return () => {
-      // Loops will be stopped when the app unmounts
-    };
-  }, []);
+  // 登录状态变化：登录/会话恢复成功立即上报心跳并确保调度器在运行
+  // （登出会停止调度器，重新登录必须重启，否则只会上报一次）；
+  // 登出停止心跳调度，服务器端 key 随 TTL 自然过期转为离线
+  useEffect(() => {
+    if (isLoggedIn) {
+      startHeartbeatLoop();
+      void useServerStatusStore.getState().sendHeartbeat();
+    } else {
+      stopHeartbeatLoop();
+      useServerStatusStore.setState({
+        heartbeatStatus: 'idle',
+        heartbeatError: null,
+        lastHeartbeatAt: null,
+      });
+    }
+  }, [isLoggedIn]);
 
   // 登录后刷新用户信息 + 预取模型列表填充 groupTypeMap + 加载 runtime token + 获取账户权益
   useEffect(() => {

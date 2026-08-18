@@ -227,10 +227,7 @@ export interface UsageSettleResult {
 export function getConfiguredServerUrl(): string {
   const configured = useSettingsStore.getState().settings.server_url;
   const trimmed = (configured || '').trim();
-  const result = trimmed ? trimmed.replace(/\/+$/, '') : DEFAULT_SERVER_BASE;
-  // 调试日志：打印实际使用的服务器地址
-  console.log(`[serverApi] getConfiguredServerUrl: settings.server_url="${configured}", result="${result}"`);
-  return result;
+  return trimmed ? trimmed.replace(/\/+$/, '') : DEFAULT_SERVER_BASE;
 }
 
 /**
@@ -283,8 +280,6 @@ export async function testServerConnection(url: string): Promise<{
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 10000);
 
-      console.log(`[testServerConnection] 正在测试: ${fullUrl}`);
-
       const response = await fetch(fullUrl, {
         method: 'GET',
         signal: controller.signal,
@@ -293,7 +288,6 @@ export async function testServerConnection(url: string): Promise<{
       clearTimeout(timeoutId);
 
       if (!response.ok) {
-        console.log(`[testServerConnection] HTTP ${response.status} - ${fullUrl}`);
         continue; // 尝试下一个路径
       }
 
@@ -301,11 +295,8 @@ export async function testServerConnection(url: string): Promise<{
 
       // 验证返回内容是否是 CyImagePro 后端
       if (!isCyImageProHealthResponse(data)) {
-        console.log(`[testServerConnection] 响应不是 CyImagePro 服务:`, data);
         continue; // 尝试下一个路径
       }
-
-      console.log(`[testServerConnection] 连接成功:`, data);
 
       return {
         ok: true,
@@ -315,9 +306,7 @@ export async function testServerConnection(url: string): Promise<{
         version: (data as Record<string, unknown>).version as string | undefined,
       };
 
-    } catch (err: unknown) {
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      console.log(`[testServerConnection] 请求失败 ${fullUrl}:`, errorMessage);
+    } catch {
       // 继续尝试下一个路径
     }
   }
@@ -348,31 +337,6 @@ async function request<T>(
 ): Promise<T> {
   const baseUrl = getConfiguredServerUrl();
 
-  // [临时诊断] 打印请求详情
-  if (typeof import.meta !== 'undefined' && import.meta.env?.DEV) {
-    const settingsUrl = useSettingsStore.getState().settings.server_url;
-    const bodyStr = options.body as string | undefined;
-    let bodyInfo = 'no body';
-    if (bodyStr) {
-      try {
-        const parsed = JSON.parse(bodyStr);
-        bodyInfo = JSON.stringify({
-          ...parsed,
-          password: parsed.password ? `[length:${parsed.password.length}]` : undefined,
-        });
-      } catch {
-        bodyInfo = bodyStr.substring(0, 100);
-      }
-    }
-    console.log('[serverApi] ===== REQUEST START =====');
-    console.log('[serverApi] baseUrl from settings:', settingsUrl);
-    console.log('[serverApi] resolved baseUrl:', baseUrl);
-    console.log('[serverApi] path:', path);
-    console.log('[serverApi] final url:', `${baseUrl}${path}`);
-    console.log('[serverApi] method:', options.method || 'GET');
-    console.log('[serverApi] body:', bodyInfo);
-  }
-
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...(options.headers as Record<string, string> || {}),
@@ -384,19 +348,8 @@ async function request<T>(
 
   const fullUrl = `${baseUrl}${path}`;
 
-  // 开发环境输出请求 URL
-  if (typeof import.meta !== 'undefined' && import.meta.env?.DEV) {
-    console.log(`[serverApi] 请求: ${options.method || 'GET'} ${fullUrl}`);
-  }
-
   try {
     const res = await fetch(fullUrl, { ...options, headers });
-
-    // [临时诊断] 打印响应状态
-    if (typeof import.meta !== 'undefined' && import.meta.env?.DEV) {
-      console.log('[serverApi] response status:', res.status);
-      console.log('[serverApi] response ok:', res.ok);
-    }
 
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
@@ -423,20 +376,10 @@ async function request<T>(
       err.url = fullUrl;
       if (detailCode) err.code = detailCode;
       if (rawDetail && typeof rawDetail === 'object') err.detail = rawDetail;
-      console.error(`[serverApi] 业务错误 ${fullUrl}:`, rawDetail || `HTTP ${res.status}`);
-      console.log('[serverApi] ===== REQUEST END (ERROR) =====');
       throw err;
     }
 
-    const data = await res.json();
-
-    // [临时诊断] 打印响应内容
-    if (typeof import.meta !== 'undefined' && import.meta.env?.DEV) {
-      console.log('[serverApi] response body:', JSON.stringify(data));
-      console.log('[serverApi] ===== REQUEST END (SUCCESS) =====');
-    }
-
-    return data;
+    return await res.json();
   } catch (err: any) {
     // 如果是我们构造的业务错误，直接抛出
     if (err.status) {
@@ -450,17 +393,13 @@ async function request<T>(
 
     if (isNetworkError) {
       console.error(`[serverApi] 网络错误 ${fullUrl}:`, err.message);
-      console.error('[serverApi] error name:', err?.name);
-      console.error('[serverApi] error type:', typeof err);
-      console.log('[serverApi] ===== REQUEST END (NETWORK ERROR) =====');
       const networkErr: any = new Error(`无法连接服务器（${baseUrl}）`);
       networkErr.isNetworkError = true;
       networkErr.serverUrl = baseUrl;
       throw networkErr;
     }
 
-    console.error('[serverApi] unknown error:', err);
-    console.log('[serverApi] ===== REQUEST END (UNKNOWN ERROR) =====');
+    console.error('[serverApi] request failed:', err);
     throw err;
   }
 }

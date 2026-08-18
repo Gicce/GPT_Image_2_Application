@@ -13,6 +13,8 @@ function generateDeviceId(): string {
 interface SettingsState {
   settings: Settings;
   loading: boolean;
+  /** 首次 loadSettings 是否已完成（无论成败）——App 级调度器据此在 server_url 就绪后启动 */
+  settingsLoaded: boolean;
   saving: boolean;
   saveError: string | null;
   loadSettings: () => Promise<void>;
@@ -52,6 +54,7 @@ const defaultSettings: Settings = {
 export const useSettingsStore = create<SettingsState>((set, get) => ({
   settings: defaultSettings,
   loading: false,
+  settingsLoaded: false,
   saving: false,
   saveError: null,
 
@@ -65,13 +68,22 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       // Generate device_id if not present
       if (!merged.device_id || merged.device_id.trim() === '') {
         merged.device_id = generateDeviceId();
-        // Persist the generated device_id immediately
-        await api.saveSettings(merged);
+        // 持久化失败时重试一次；再失败仅告警（下次启动会重新生成，后台将出现新设备记录）
+        try {
+          await api.saveSettings(merged);
+        } catch (persistError) {
+          console.error('[settings] device_id persist failed, retrying once:', persistError);
+          try {
+            await api.saveSettings(merged);
+          } catch (retryError) {
+            console.error('[settings] device_id persist retry failed:', retryError);
+          }
+        }
       }
 
-      set({ settings: merged, loading: false });
+      set({ settings: merged, loading: false, settingsLoaded: true });
     } catch {
-      set({ loading: false });
+      set({ loading: false, settingsLoaded: true });
     }
   },
 
