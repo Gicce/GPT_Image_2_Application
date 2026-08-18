@@ -5,12 +5,13 @@ import MarqueeNotice from './components/MarqueeNotice';
 import { ToastHost } from './components/Toast';
 import { useSettingsStore } from './store/useSettingsStore';
 import { useUpdateStore } from './store/useUpdateStore';
-import { useAuthStore, setGroupTypeMap } from './store/useAuthStore';
+import { useAuthStore } from './store/useAuthStore';
 import { useAccountStore } from './store/useAccountStore';
 import { useServerStatusStore, startHealthCheckLoop, startHeartbeatLoop, stopHeartbeatLoop } from './store/useServerStatusStore';
 import { ensureTaskEventBridge } from './store/useTaskStore';
 import { loadRuntimeConfig } from './services/runtimeTokenService';
-import { serverApi } from './services/serverApi';
+import { ensureServerModelSync } from './store/useServerModelStore';
+import { useRuntimeStore } from './store/useRuntimeStore';
 import { initAvatarAccountSync } from './services/avatarService';
 import type { PageType } from './types';
 import './App.css';
@@ -71,10 +72,15 @@ export default function App() {
   }, [theme]);
 
   useEffect(() => {
+    if (import.meta.env.DEV) console.info('[boot] app mounted');
     loadSettings();
     loadFromStorage();
+    // 登录态恢复是同步流程，无论是否已登录都标记完成（runtimeReady 不要求已登录）
+    useRuntimeStore.getState().markAuthRestored();
     // 全局单点 task-updated 订阅：各页面（ImageStudio / TaskQueue / Chat）不再重复注册
     ensureTaskEventBridge();
+    // 服务器模型同步单例：runtimeReady / 登录 / Server 切换 / 断网恢复 统一由 store 内部调度
+    ensureServerModelSync();
     // 账号切换时同步各自头像（登出清空、登录恢复缓存）
     const stopAvatarSync = initAvatarAccountSync();
     const timer = setTimeout(() => { checkUpdate(); }, 3000);
@@ -110,26 +116,25 @@ export default function App() {
     }
   }, [isLoggedIn]);
 
-  // 登录后刷新用户信息 + 预取模型列表填充 groupTypeMap + 加载 runtime token + 获取账户权益
+  // 登录后刷新用户信息 + 首次 runtimeReady 后的初始同步（模型 / 权益 / runtime token）。
+  // 全部等待 runtimeReady：settings 未恢复前禁止用默认 server_url 发请求。
+  const runtimeReady = useRuntimeStore(s => s.runtimeReady);
   useEffect(() => {
+    if (!runtimeReady) return;
+    if (import.meta.env.DEV) {
+      console.info('[boot] runtime ready', useRuntimeStore.getState().resolvedServerUrl);
+    }
     if (isLoggedIn) {
       refreshUser();
-      // 获取账户权益数据
       useAccountStore.getState().fetchEntitlements();
-      serverApi.getModels()
-        .then(list => {
-          const map: Record<string, 'image' | 'agent' | 'postprocess' | 'chat'> = {};
-          for (const m of list) if (m.group) map[m.group] = m.model_type;
-          setGroupTypeMap(map);
-          // Load runtime tokens from server (memory-only, synced to Rust)
-          loadRuntimeConfig().catch(() => {});
-        })
-        .catch(() => {});
+      // 模型同步由 useServerModelStore 单例调度（去重 / 缓存 / 自动恢复）
+      // Load runtime tokens from server (memory-only, synced to Rust)
+      loadRuntimeConfig().catch(() => {});
     } else {
       // 登出时清除权益数据
       useAccountStore.getState().clearEntitlements();
     }
-  }, [isLoggedIn]);
+  }, [runtimeReady, isLoggedIn, refreshUser]);
 
   // 全局登录提示触发（比如 401 后从 store 触发）
   useEffect(() => {

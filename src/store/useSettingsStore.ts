@@ -82,8 +82,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       }
 
       set({ settings: merged, loading: false, settingsLoaded: true });
+      if (import.meta.env.DEV) console.info('[boot] settings restored', merged.server_url);
     } catch {
       set({ loading: false, settingsLoaded: true });
+      if (import.meta.env.DEV) console.warn('[boot] settings restore failed, using defaults');
     }
   },
 

@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 use crate::models::{
     AgentStyleTemplate, AgentTaskTemplate, AgentTemplateDraftCurrentTemplate,
@@ -4703,11 +4703,19 @@ pub fn create_task(app: tauri::AppHandle, params: CreateTaskParams) -> Result<Ta
 
 #[tauri::command]
 pub fn cancel_task(app: tauri::AppHandle, task_id: String) -> Result<(), String> {
-    storage::with_tasks(&app, |tasks| {
+    // 终态保护（CAS 语义，在 with_tasks 互斥锁内做条件更新）：
+    // completed/failed/cancelled 不允许被改写成 cancelled —— 这是“手动取消把
+    // 已完成任务覆盖成 cancelled”的根因。只有 pending/running 任务可取消。
+    let cancelled = storage::with_tasks(&app, |tasks| {
         if let Some(t) = tasks.iter_mut().find(|t| t.id == task_id) {
-            t.status = "cancelled".to_string();
+            crate::reconciliation::cancel_task_in_place(t)
+        } else {
+            false
         }
     });
+    if cancelled {
+        let _ = app.emit("task-updated", &task_id);
+    }
     Ok(())
 }
 

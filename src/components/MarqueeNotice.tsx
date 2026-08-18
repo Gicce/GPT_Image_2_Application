@@ -1,6 +1,7 @@
 import { useState, useEffect, useLayoutEffect, useRef } from 'react';
-import { serverApi, getConfiguredServerUrl } from '../services/serverApi';
+import { serverApi, isLoopbackUrl } from '../services/serverApi';
 import { useSettingsStore } from '../store/useSettingsStore';
+import { useRuntimeStore } from '../store/useRuntimeStore';
 import './MarqueeNotice.css';
 
 // SSE 为主通道（秒级实时）；低频轮询兜底（SSE 断开 / 服务端不支持时仍可拿到更新）
@@ -12,6 +13,10 @@ export default function MarqueeNotice() {
   const [text, setText] = useState('');
   const [dismissedKey, setDismissedKey] = useState<string>('');
   const noticeEnabled = useSettingsStore(s => s.settings.notice_enabled);
+  // 等待 runtime ready（settings 恢复出真实 server_url）才建立轮询/SSE，
+  // 否则启动瞬间会把 SSE 永久连到开发默认地址 localhost:4001
+  const runtimeReady = useRuntimeStore(s => s.runtimeReady);
+  const resolvedServerUrl = useRuntimeStore(s => s.resolvedServerUrl);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const esRef = useRef<EventSource | null>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -31,17 +36,20 @@ export default function MarqueeNotice() {
   }, []);
 
   useEffect(() => {
-    if (!noticeEnabled) return;
+    if (!noticeEnabled || !runtimeReady || !resolvedServerUrl) return;
     fetchNotice();
     timerRef.current = setInterval(fetchNotice, POLL_INTERVAL);
 
     // SSE 实时通知：后台保存公告 → 服务端广播 notice.updated → 立即重新 GET（数据真相仍走 GET）
+    // 生产环境禁止把 SSE 连到本机回环地址（开发默认值泄漏）
+    const sseAllowed = !(import.meta.env.PROD && isLoopbackUrl(resolvedServerUrl));
     try {
-      const base = getConfiguredServerUrl().replace(/\/+$/, '');
-      const es = new EventSource(`${base}/api/notice/stream`);
-      esRef.current = es;
-      es.addEventListener('notice.updated', () => { void fetchNotice(); });
-      es.onerror = () => { /* EventSource 原生自动重连（服务端下发 retry: 5000） */ };
+      if (sseAllowed) {
+        const es = new EventSource(`${resolvedServerUrl}/api/notice/stream`);
+        esRef.current = es;
+        es.addEventListener('notice.updated', () => { void fetchNotice(); });
+        es.onerror = () => { /* EventSource 原生自动重连（服务端下发 retry: 5000） */ };
+      }
     } catch {
       // EventSource 不可用时仅依赖轮询兜底
     }
@@ -50,7 +58,7 @@ export default function MarqueeNotice() {
       if (timerRef.current) clearInterval(timerRef.current);
       if (esRef.current) { esRef.current.close(); esRef.current = null; }
     };
-  }, [noticeEnabled]);
+  }, [noticeEnabled, runtimeReady, resolvedServerUrl]);
 
   useLayoutEffect(() => {
     if (!text || !firstSpanRef.current || !wrapperRef.current) return;

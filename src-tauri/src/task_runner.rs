@@ -4,6 +4,7 @@ use std::path::Path;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::models::{ImageRecord, RuntimeAuthConfig, Task};
+use crate::reconciliation::{fail_task_in_place, finalize_task_in_place};
 use crate::storage;
 use crate::RuntimeAuthState;
 
@@ -257,11 +258,7 @@ pub async fn process_next_task(app: &AppHandle) {
     if requires_openai_token && token.is_empty() {
         storage::with_tasks(app, |tasks| {
             if let Some(t) = tasks.iter_mut().find(|t| t.id == task.id) {
-                t.status = "failed".to_string();
-                for st in &mut t.sub_tasks {
-                    st.status = "failed".to_string();
-                    st.error = Some("API Token 未设置".to_string());
-                }
+                fail_task_in_place(t, "API Token 未设置");
             }
         });
         let _ = app.emit("task-updated", &task.id);
@@ -274,11 +271,7 @@ pub async fn process_next_task(app: &AppHandle) {
         if fs::create_dir_all(&output_dir).is_err() {
             storage::with_tasks(app, |tasks| {
                 if let Some(t) = tasks.iter_mut().find(|t| t.id == task.id) {
-                    t.status = "failed".to_string();
-                    for st in &mut t.sub_tasks {
-                        st.status = "failed".to_string();
-                        st.error = Some("无法创建输出目录".to_string());
-                    }
+                    fail_task_in_place(t, "无法创建输出目录");
                 }
             });
             let _ = app.emit("task-updated", &task.id);
@@ -371,30 +364,10 @@ pub async fn process_next_task(app: &AppHandle) {
         let _ = app.emit("task-updated", &task.id);
     }
 
-    // Finalize task status
+    // Finalize task status：状态与计数统一由 reconciliation 模块从 sub_tasks 事实派生
     storage::with_tasks(app, |tasks| {
         if let Some(t) = tasks.iter_mut().find(|t| t.id == task.id) {
-            t.completed_at = Some(chrono::Local::now().to_rfc3339());
-            if was_cancelled || t.status == "cancelled" {
-                t.status = "cancelled".to_string();
-                for sub_task in &mut t.sub_tasks {
-                    if sub_task.status == "pending" || sub_task.status == "running" {
-                        sub_task.status = "cancelled".to_string();
-                    }
-                }
-            } else if failed_count > 0 {
-                t.status = "failed".to_string();
-                for sub_task in &mut t.sub_tasks {
-                    if sub_task.status == "pending" || sub_task.status == "running" {
-                        sub_task.status = "failed".to_string();
-                        if sub_task.error.is_none() {
-                            sub_task.error = Some("未执行：前序子任务失败导致任务中断".to_string());
-                        }
-                    }
-                }
-            } else {
-                t.status = "completed".to_string();
-            }
+            finalize_task_in_place(t, was_cancelled);
         }
     });
     let _ = app.emit("task-updated", &task.id);

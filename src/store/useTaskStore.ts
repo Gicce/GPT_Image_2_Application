@@ -25,21 +25,51 @@ function sortTasksDesc(tasks: Task[]): Task[] {
 }
 
 let taskEventBridgeBound = false;
-let taskEventBridgeTimer: number | null = null;
+let taskEventBridgeTimer: ReturnType<typeof setTimeout> | null = null;
+const pendingEventTaskIds = new Set<string>();
+const taskRefreshHooks = new Set<(taskId: string) => void>();
+
+/**
+ * 注册“store 刷新完成后”钩子：事件 → 去抖 loadTasks（拿到最新快照）→ 按 taskId 回调。
+ * 聊天任务卡同步必须挂在这里 —— 直接在事件回调里读 TaskStore 会读到上一次刷新的
+ * 旧快照，最终终态（completed/failed）永远不会落到卡片上（V4.0.3 根因修复）。
+ */
+export function registerTaskRefreshHook(hook: (taskId: string) => void): () => void {
+  taskRefreshHooks.add(hook);
+  return () => taskRefreshHooks.delete(hook);
+}
 
 /**
  * 全局单点 task-updated 订阅：App 启动后调用一次。
  * 组件（ImageStudio / TaskQueue / Chat）不再各自 listen，避免重复注册与重复全量刷新；
  * 事件以 200ms 去抖合并，仅刷新 store（tasksById 语义由 task.id 保持，不产生重复条目）。
+ * 刷新完成后触发 taskRefreshHooks —— 保证消费者看到的永远是刷新后的状态。
  */
 export function ensureTaskEventBridge() {
   if (taskEventBridgeBound) return;
   taskEventBridgeBound = true;
-  void api.onTaskUpdated(() => {
+  void api.onTaskUpdated((taskId: string) => {
+    if (typeof taskId === 'string' && taskId) pendingEventTaskIds.add(taskId);
     if (taskEventBridgeTimer !== null) return;
-    taskEventBridgeTimer = window.setTimeout(() => {
+    taskEventBridgeTimer = setTimeout(async () => {
       taskEventBridgeTimer = null;
-      void useTaskStore.getState().loadTasks();
+      const ids = [...pendingEventTaskIds];
+      pendingEventTaskIds.clear();
+      const refreshed = await useTaskStore.getState().loadTasks();
+      if (!refreshed) {
+        // 刷新失败：没有新鲜快照可同步，钩子不触发（等待下一轮事件或 focus reconcile）
+        return;
+      }
+      // 仅同步本次事件窗口内真正变化的任务，避免全量扫描所有会话
+      for (const id of ids) {
+        for (const hook of taskRefreshHooks) {
+          try {
+            hook(id);
+          } catch (err) {
+            console.warn('[TaskBridge] refresh hook failed', id, err);
+          }
+        }
+      }
     }, 200);
   });
 }
@@ -47,7 +77,8 @@ export function ensureTaskEventBridge() {
 interface TaskState {
   tasks: Task[];
   loading: boolean;
-  loadTasks: () => Promise<void>;
+  /** 返回是否成功读取到后端快照（事件桥据此决定是否通知消费者） */
+  loadTasks: () => Promise<boolean>;
   addTask: (task: Task) => void;
   updateTask: (updated: Task) => void;
   getTask: (taskId: string) => Task | undefined;
@@ -101,8 +132,10 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       set({ tasks, loading: false });
       for (const t of tasks) knownTaskIds.add(t.id);
       get().reportNewlyCompleted(prevTasks, tasks);
+      return true;
     } catch {
       set({ loading: false });
+      return false;
     }
   },
 

@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../services/api';
-import { serverApi, type ServerModel, testServerConnection } from '../services/serverApi';
+import { type ServerModel, testServerConnection } from '../services/serverApi';
+import { useServerModelStore } from '../store/useServerModelStore';
+import { useRuntimeStore } from '../store/useRuntimeStore';
+import { useTaskStore } from '../store/useTaskStore';
+import { TERMINAL_TASK_STATUSES } from '../types';
 import { useImageStore } from '../store/useImageStore';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { useServerStatusStore } from '../store/useServerStatusStore';
@@ -270,34 +274,36 @@ export default function Settings() {
     import('@tauri-apps/api/app').then(({ getVersion }) => getVersion().then(v => setAppVersion(v))).catch(() => setAppVersion(''));
   }, []);
 
-  // 视觉模型列表（图片理解模型已随 Profile 管理，这里仅保留服务器视觉模型供诊断参考）
+  // 视觉模型列表（图片理解模型已随 Profile 管理，这里仅保留服务器视觉模型供诊断参考）。
+  // 数据来自 useServerModelStore 统一同步（runtimeReady 后首发、按 Server 隔离、自动恢复）。
+  const serverModels = useServerModelStore(s => s.models);
+  const serverModelStatus = useServerModelStore(s => s.status);
+  const serverModelError = useServerModelStore(s => s.error);
+  const syncServerModels = useServerModelStore(s => s.sync);
+  // 诊断面板只读 Runtime 状态的响应式来源
+  const runtimePhase = useRuntimeStore(s => s.phase);
+  const runtimeServerUrl = useRuntimeStore(s => s.resolvedServerUrl);
+  const taskActiveCount = useTaskStore(s => s.tasks.filter(t => !TERMINAL_TASK_STATUSES.has(t.status)).length);
+  void runtimePhase; void runtimeServerUrl; void taskActiveCount;
   useEffect(() => {
-    let cancelled = false;
-    async function loadVisionModels() {
-      setModelsLoading(true);
+    if (!isLoggedIn) return;
+    void syncServerModels();
+  }, [isLoggedIn, settings.server_url, syncServerModels]);
+  useEffect(() => {
+    setModelsLoading(serverModelStatus === 'loading');
+    if (serverModelStatus === 'ready') {
+      const visionAccessible = serverModels.filter(model => model.supports_vision === true && model.user_has_access !== false);
+      setVisionModelOptions(visionAccessible);
+      setVisionModelHint(visionAccessible.length === 0
+        ? '当前账户暂无可用视觉模型。'
+        : `已发现 ${visionAccessible.length} 个当前账户可用的视觉模型。`);
       setModelsError('');
-      try {
-        const list = await serverApi.getModels();
-        if (cancelled) return;
-        const visionAccessible = list.filter(model => model.supports_vision === true && model.user_has_access !== false);
-        setVisionModelOptions(visionAccessible);
-        setVisionModelHint(visionAccessible.length === 0
-          ? '当前账户暂无可用视觉模型。'
-          : `已发现 ${visionAccessible.length} 个当前账户可用的视觉模型。`);
-      } catch (error) {
-        if (cancelled) return;
-        setVisionModelOptions([]);
-        setModelsError(error instanceof Error ? error.message : '服务器模型获取失败');
-        setVisionModelHint('');
-      } finally {
-        if (!cancelled) setModelsLoading(false);
-      }
+    } else if (serverModelStatus === 'error') {
+      setVisionModelOptions([]);
+      setModelsError(serverModelError?.message || '服务器模型获取失败');
+      setVisionModelHint('');
     }
-    void loadVisionModels();
-    return () => {
-      cancelled = true;
-    };
-  }, [settings.server_url, isLoggedIn]);
+  }, [serverModels, serverModelStatus, serverModelError]);
 
   useEffect(() => {
     if (!templateModalOpen) return undefined;
@@ -442,9 +448,23 @@ export default function Settings() {
     }
   }
 
+  function buildRuntimeDiagnosticText(): string {
+    const runtime = useRuntimeStore.getState();
+    const server = useServerStatusStore.getState();
+    const models = useServerModelStore.getState();
+    return [
+      `[Runtime] phase=${runtime.phase} settingsLoaded=${runtime.settingsLoaded} authRestored=${runtime.authRestored}`,
+      `[Runtime] serverUrl=${runtime.resolvedServerUrl || '(未恢复)'}`,
+      `[Server] connection=${server.connectionStatus} host=${server.serverHost || '-'}`,
+      `[Server] heartbeat=${server.heartbeatStatus}${server.lastHeartbeatAt ? ` lastAt=${server.lastHeartbeatAt}` : ''}`,
+      `[Models] status=${models.status} dataServer=${models.dataServerUrl || '-'} fromCache=${models.fromCache}${models.lastSyncAt ? ` syncedAt=${new Date(models.lastSyncAt).toISOString()}` : ''}`,
+      `[Task] activeNonTerminal=${useTaskStore.getState().tasks.filter(t => !TERMINAL_TASK_STATUSES.has(t.status)).length}`,
+    ].join('\n');
+  }
+
   function copyDiagnosticInfo() {
-    if (!envCheck) return;
-    const text = envCheck.diagnostic_text || '';
+    const runtimeText = buildRuntimeDiagnosticText();
+    const text = envCheck ? `${runtimeText}\n${envCheck.diagnostic_text || ''}` : runtimeText;
     if (navigator.clipboard?.writeText) {
       void navigator.clipboard.writeText(text).then(
         () => setEnvStatus('诊断信息已复制到剪贴板'),
@@ -887,6 +907,14 @@ export default function Settings() {
           </p>
         </div>
 
+        <div className="form-group">
+          <label>Runtime 状态（只读）</label>
+          <pre
+            className="endpoint-check-meta"
+            style={{ whiteSpace: 'pre-wrap', margin: '6px 0 0' }}
+          >{buildRuntimeDiagnosticText()}</pre>
+        </div>
+
         <div className="settings-actions-row">
           <button
             className="settings-btn settings-btn-primary"
@@ -897,7 +925,6 @@ export default function Settings() {
           </button>
           <button
             className="settings-btn settings-btn-secondary"
-            disabled={!envCheck}
             onClick={() => copyDiagnosticInfo()}
           >
             复制诊断信息

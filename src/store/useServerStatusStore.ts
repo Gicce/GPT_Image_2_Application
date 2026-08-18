@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { useSettingsStore } from './useSettingsStore';
 import { useAuthStore } from './useAuthStore';
-import { testServerConnection, getConfiguredServerUrl } from '../services/serverApi';
+import { testServerConnection, requestServerUrl } from '../services/serverApi';
 import { RELEASE_INFO } from '../config/release';
 
 export type ServerConnectionStatus = 'connected' | 'disconnected' | 'connecting';
@@ -43,7 +43,20 @@ export const useServerStatusStore = create<ServerStatusState>((set, get) => ({
   heartbeatError: null,
 
   checkConnection: async () => {
-    const baseUrl = getConfiguredServerUrl();
+    let baseUrl: string;
+    try {
+      // requestServerUrl：settings 未恢复 → runtime_not_ready；生产环境回环地址 → configuration_error
+      baseUrl = requestServerUrl();
+    } catch (err) {
+      if ((err as any)?.kind === 'runtime_not_ready') return false;
+      set({
+        connectionStatus: 'disconnected',
+        serverHost: '',
+        lastCheckedAt: new Date().toISOString(),
+        heartbeatError: (err as Error).message,
+      });
+      return false;
+    }
 
     if (!baseUrl) {
       set({ connectionStatus: 'disconnected', serverHost: '', lastCheckedAt: new Date().toISOString() });
@@ -83,7 +96,17 @@ export const useServerStatusStore = create<ServerStatusState>((set, get) => ({
       return false;
     }
 
-    const baseUrl = getConfiguredServerUrl();
+    const baseUrl = (() => {
+      try {
+        return requestServerUrl();
+      } catch (err) {
+        if ((err as any)?.kind === 'configuration_error') {
+          console.warn('[heartbeat] blocked:', (err as Error).message);
+          set({ heartbeatStatus: 'failed', heartbeatError: (err as Error).message });
+        }
+        return '';
+      }
+    })();
     const deviceId = settings.device_id;
 
     if (!baseUrl || !deviceId) {

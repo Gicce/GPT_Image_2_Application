@@ -21,7 +21,7 @@ import { api } from '../services/api';
 import { serverApi } from '../services/serverApi';
 import { useAuthStore } from './useAuthStore';
 import { useSettingsStore } from './useSettingsStore';
-import { useTaskStore } from './useTaskStore';
+import { useTaskStore, registerTaskRefreshHook } from './useTaskStore';
 import { useImageStore } from './useImageStore';
 import { explainError, isAuthError } from '../utils/errors';
 import { authorizeImageTask, settleImageTask, createRequestId, registerTaskAuthorization } from '../services/billingService';
@@ -5606,4 +5606,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
   setSelectedSkillId: (id) => set({ selectedSkillId: id, skillMode: id ? 'manual' : 'auto' }),
 }));
 
+// 任务卡实时同步的唯一入口：TaskStore 刷新完成（拿到 Rust 最新快照）后按 taskId 回调。
+// 不得在 task-updated 事件回调里直接读 TaskStore —— 那里读到的是上一次刷新的旧状态。
+registerTaskRefreshHook(taskId => {
+  void useChatStore.getState().syncTaskMessage(taskId).catch(err => {
+    console.warn('[TaskBridge] chat sync failed', taskId, err);
+  });
+});
 

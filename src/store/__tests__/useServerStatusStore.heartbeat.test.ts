@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 // 不触达真实 Tauri / 网络：全部外部依赖 mock
 vi.mock('../../services/serverApi', () => ({
   getConfiguredServerUrl: vi.fn(() => 'http://server.test'),
+  requestServerUrl: vi.fn(() => 'http://server.test'),
   testServerConnection: vi.fn(),
 }));
 vi.mock('../../services/api', () => ({ api: {} }));

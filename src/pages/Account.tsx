@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuthStore } from '../store/useAuthStore';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { serverApi, type ServerModel, type PayLimits, type UserOrder, type UsageRecord, type PackagesResponse, type RuntimeTokenStatus } from '../services/serverApi';
+import { useServerModelStore } from '../store/useServerModelStore';
 import { api } from '../services/api';
 import { setAsAvatarFromPath, clearAvatar } from '../services/avatarService';
 import { clearRuntimeConfig, loadRuntimeConfig } from '../services/runtimeTokenService';
@@ -42,6 +43,9 @@ export default function Account() {
   const { settings } = useSettingsStore();
   const [trialLoading, setTrialLoading] = useState(false);
   const [models, setModels] = useState<ServerModel[]>([]);
+  // 服务器模型统一来自 useServerModelStore（runtimeReady 后同步、断网自动恢复、按 Server 隔离缓存）
+  const serverModels = useServerModelStore(s => s.models);
+  const syncServerModels = useServerModelStore(s => s.sync);
   const [pkg, setPkg] = useState<PackagesResponse | null>(null);
   const [runtimeToken, setRuntimeToken] = useState<RuntimeTokenStatus | null>(null);
   const [amount, setAmount] = useState('');
@@ -73,11 +77,14 @@ export default function Account() {
   useEffect(() => {
     if (!isLoggedIn) return;
     refreshUser();
-    loadModels();
+    void syncServerModels();
     loadPackages();
     loadOrders();
     loadRuntimeToken();
-  }, [isLoggedIn]);
+  }, [isLoggedIn, syncServerModels]);
+
+  // 模型列表跟随统一 store（替代页面私有 getModels 请求）
+  useEffect(() => { setModels(serverModels); }, [serverModels]);
 
   // 窗口重新获得焦点时拉取最新账户数据（服务端是唯一事实来源，缓存不得长期覆盖）
   useEffect(() => {
@@ -218,15 +225,6 @@ export default function Account() {
       startRefundPolling(refundingOrder.out_trade_no);
     }
   }, [orders, refundPollingId, startRefundPolling]);
-
-  async function loadModels() {
-    try {
-      const list = await serverApi.getModels();
-      setModels(list);
-    } catch (e) {
-      console.error('[loadModels] 获取模型列表失败:', e);
-    }
-  }
 
   async function loadPackages() {
     try {

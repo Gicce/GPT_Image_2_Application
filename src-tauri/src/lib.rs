@@ -1,5 +1,6 @@
 mod commands;
 mod models;
+mod reconciliation;
 mod storage;
 mod task_runner;
 mod video_bridge;
@@ -39,6 +40,21 @@ pub fn run() {
 
             let app_handle = app.handle().clone();
             let shutdown_flag = shutdown.clone();
+
+            // 启动 reconciliation：上次进程退出时遗留的 running/pending 任务立即收口。
+            // 不做这一步，遗留任务会永远停在“执行中”，用户只能手动取消，
+            // 产生 parent=cancelled / child=completed 的错误终态。
+            {
+                let changed = storage::with_tasks(app.handle(), |tasks| {
+                    reconciliation::reconcile_interrupted_tasks(tasks)
+                });
+                if !changed.is_empty() {
+                    println!(
+                        "[reconcile] {} interrupted task(s) finalized at boot",
+                        changed.len()
+                    );
+                }
+            }
 
             std::thread::spawn(move || {
                 let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");

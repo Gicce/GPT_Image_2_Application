@@ -2,6 +2,62 @@ import { useSettingsStore } from '../store/useSettingsStore';
 
 const DEFAULT_SERVER_BASE = 'http://localhost:4001';
 
+// ── 统一错误语义：配置未就绪 / 配置错误不是网络错误 ──
+export type ServerApiErrorKind =
+  | 'runtime_not_ready'
+  | 'configuration_error'
+  | 'network_error'
+  | 'http_error';
+
+export interface ServerApiError extends Error {
+  kind: ServerApiErrorKind;
+  retryable: boolean;
+  status?: number;
+  url?: string;
+  code?: string;
+  detail?: unknown;
+  isNetworkError?: boolean;
+  serverUrl?: string;
+}
+
+export function makeServerApiError(
+  kind: ServerApiErrorKind,
+  message: string,
+  extra: Partial<ServerApiError> = {},
+): ServerApiError {
+  const err = new Error(message) as ServerApiError;
+  err.kind = kind;
+  err.retryable = kind === 'network_error';
+  Object.assign(err, extra);
+  return err;
+}
+
+/** 判断地址是否指向本机回环（生产环境禁止作为 Cloud Server） */
+export function isLoopbackUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase();
+    return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 生产环境防线：正式 build 解析到 localhost / 127.0.0.1 / ::1 作为
+ * CyImagePro Cloud Server 时禁止发请求，返回明确的 configuration_error，
+ * 而不是让普通客户看到开发地址的“无法连接服务器”。
+ */
+export function assertServerUrlUsable(baseUrl: string, prod: boolean): void {
+  if (prod && isLoopbackUrl(baseUrl)) {
+    throw makeServerApiError(
+      'configuration_error',
+      '服务器配置无效（指向本机开发地址），请在「设置 → 服务器地址」配置正确的服务器。',
+      { serverUrl: baseUrl },
+    );
+  }
+}
+
 // 客户端统一使用的用户结构（V4 统一余额重构：不再有 tokens[] 分组余额）
 export interface UserInfo {
   id: string;
@@ -222,12 +278,28 @@ export interface UsageSettleResult {
 }
 
 /**
- * 获取用户配置的服务器地址，如果为空则返回默认地址
+ * 获取用户配置的服务器地址，如果为空则返回默认地址。
+ * 注意：settings 尚未恢复时返回的是开发默认值（localhost:4001）——
+ * 运行期自动请求必须先通过 requestServerUrl()（含 settingsLoaded gate）。
  */
 export function getConfiguredServerUrl(): string {
   const configured = useSettingsStore.getState().settings.server_url;
   const trimmed = (configured || '').trim();
   return trimmed ? trimmed.replace(/\/+$/, '') : DEFAULT_SERVER_BASE;
+}
+
+/**
+ * 请求前统一解析服务器地址：
+ *  1. settings 未恢复 → runtime_not_ready（等待，不是网络错误）
+ *  2. 生产环境解析到回环地址 → configuration_error（禁止发送）
+ */
+export function requestServerUrl(): string {
+  if (!useSettingsStore.getState().settingsLoaded) {
+    throw makeServerApiError('runtime_not_ready', '服务器配置尚未就绪，请稍候重试');
+  }
+  const baseUrl = getConfiguredServerUrl();
+  assertServerUrlUsable(baseUrl, import.meta.env.PROD);
+  return baseUrl;
 }
 
 /**
@@ -335,7 +407,7 @@ async function request<T>(
   options: RequestInit = {},
   auth = false
 ): Promise<T> {
-  const baseUrl = getConfiguredServerUrl();
+  const baseUrl = requestServerUrl();
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -371,18 +443,18 @@ async function request<T>(
         if (typeof d.message === 'string' && d.message.trim()) message = d.message.trim();
         if (typeof d.code === 'string') detailCode = d.code;
       }
-      const err: any = new Error(message);
-      err.status = res.status;
-      err.url = fullUrl;
-      if (detailCode) err.code = detailCode;
-      if (rawDetail && typeof rawDetail === 'object') err.detail = rawDetail;
-      throw err;
+      throw makeServerApiError('http_error', message, {
+        status: res.status,
+        url: fullUrl,
+        code: detailCode,
+        detail: rawDetail && typeof rawDetail === 'object' ? rawDetail : undefined,
+      });
     }
 
     return await res.json();
   } catch (err: any) {
-    // 如果是我们构造的业务错误，直接抛出
-    if (err.status) {
+    // 已分类的业务/配置错误直接抛出
+    if (err.kind) {
       throw err;
     }
 
@@ -393,10 +465,10 @@ async function request<T>(
 
     if (isNetworkError) {
       console.error(`[serverApi] 网络错误 ${fullUrl}:`, err.message);
-      const networkErr: any = new Error(`无法连接服务器（${baseUrl}）`);
-      networkErr.isNetworkError = true;
-      networkErr.serverUrl = baseUrl;
-      throw networkErr;
+      throw makeServerApiError('network_error', `无法连接服务器（${baseUrl}）`, {
+        isNetworkError: true,
+        serverUrl: baseUrl,
+      });
     }
 
     console.error('[serverApi] request failed:', err);

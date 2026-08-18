@@ -12,9 +12,9 @@ import { memo } from 'react';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { useImageStore } from '../store/useImageStore';
 import { useTaskStore } from '../store/useTaskStore';
-import { useAuthStore, setGroupTypeMap, isGroupTypeMapReady } from '../store/useAuthStore';
+import { useAuthStore, isGroupTypeMapReady } from '../store/useAuthStore';
+import { useServerModelStore } from '../store/useServerModelStore';
 import { api } from '../services/api';
-import { serverApi } from '../services/serverApi';
 import type { ChatAttachment, ChatConversation, ChatMessage, ChatMode, GallerySearchCriteria, GallerySearchResult, GallerySearchState, ImageRecord } from '../types';
 import TaskMessageCard from '../components/TaskMessageCard';
 import { collectConversationImages, type ConversationImageOption } from '../utils/agent/taskSourceImage';
@@ -348,10 +348,6 @@ function ConversationList({
   );
 }
 
-// group -> model_type 映射的模块级 TTL 缓存：进入 Chat 页面不重复请求服务器
-const GROUP_TYPE_MAP_TTL_MS = 5 * 60 * 1000;
-let groupTypeMapCache: { at: number; map: Record<string, 'image' | 'agent' | 'postprocess' | 'chat'> } | null = null;
-
 // 消息窗口化：默认只渲染最近 N 条，向上翻页加载更早消息（长会话首屏/打字性能）
 const MESSAGE_WINDOW_SIZE = 80;
 
@@ -390,7 +386,6 @@ export default function Chat() {
   const setSelectedSkillId = useChatStore(state => state.setSelectedSkillId);
   const { settings } = useSettingsStore();
   const { user, isLoggedIn } = useAuthStore();
-  const [modelLoadError, setModelLoadError] = useState<string | null>(null);
   const { images, loadImages } = useImageStore();
   const [input, setInput] = useState('');
   // Composer 图片附件按对话/任务模式严格隔离。
@@ -623,34 +618,10 @@ export default function Chat() {
 
   useEffect(() => { loadConversations(); }, []);
 
-  // 实时任务状态：监听 Tauri 后端的 task-updated 事件，原地更新对话中的 TaskMessageCard。
-  // TaskStore 刷新由 ensureTaskEventBridge 全局单点负责，这里只做 Chat 侧任务卡同步。
-  useEffect(() => {
-    let unlisten: (() => void) | null = null;
-    let cancelled = false;
-    api.onTaskUpdated(async (taskId) => {
-      try {
-        await useChatStore.getState().syncTaskMessage(taskId);
-      } catch (err) {
-        console.warn('[TaskEvent] sync failed', taskId, err);
-      }
-    }).then(fn => {
-      if (cancelled) {
-        try { fn(); } catch {}
-        return;
-      }
-      unlisten = fn;
-    }).catch(err => {
-      console.warn('[TaskEvent] subscribe failed', err);
-    });
-    return () => {
-      cancelled = true;
-      if (unlisten) {
-        try { unlisten(); } catch {}
-        unlisten = null;
-      }
-    };
-  }, []);
+  // 实时任务状态同步已上收到全局事件桥（useTaskStore.ensureTaskEventBridge）：
+  // 事件 → 去抖 loadTasks（刷新 store）→ post-refresh 钩子按 taskId 同步聊天任务卡。
+  // 此处不再单独订阅 —— 旧实现立即读取 TaskStore 快照，最终终态事件到达时读到的是
+  // 上一次刷新的旧状态（running），任务卡因此永远停在“正在生成图片”。
 
   // 离线 reconcile：当用户从图库 / 任务队列切回 AI 智能体页面、
   // 或者整个窗口重新可见时，强制用 TaskStore 当前态同步一次任务卡。
@@ -685,37 +656,18 @@ export default function Chat() {
     return () => window.removeEventListener('cy-taskqueue-focus-done', handler);
   }, [pendingFocusTaskId]);
 
-  // 拉取服务器模型列表仅用于缓存 group -> model_type 映射（服务器 Token 分组同步、
-  // 图片 / 后处理等服务器业务准入判断）。AI 智能体对话模型一律来自用户本地配置的
-  // Provider（BYOK），不再把服务器 Agent 模型合入聊天模型选择器。
-  // 性能：模块级 TTL 缓存 —— 来回切换页面不再重复请求服务器。
+  // 服务器模型 group -> model_type 映射由 useServerModelStore 统一同步
+  // （runtimeReady 后首发、登录后补发、断网恢复自动重试、按 Server 隔离缓存）。
+  // Chat 页面只消费结果，不再自己发请求。AI 智能体对话模型一律来自用户本地配置的
+  // Provider（BYOK），不把服务器 Agent 模型合入聊天模型选择器。
+  const serverModelStatus = useServerModelStore(s => s.status);
+  const serverModelError = useServerModelStore(s => s.error);
+  const syncServerModels = useServerModelStore(s => s.sync);
+  const [modelBannerDismissed, setModelBannerDismissed] = useState(false);
   useEffect(() => {
-    if (!isLoggedIn) return;
-    if (groupTypeMapCache && Date.now() - groupTypeMapCache.at < GROUP_TYPE_MAP_TTL_MS) {
-      setGroupTypeMap(groupTypeMapCache.map);
-      setModelLoadError(null);
-      return;
-    }
-    serverApi.getModels()
-      .then(list => {
-        setModelLoadError(null);
-        const map: Record<string, 'image' | 'agent' | 'postprocess' | 'chat'> = {};
-        for (const m of list) {
-          if (m.group) map[m.group] = m.model_type;
-        }
-        groupTypeMapCache = { at: Date.now(), map };
-        setGroupTypeMap(map);
-      })
-      .catch((err: any) => {
-        if (err?.status === 401) {
-          useAuthStore.getState().logout();
-          useAuthStore.getState().showAuthPrompt();
-        } else {
-          console.error('[Chat] 加载模型列表失败:', err);
-          setModelLoadError(err?.message || '加载模型列表失败');
-        }
-      });
-  }, [isLoggedIn]);
+    // 自动恢复成功后错误横幅自动消失（dismiss 只隐藏当前这次错误）
+    if (serverModelStatus === 'ready' && modelBannerDismissed) setModelBannerDismissed(false);
+  }, [serverModelStatus, modelBannerDismissed]);
 
   const activeConversationExists = !!activeId && conversations.some(conversation => conversation.id === activeId);
   const activeConv = activeConversationExists
@@ -2220,20 +2172,21 @@ export default function Chat() {
               />
               <span className="chat-disclaimer">AI 可能产生错误信息，请核实重要内容</span>
             </div>
-            {modelLoadError && (
-              <div className="chat-model-error">
-                <span>服务器模型分组加载失败：{modelLoadError}</span>
+            {isLoggedIn && serverModelStatus === 'error' && serverModelError && !modelBannerDismissed && (
+              <div className={serverModelError.kind === 'runtime_not_ready' || serverModelError.kind === 'configuration_error'
+                ? 'chat-model-error chat-model-error-neutral' : 'chat-model-error'}>
+                <span>
+                  {serverModelError.kind === 'runtime_not_ready'
+                    ? '正在加载服务器配置...'
+                    : serverModelError.kind === 'configuration_error'
+                      ? `服务器配置异常：${serverModelError.message}`
+                      : `服务器模型同步失败：${serverModelError.message}${serverModelError.retryable ? '，正在尝试自动恢复…' : ''}`}
+                </span>
                 <button onClick={() => {
-                  setModelLoadError(null);
-                  serverApi.getModels()
-                    .then(list => {
-                      const map: Record<string, 'image' | 'agent' | 'postprocess' | 'chat'> = {};
-                      for (const m of list) if (m.group) map[m.group] = m.model_type;
-                      setGroupTypeMap(map);
-                    })
-                    .catch(() => setModelLoadError('重试失败，请检查网络'));
+                  setModelBannerDismissed(false);
+                  void syncServerModels({ force: true });
                 }}>重试</button>
-                <button onClick={() => setModelLoadError(null)}>关闭</button>
+                <button onClick={() => setModelBannerDismissed(true)}>关闭</button>
               </div>
             )}
           </div>
