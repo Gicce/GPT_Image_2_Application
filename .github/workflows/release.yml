@@ -218,21 +218,24 @@ jobs:
             console.log("official manifest generated (version=" + m.version + ")");
           ' "$VER"
 
-      # 用官方 manifest 覆盖 Release 上的 latest.json 资产（version/signature/pub_date 不变，仅 url 指向官方镜像）
+      # 用官方 manifest 覆盖 Release 上的 latest.json 资产（version/signature/pub_date 不变，仅 url 指向官方镜像）。
+      # 注意：gh api 对 uploads.github.com 的 POST 路由返回 404（v4.0.4 实测），资产上传必须用 curl 直连。
       - name: Replace release latest.json asset with official manifest
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ steps.meta.outputs.release_tag }}"
-          RELEASE_ID=$(gh api "repos/Gicce/GPT_Image_2_Application/releases/tags/${TAG}" --jq .id)
-          ASSET_ID=$(gh api "repos/Gicce/GPT_Image_2_Application/releases/${RELEASE_ID}/assets" --jq '.[] | select(.name=="latest.json") | .id')
+          RELEASE_ID=$(curl -sf -H "Authorization: token ${GH_TOKEN}" "https://api.github.com/repos/Gicce/GPT_Image_2_Application/releases/tags/${TAG}" | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).id")
+          ASSET_ID=$(curl -sf -H "Authorization: token ${GH_TOKEN}" "https://api.github.com/repos/Gicce/GPT_Image_2_Application/releases/${RELEASE_ID}/assets" | node -e "const a = JSON.parse(require('fs').readFileSync(0,'utf8')).find(x => x.name === 'latest.json'); if (a) console.log(a.id)")
           if [ -n "$ASSET_ID" ]; then
-            gh api -X DELETE "repos/Gicce/GPT_Image_2_Application/releases/assets/${ASSET_ID}"
+            curl -sf -X DELETE -H "Authorization: token ${GH_TOKEN}" "https://api.github.com/repos/Gicce/GPT_Image_2_Application/releases/assets/${ASSET_ID}"
             echo "旧 latest.json 资产已删除 (asset ${ASSET_ID})"
           fi
-          gh api --method POST -H "Content-Type: application/octet-stream" --input official-latest.json \
-            "uploads/repos/Gicce/GPT_Image_2_Application/releases/${RELEASE_ID}/assets?name=latest.json" --jq .browser_download_url
+          curl -sf -X POST -H "Authorization: token ${GH_TOKEN}" -H "Content-Type: application/octet-stream" \
+            --data-binary @official-latest.json \
+            "https://uploads.github.com/repos/Gicce/GPT_Image_2_Application/releases/${RELEASE_ID}/assets?name=latest.json" -o /dev/null
+          echo "official latest.json 资产已上传到 Release ${TAG}"
 
       - name: Upload artifacts to official mirror
         shell: bash
