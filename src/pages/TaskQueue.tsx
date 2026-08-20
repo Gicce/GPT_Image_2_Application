@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react';
 import { useTaskStore } from '../store/useTaskStore';
 import type { Task } from '../types';
-import { api } from '../services/api';
 import EditTaskModal from '../components/EditTaskModal';
 import DeleteTaskDialog from '../components/DeleteTaskDialog';
 import { formatDuration } from '../utils/taskDuration';
 import { executionModeLabel, promptOptimizationState } from '../utils/taskDisplay';
+import { classifySubTaskError } from '../utils/subtaskError';
 import './TaskQueue.css';
 import './ImageEdit.css';
 
@@ -16,6 +16,11 @@ const STATUS_MAP: Record<string, { label: string; cls: string }> = {
   failed: { label: '失败', cls: 'status-failed' },
   cancelled: { label: '已取消', cls: 'status-cancelled' },
 };
+
+/** 失败但有成功子任务 → 「部分完成」（底层状态保持 failed，兼容历史语义与消费者） */
+function isPartialSuccess(task: Task): boolean {
+  return task.status === 'failed' && task.success_count > 0;
+}
 
 const FOCUS_KEY = 'cy_taskqueue_focus_id';
 
@@ -41,11 +46,13 @@ function getSubTaskStatusLabel(status: string): string {
 }
 
 export default function TaskQueue() {
-  const { tasks, loadTasks, cancelTask, deleteTask } = useTaskStore();
+  const { tasks, loadTasks, cancelTask, deleteTask, retryTask, retryTaskFailed } = useTaskStore();
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [deletingTask, setDeletingTask] = useState<Task | null>(null);
   const [expandedPrompts, setExpandedPrompts] = useState<Set<string>>(new Set());
   const [focusTaskId, setFocusTaskId] = useState<string | null>(null);
+  const [expandedDetails, setExpandedDetails] = useState<Set<string>>(new Set());
+  const [retryingKey, setRetryingKey] = useState<string | null>(null);
   // 执行中任务的实时耗时刷新（250ms，低频）。TaskQueue 没有单任务的
   // executionStartedAt（那在 Chat 任务卡上），这里只显示已完成的固定 duration
   // 和进行中的粗略状态 —— 所以用一个轻量 tick 驱动重渲染即可。
@@ -89,13 +96,41 @@ export default function TaskQueue() {
     });
   };
 
+  const toggleDetail = (key: string) => {
+    setExpandedDetails(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  /** 整批重新提交（克隆新任务，全部子任务重跑）—— 走 store 计费链路 */
   const handleRetry = async (taskId: string) => {
     try {
-      await api.retryTask(taskId);
+      await retryTask(taskId);
       await loadTasks();
       alert('任务已重新提交，请查看队列进度。');
     } catch (err: any) {
-      alert(err?.toString() || '重新提交失败');
+      alert(err?.message || err?.toString() || '重新提交失败');
+    }
+  };
+
+  /** V4.0.5 只重试失败子任务：indexes 缺省 = 全部失败项；单下标 = 单个子任务 */
+  const handleRetryFailed = async (task: Task, indexes?: number[]) => {
+    const key = indexes ? `${task.id}:${indexes.join(',')}` : `${task.id}:all`;
+    if (retryingKey) return;
+    setRetryingKey(key);
+    try {
+      const result = await retryTaskFailed(task.id, indexes);
+      const target = indexes && indexes.length === 1
+        ? `子任务 ${indexes[0] + 1}`
+        : `${result.resetCount} 个失败子任务`;
+      alert(`${target}已加入重试队列，已完成的结果保持不变。`);
+    } catch (err: any) {
+      alert(err?.message || err?.toString() || '重试失败');
+    } finally {
+      setRetryingKey(null);
     }
   };
 
@@ -124,7 +159,10 @@ export default function TaskQueue() {
       ) : (
         <div className="task-list">
           {sorted.map(task => {
-            const statusMeta = STATUS_MAP[task.status] || STATUS_MAP.pending;
+            const partial = isPartialSuccess(task);
+            const statusMeta = partial
+              ? { label: '部分完成', cls: 'status-failed' }
+              : (STATUS_MAP[task.status] || STATUS_MAP.pending);
             const done = task.success_count + task.failed_count;
             const pct = task.count > 0 ? Math.round((done / task.count) * 100) : 0;
             const isActive = task.status === 'pending' || task.status === 'running';
@@ -224,21 +262,71 @@ export default function TaskQueue() {
 
                   {subTaskErrors.length > 0 && (
                     <div className="task-errors">
-                      {subTaskErrors.map(subTask => (
-                        <p key={`${task.id}-${subTask.index}`} className="task-error">
-                          子任务 {subTask.index + 1}{subTask.label ? ` (${subTask.label})` : ''}: {subTask.error}
-                        </p>
-                      ))}
+                      {subTaskErrors.map(subTask => {
+                        const classified = classifySubTaskError(subTask.error);
+                        const detailKey = `${task.id}-${subTask.index}`;
+                        const detailOpen = expandedDetails.has(detailKey);
+                        const attempts = subTask.attempt_errors ?? [];
+                        return (
+                          <div key={detailKey} className="task-subtask-error">
+                            <p className="task-error">
+                              子任务 {subTask.index + 1}{subTask.label ? ` (${subTask.label})` : ''} · {classified.title}
+                            </p>
+                            <p className="task-error-hint">{classified.hint}</p>
+                            <div className="task-subtask-error-actions">
+                              {task.status === 'failed' && (
+                                <button
+                                  className="subtask-retry-btn"
+                                  disabled={retryingKey !== null}
+                                  onClick={() => void handleRetryFailed(task, [subTask.index])}
+                                >
+                                  {retryingKey === `${task.id}:${subTask.index}` ? '提交中…' : '重新生成'}
+                                </button>
+                              )}
+                              <button className="subtask-detail-btn" onClick={() => toggleDetail(detailKey)}>
+                                {detailOpen ? '收起详情' : '查看详情'}
+                              </button>
+                            </div>
+                            {detailOpen && (
+                              <div className="task-error-detail">
+                                <p>{subTask.error}</p>
+                                {attempts.length > 1 && (
+                                  <p className="task-error-attempts">
+                                    历史尝试（{attempts.length} 次）：
+                                    {attempts.map((err, i) => `第${i + 1}次 ${classifySubTaskError(err).title}`).join('；')}
+                                  </p>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
 
                   {(task.status === 'failed' || task.status === 'cancelled') && task.sub_tasks.length > 0 && (
                     <div className="task-errors">
-                      {task.sub_tasks.map(subTask => (
-                        <p key={`${task.id}-status-${subTask.index}`} className="task-error">
-                          子任务 {subTask.index + 1}{subTask.label ? ` (${subTask.label})` : ''}: {getSubTaskStatusLabel(subTask.status)}
-                        </p>
-                      ))}
+                      {task.sub_tasks.map(subTask => {
+                        const retried = subTask.retry_count ?? 0;
+                        return (
+                          <p key={`${task.id}-status-${subTask.index}`} className="task-error">
+                            子任务 {subTask.index + 1}{subTask.label ? ` (${subTask.label})` : ''}: {getSubTaskStatusLabel(subTask.status)}
+                            {subTask.status === 'completed' && retried > 0 ? `（重新生成 ${retried} 次后成功）` : ''}
+                          </p>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {task.status === 'completed' && task.sub_tasks.some(st => (st.retry_count ?? 0) > 0) && (
+                    <div className="task-errors">
+                      {task.sub_tasks
+                        .filter(st => (st.retry_count ?? 0) > 0)
+                        .map(subTask => (
+                          <p key={`${task.id}-retried-${subTask.index}`} className="task-error">
+                            子任务 {subTask.index + 1}{subTask.label ? ` (${subTask.label})` : ''}: 重新生成 {subTask.retry_count} 次后成功
+                          </p>
+                        ))}
                     </div>
                   )}
                 </div>
@@ -249,9 +337,18 @@ export default function TaskQueue() {
                       取消任务
                     </button>
                   )}
+                  {task.status === 'failed' && task.failed_count > 0 && (
+                    <button
+                      className="retry-btn"
+                      disabled={retryingKey !== null}
+                      onClick={() => void handleRetryFailed(task)}
+                    >
+                      {retryingKey === `${task.id}:all` ? '提交中…' : `重试全部失败项（${task.failed_count}）`}
+                    </button>
+                  )}
                   {task.status === 'failed' && (
-                    <button className="retry-btn" onClick={() => handleRetry(task.id)}>
-                      重新提交
+                    <button className="edit-resend-btn" onClick={() => handleRetry(task.id)}>
+                      整批重新提交
                     </button>
                   )}
                   {isFinished && (

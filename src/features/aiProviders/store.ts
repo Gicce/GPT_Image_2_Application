@@ -481,13 +481,24 @@ export const useAIProviderStore = create<AIProviderState>((set, get) => ({
    *  3. chat 兜底全局选择；最后任意可用模型
    * 判定条件：profile.enabled + profile.use_scopes[use] + model.enabled + model.use_scopes[use]
    * + lifecycle 非 retired。任何一层不满足即跳过 —— 禁止绕过使用范围。
+   * V4.0.5 能力守卫：三个 scope 全是文本会话用途，显式声明为纯图片/视频生成
+   * （含 image_generation/image_edit/video_generation 且不含 text）的模型一律排除，
+   * 防止 image-only 模型被拿去做 prompt 优化/规划而在上游吃 400。
+   * capabilities=['unknown']（旧数据/未声明）不拦截。
    */
   resolveForUse: (use, conversationId) => {
     const state = get();
+    const supportsTextUse = (model: AIProviderModel) => {
+      const caps = model.capabilities ?? [];
+      if (caps.length === 0 || caps.includes('unknown')) return true;
+      const generationOnly =
+        caps.includes('image_generation') || caps.includes('image_edit') || caps.includes('video_generation');
+      return !(generationOnly && !caps.includes('text'));
+    };
     const profileAllows = (profile: AIProviderProfile) =>
       profile.enabled && (profile.use_scopes ?? defaultUseScopes())[use];
     const modelAllows = (model: AIProviderModel) =>
-      model.enabled && model.lifecycle !== 'retired' && (model.use_scopes ?? defaultUseScopes())[use];
+      model.enabled && model.lifecycle !== 'retired' && (model.use_scopes ?? defaultUseScopes())[use] && supportsTextUse(model);
 
     // 1. 会话级选择（含 scope 校验；不满足则继续向下，不回退服务器模型）
     if (use === 'chat') {

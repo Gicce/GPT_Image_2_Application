@@ -4690,6 +4690,8 @@ pub fn create_task(app: tauri::AppHandle, params: CreateTaskParams) -> Result<Ta
                 image_id: None,
                 error: None,
                 label: params.batch_items.get(i).map(|item| item.label.clone()),
+                retry_count: 0,
+                attempt_errors: Vec::new(),
             })
             .collect(),
     };
@@ -4781,6 +4783,8 @@ pub fn retry_task(app: tauri::AppHandle, task_id: String) -> Result<Task, String
                     image_id: None,
                     error: None,
                     label: original.batch_items.get(i).map(|item| item.label.clone()),
+                    retry_count: 0,
+                    attempt_errors: Vec::new(),
                 })
                 .collect(),
         };
@@ -4792,6 +4796,45 @@ pub fn retry_task(app: tauri::AppHandle, task_id: String) -> Result<Task, String
 }
 
 // ========== Images ==========
+
+/// V4.0.5 单/批量失败子任务重试结果：reset_indexes 供前端精确计费（只预占重试的槽位数）
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RetrySubtasksResult {
+    pub reset_indexes: Vec<usize>,
+    pub reset_count: usize,
+}
+
+/// 重试失败子任务：把指定下标（None = 全部）的 failed 子任务重置为 pending，
+/// 任务回到 pending 由执行器只补跑这些槽位；已完成子任务的图片与状态绝不动。
+#[tauri::command]
+pub fn retry_task_subtasks(
+    app: tauri::AppHandle,
+    task_id: String,
+    sub_task_indexes: Option<Vec<usize>>,
+) -> Result<RetrySubtasksResult, String> {
+    let reset = storage::with_tasks(&app, |tasks| {
+        let task = tasks
+            .iter_mut()
+            .find(|t| t.id == task_id)
+            .ok_or_else(|| "任务不存在".to_string())?;
+        if !crate::reconciliation::is_terminal_status(&task.status) {
+            return Err("任务仍在执行或排队中，请等待完成后再重试失败项".to_string());
+        }
+        Ok(crate::reconciliation::reset_failed_subtasks_for_retry(
+            task,
+            sub_task_indexes.as_deref(),
+        ))
+    })?;
+    if reset.is_empty() {
+        return Err("没有可重试的失败子任务".to_string());
+    }
+    let _ = app.emit("task-updated", &task_id);
+    Ok(RetrySubtasksResult {
+        reset_count: reset.len(),
+        reset_indexes: reset,
+    })
+}
 
 #[tauri::command]
 pub fn read_thumbnail(app: tauri::AppHandle, path: String) -> Result<String, String> {

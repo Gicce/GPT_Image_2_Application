@@ -114,6 +114,53 @@ fn format_send_error(err: &reqwest::Error, url: &str) -> String {
     format!("图片服务连接失败（{kind}）：{hint} [endpoint: {url}]")
 }
 
+/// 瞬时网络错误判定：只认连接建立失败 / 超时（代理抖动、DNS 瞬断、连接被重置）。
+/// HTTP 状态码错误（如 400/500 业务响应）不属于此类，绝不自动重试。
+fn is_transient_send_error(err: &reqwest::Error) -> bool {
+    err.is_connect() || err.is_timeout()
+}
+
+/// 无依赖的轻量抖动（0~199ms）：避免同批多个子任务重试严格同时打到代理。
+fn jitter_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| u64::from(d.subsec_millis()) % 200)
+        .unwrap_or(0)
+}
+
+/// 发送 + 瞬时错误有限自动重试（最多补 2 次，500ms / 1500ms + 抖动退避）。
+/// build_request 每次重试重建请求（RequestBuilder 一次性消费；client 由闭包捕获复用）；
+/// 最终失败返回分类后的错误文案。
+async fn send_with_transient_retry(
+    url: &str,
+    build_request: impl Fn() -> reqwest::RequestBuilder,
+) -> Result<reqwest::Response, String> {
+    const MAX_RETRIES: u32 = 2;
+    let mut attempt: u32 = 0;
+    loop {
+        let result = build_request().send().await;
+        match result {
+            Ok(resp) => return Ok(resp),
+            Err(err) => {
+                if is_transient_send_error(&err) && attempt < MAX_RETRIES {
+                    attempt += 1;
+                    let base_ms = if attempt == 1 { 500 } else { 1500 };
+                    tokio::time::sleep(std::time::Duration::from_millis(
+                        base_ms + jitter_millis(),
+                    ))
+                    .await;
+                    continue;
+                }
+                let mut message = format_send_error(&err, url);
+                if attempt > 0 {
+                    message.push_str(&format!("（已自动重试 {attempt} 次仍失败）"));
+                }
+                return Err(message);
+            }
+        }
+    }
+}
+
 /// Read runtime auth config from memory (never persisted).
 /// Returns a snapshot; if the mutex is poisoned, returns default (empty).
 fn read_runtime_config(app: &AppHandle) -> RuntimeAuthConfig {
@@ -292,24 +339,43 @@ pub async fn process_next_task(app: &AppHandle) {
         builder.build().unwrap_or_else(|_| reqwest::Client::new())
     };
 
-    let mut success_count = 0usize;
-    let mut failed_count = 0usize;
+    // 计数从 sub_tasks 事实初始化：V4.0.5 部分重试时已完成/已失败子任务保留原状态，
+    // 本轮只补失败槽位，计数必须在既有事实基础上累加（而非从 0 重新数导致回退）。
+    let mut success_count = task
+        .sub_tasks
+        .iter()
+        .filter(|st| st.status == "completed")
+        .count();
+    let mut failed_count = task
+        .sub_tasks
+        .iter()
+        .filter(|st| st.status == "failed")
+        .count();
     let total = task.count;
     let mut was_cancelled = false;
 
     for i in 0..total {
-        // Check if cancelled
-        let cancelled = storage::with_tasks(app, |tasks| {
+        // Check if cancelled / skip already-completed children（V4.0.5 单子任务重试：
+        // 已成功子任务绝不重跑，其图片与结果保持原样）
+        let (cancelled, skip_completed) = storage::with_tasks(app, |tasks| {
             tasks
                 .iter()
                 .find(|t| t.id == task.id)
-                .map(|t| t.status == "cancelled")
-                .unwrap_or(false)
+                .map(|t| {
+                    (
+                        t.status == "cancelled",
+                        i < t.sub_tasks.len() && t.sub_tasks[i].status == "completed",
+                    )
+                })
+                .unwrap_or((false, false))
         });
 
         if cancelled {
             was_cancelled = true;
             break;
+        }
+        if skip_completed {
+            continue;
         }
 
         // Update sub-task to running
@@ -352,8 +418,14 @@ pub async fn process_next_task(app: &AppHandle) {
                 storage::with_tasks(app, |tasks| {
                     if let Some(t) = tasks.iter_mut().find(|t| t.id == task.id) {
                         if i < t.sub_tasks.len() {
-                            t.sub_tasks[i].status = "failed".to_string();
-                            t.sub_tasks[i].error = Some(e.clone());
+                            let st = &mut t.sub_tasks[i];
+                            st.status = "failed".to_string();
+                            st.error = Some(e.clone());
+                            // attempt 历史：最近在后，封顶 5 条（重试成功后 error 清空、历史保留）
+                            st.attempt_errors.push(e.clone());
+                            if st.attempt_errors.len() > 5 {
+                                st.attempt_errors.remove(0);
+                            }
                         }
                         t.failed_count = failed_count;
                     }
@@ -395,14 +467,14 @@ async fn generate_single_image(
 
     let url = format!("{}/v1/images/generations", base_url);
 
-    let response = client
-        .post(&url)
-        .header("Content-Type", "application/json")
-        .header("Authorization", format!("Bearer {}", token))
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| format_send_error(&e, &url))?;
+    let response = send_with_transient_retry(&url, || {
+        client
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .header("Authorization", format!("Bearer {}", token))
+            .json(&body)
+    })
+    .await?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -568,19 +640,8 @@ async fn edit_single_image(
         }
     }
 
-    let mut form = reqwest::multipart::Form::new()
-        .text("model", "gpt-image-2")
-        .text(
-            "prompt",
-            compose_model_instruction(
-                &effective_prompt(task, index),
-                &effective_negative_prompt(task, index),
-            ),
-        )
-        .text("n", "1")
-        .text("size", task.size.clone())
-        .text("response_format", "b64_json");
-
+    // 源图字节一次性预读（重试时不重复读盘），Form 每次发送时重建（multipart Form 不可 Clone）
+    let mut image_parts: Vec<(String, Vec<u8>, &'static str)> = Vec::new();
     for img_path in &source_images {
         let path = Path::new(img_path);
         let file_bytes =
@@ -590,23 +651,40 @@ async fn edit_single_image(
             .and_then(|n| n.to_str())
             .unwrap_or("image.png")
             .to_string();
-        let mime = mime_for_path(path);
-        let part = reqwest::multipart::Part::bytes(file_bytes)
-            .file_name(file_name)
-            .mime_str(mime)
-            .unwrap();
-        form = form.part("image[]", part);
+        image_parts.push((file_name, file_bytes, mime_for_path(path)));
     }
+    let prompt_text = compose_model_instruction(
+        &effective_prompt(task, index),
+        &effective_negative_prompt(task, index),
+    );
+    let size_text = task.size.clone();
+
+    let build_form = || {
+        let mut form = reqwest::multipart::Form::new()
+            .text("model", "gpt-image-2")
+            .text("prompt", prompt_text.clone())
+            .text("n", "1")
+            .text("size", size_text.clone())
+            .text("response_format", "b64_json");
+        for (file_name, bytes, mime) in &image_parts {
+            let part = reqwest::multipart::Part::bytes(bytes.clone())
+                .file_name(file_name.clone())
+                .mime_str(mime)
+                .unwrap();
+            form = form.part("image[]", part);
+        }
+        form
+    };
 
     let url = format!("{}/v1/images/edits", base_url);
 
-    let response = client
-        .post(&url)
-        .header("Authorization", format!("Bearer {}", token))
-        .multipart(form)
-        .send()
-        .await
-        .map_err(|e| format_send_error(&e, &url))?;
+    let response = send_with_transient_retry(&url, || {
+        client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", token))
+            .multipart(build_form())
+    })
+    .await?;
 
     if !response.status().is_success() {
         let status = response.status();

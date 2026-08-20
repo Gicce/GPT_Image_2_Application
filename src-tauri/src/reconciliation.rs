@@ -98,6 +98,45 @@ pub fn fail_task_in_place(task: &mut Task, reason: &str) {
     task.success_count = task.sub_tasks.iter().filter(|st| st.status == "completed").count();
 }
 
+/// V4.0.5 单子任务重试：把指定（或全部）failed 子任务重置为 pending，
+/// 供执行器只重跑这些槽位（completed 子任务绝不动——不重跑、不删图）。
+/// 返回实际重置的下标（过滤掉非 failed / 越界）；空 = 无可重试项，任务保持原状。
+/// retry_count 累加；attempt_errors 保留历史（成功后 error 清空但历史仍在）。
+pub fn reset_failed_subtasks_for_retry(task: &mut Task, indexes: Option<&[usize]>) -> Vec<usize> {
+    let failed: Vec<usize> = match indexes {
+        Some(list) => list
+            .iter()
+            .copied()
+            .filter(|&i| {
+                task.sub_tasks
+                    .get(i)
+                    .map(|st| st.status == "failed")
+                    .unwrap_or(false)
+            })
+            .collect(),
+        None => task
+            .sub_tasks
+            .iter()
+            .enumerate()
+            .filter(|(_, st)| st.status == "failed")
+            .map(|(i, _)| i)
+            .collect(),
+    };
+    if failed.is_empty() {
+        return failed;
+    }
+    for &i in &failed {
+        let st = &mut task.sub_tasks[i];
+        st.status = "pending".to_string();
+        st.error = None;
+        st.retry_count += 1;
+    }
+    task.status = "pending".to_string();
+    task.completed_at = None;
+    task.started_at = None;
+    failed
+}
+
 /// 启动 reconciliation：上次进程退出时仍在 running/pending 的任务收口。
 /// 规则（谨慎处理历史数据，terminal 任务一律不动）：
 ///  - 非终态任务的 pending/running 子任务 → failed（“客户端重启导致任务中断”）
@@ -191,6 +230,8 @@ mod tests {
                     image_id: None,
                     error: None,
                     label: None,
+                    retry_count: 0,
+                    attempt_errors: Vec::new(),
                 })
                 .collect(),
         }
@@ -297,5 +338,66 @@ mod tests {
         assert_eq!(task.success_count, 0);
         assert_eq!(task.sub_tasks[0].error.as_deref(), Some("API Token 未设置"));
         assert!(task.completed_at.is_some());
+    }
+
+    #[test]
+    fn retry_all_resets_only_failed_children() {
+        // 6 张：4 成功 2 失败 → 重试全部失败项只重置 failed 槽位
+        let mut task = base_task(
+            "failed",
+            &["failed", "completed", "completed", "failed", "completed", "completed"],
+        );
+        task.sub_tasks[0].error = Some("connect".into());
+        task.sub_tasks[3].error = Some("400".into());
+        let reset = reset_failed_subtasks_for_retry(&mut task, None);
+        assert_eq!(reset, vec![0, 3]);
+        assert_eq!(task.status, "pending");
+        assert!(task.completed_at.is_none());
+        for i in [1, 2, 4, 5] {
+            assert_eq!(task.sub_tasks[i].status, "completed", "child {i} must stay completed");
+        }
+        for i in [0, 3] {
+            assert_eq!(task.sub_tasks[i].status, "pending");
+            assert_eq!(task.sub_tasks[i].retry_count, 1);
+            assert!(task.sub_tasks[i].error.is_none());
+        }
+    }
+
+    #[test]
+    fn retry_single_child_never_touches_others() {
+        let mut task = base_task("failed", &["failed", "completed", "failed"]);
+        let reset = reset_failed_subtasks_for_retry(&mut task, Some(&[2]));
+        assert_eq!(reset, vec![2]);
+        assert_eq!(task.sub_tasks[0].status, "failed");
+        assert_eq!(task.sub_tasks[1].status, "completed");
+        assert_eq!(task.sub_tasks[2].status, "pending");
+    }
+
+    #[test]
+    fn retry_filters_non_failed_and_out_of_range_indexes() {
+        let mut task = base_task("failed", &["completed", "failed"]);
+        // 0 是 completed、99 越界：都不得重置
+        let reset = reset_failed_subtasks_for_retry(&mut task, Some(&[0, 1, 99]));
+        assert_eq!(reset, vec![1]);
+        assert_eq!(task.sub_tasks[0].status, "completed");
+    }
+
+    #[test]
+    fn retry_without_failed_children_is_noop() {
+        let mut task = base_task("completed", &["completed", "completed"]);
+        task.completed_at = Some("2026-01-01T00:00:00".into());
+        let reset = reset_failed_subtasks_for_retry(&mut task, None);
+        assert!(reset.is_empty());
+        assert_eq!(task.status, "completed", "no-op must not resurrect a terminal task");
+        assert!(task.completed_at.is_some());
+    }
+
+    #[test]
+    fn retry_accumulates_retry_count_across_rounds() {
+        let mut task = base_task("failed", &["failed"]);
+        reset_failed_subtasks_for_retry(&mut task, None);
+        task.sub_tasks[0].status = "failed".into();
+        reset_failed_subtasks_for_retry(&mut task, None);
+        assert_eq!(task.sub_tasks[0].retry_count, 2);
     }
 }

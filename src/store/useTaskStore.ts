@@ -84,6 +84,8 @@ interface TaskState {
   getTask: (taskId: string) => Task | undefined;
   createAndExecuteTask: (params: CreateTaskParams) => Promise<Task>;
   retryTask: (taskId: string) => Promise<Task>;
+  /** V4.0.5 只重试失败的子任务（指定下标 = 单个；缺省 = 全部失败项），已完成子任务保持原结果 */
+  retryTaskFailed: (taskId: string, subTaskIndexes?: number[]) => Promise<{ resetIndexes: number[]; resetCount: number }>;
   refreshTask: (taskId: string) => Promise<void>;
   cancelTask: (taskId: string) => Promise<void>;
   deleteTask: (taskId: string, deleteImages: boolean) => Promise<void>;
@@ -191,6 +193,34 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     return retried;
   },
 
+  retryTaskFailed: async (taskId, subTaskIndexes) => {
+    console.log('[AgentTask] retry failed subtasks', taskId, subTaskIndexes ?? '(all failed)');
+    const original = get().tasks.find(t => t.id === taskId);
+    if (!original) throw new Error('任务不存在');
+    const failedIndexes = subTaskIndexes
+      ?? original.sub_tasks.map((st, i) => (st.status === 'failed' ? i : -1)).filter(i => i >= 0);
+    if (failedIndexes.length === 0) throw new Error('没有可重试的失败子任务');
+
+    // 部分重试只按本轮重试的槽位数预占；结算时也只数这些槽位（见 reportNewlyCompleted）
+    const { isLoggedIn } = useAuthStore.getState();
+    let requestId: string | undefined;
+    if (isLoggedIn) {
+      requestId = createRequestId('retry-sub');
+      await authorizeImageTask(requestId, failedIndexes.length);
+    }
+    let result: { resetIndexes: number[]; resetCount: number };
+    try {
+      result = await api.retryTaskSubtasks(taskId, failedIndexes);
+    } catch (err) {
+      if (requestId) void settleImageTask(requestId, false, 0, 'retry-sub create failed');
+      throw err;
+    }
+    if (requestId) registerTaskAuthorization(taskId, requestId, result.resetIndexes);
+    await get().loadTasks();
+    console.log('[TaskExecution] failed subtasks retried', taskId, result.resetIndexes);
+    return result;
+  },
+
   refreshTask: async (taskId) => {
     const prevTasks = get().tasks;
     const tasks = sortTasksDesc(await api.getTasks());
@@ -223,11 +253,15 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     // （取后即删，天然幂等；未登记的任务——如应用重启后创建前丢失——依赖服务端 2h 自动释放兜底）
     for (const t of nextTasks) {
       if (!TERMINAL_TASK_STATUSES.has(t.status)) continue;
-      const requestId = takeTaskAuthorization(t.id);
-      if (!requestId) continue;
-      const completed = t.success_count ?? (t.sub_tasks || []).filter(st => st.status === 'completed').length;
+      const auth = takeTaskAuthorization(t.id);
+      if (!auth) continue;
+      const requestId = auth.requestId;
+      // 部分重试：只数本轮重试槽位的最终完成数，上一轮已结算的成功子任务绝不重复计入
+      const completed = auth.retriedIndexes
+        ? auth.retriedIndexes.filter(i => t.sub_tasks?.[i]?.status === 'completed').length
+        : (t.success_count ?? (t.sub_tasks || []).filter(st => st.status === 'completed').length);
       const success = completed > 0;
-      console.log('[billing] settle task', t.id, { requestId, success, completed });
+      console.log('[billing] settle task', t.id, { requestId, success, completed, retried: auth.retriedIndexes?.length ?? 0 });
       settleImageTask(requestId, success, completed, success ? undefined : `task ${t.status}`).catch(err => {
         console.warn('[billing] settle task failed:', t.id, err);
         if (isAuthError(err)) {

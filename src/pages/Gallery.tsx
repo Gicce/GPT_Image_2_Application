@@ -325,6 +325,8 @@ function PreviewModal(props: {
   const [error, setError] = useState('');
   const [regenerating, setRegenerating] = useState(false);
   const [syncingVideo, setSyncingVideo] = useState(false);
+  const [videoInstallHint, setVideoInstallHint] = useState<string | null>(null);
+  const [pickingVideoExe, setPickingVideoExe] = useState(false);
   const [settingAvatar, setSettingAvatar] = useState(false);
   const [menuPos, setMenuPos] = useState<{ bottom?: number; top?: number; left: number } | null>(null);
   const menuBtnRef = useRef<HTMLButtonElement | null>(null);
@@ -395,7 +397,8 @@ function PreviewModal(props: {
       let online = await api.videoBridgeOnline();
 
       if (!online) {
-        // —— 离线：自动启动（找不到安装位置时允许手动选择 exe 后再试一次）——
+        // —— 离线：自动启动。未检测到安装位置 → 安装提示 Modal（绝不弹路径选择器；
+        //    手动指定安装位置仅作为 Modal 内的高级入口，供已安装但自动发现失效的场景）——
         let launchHandled = false;
         for (let attempt = 0; attempt < 2 && !launchHandled; attempt++) {
           if (attempt === 1) toastId = toastLoading('正在启动 CY Video Studio…');
@@ -406,17 +409,8 @@ function PreviewModal(props: {
             const message = String(err?.message || err || '');
             if (message.startsWith(VIDEO_NOT_FOUND_PREFIX) && attempt === 0) {
               toastDismiss(toastId);
-              const pick = window.confirm(
-                `${message.slice(VIDEO_NOT_FOUND_PREFIX.length)}\n\n点击「确定」手动选择 CY Video Studio.exe，选择后将自动继续同步。`,
-              );
-              if (!pick) return;
-              try {
-                await api.pickVideoStudioExecutable();
-              } catch (pickErr: any) {
-                toastError(String(pickErr?.message || pickErr || '选择 CY Video Studio 失败'));
-                return;
-              }
-              continue;
+              setVideoInstallHint('未检测到 CY Video Studio');
+              return;
             }
             toastUpdate(toastId, message || '无法启动 CY Video Studio', 'error');
             return;
@@ -439,7 +433,7 @@ function PreviewModal(props: {
         return;
       }
 
-      // —— Bridge Ready：传输素材 ——
+      // —— Bridge Ready：传输素材（V0.4.0：完整创作元数据）——
       toastUpdate(toastId, '正在同步图片素材…');
       const result = await api.syncImageToVideo({
         imageId: image.id,
@@ -451,6 +445,13 @@ function PreviewModal(props: {
         height: image.height ?? null,
         createdAt: image.created_at,
         model: task ? 'gpt-image-2' : null,
+        // 用户原话 / 优化稿 / 负面词分离同步（Video 端分列入库，绝不混装）
+        userPromptRaw: originalRequirement || null,
+        finalPrompt: fullPrompt || null,
+        finalNegativePrompt: fullNegative || null,
+        promptOptimized: Boolean(task?.prompt_optimized)
+          || (task != null && !!fullPrompt.trim() && originalRequirement !== fullPrompt),
+        displayTitle: imageTitle(image, task).slice(0, 40) || null,
       });
       toastUpdate(
         toastId,
@@ -484,6 +485,24 @@ function PreviewModal(props: {
       toastError(err instanceof Error ? err.message : '头像设置失败，请重试');
     } finally {
       setSettingAvatar(false);
+    }
+  }
+
+  /** 高级入口：已安装但自动发现失效时，手动指定 CY Video Studio.exe 并继续同步 */
+  async function handlePickVideoExeManually() {
+    if (pickingVideoExe) return;
+    setPickingVideoExe(true);
+    try {
+      await api.pickVideoStudioExecutable();
+      setVideoInstallHint(null);
+      // 保存路径已写入设置，直接重新走完整同步链（launch → bridge ready → 传输）
+      await syncToVideo();
+    } catch (err: any) {
+      const message = String(err?.message || err || '');
+      if (message === '已取消选择') return; // 用户关闭选择器：留在提示 Modal
+      toastError(message || '选择 CY Video Studio 失败');
+    } finally {
+      setPickingVideoExe(false);
     }
   }
 
@@ -606,6 +625,29 @@ function PreviewModal(props: {
           >
             删除图片
           </button>
+        </div>
+      )}
+      {videoInstallHint && (
+        <div className="preview-overlay gallery-video-install-overlay" onClick={() => setVideoInstallHint(null)}>
+          <div className="gallery-video-install-modal" onClick={e => e.stopPropagation()}>
+            <h3>未检测到 CY Video Studio</h3>
+            <p className="gallery-video-install-text">
+              安装 CY Video Studio 后，可以将当前素材直接发送到 Video 项目继续创作。
+            </p>
+            <p className="gallery-video-install-hint">
+              请先安装 CY Video Studio 后重试。如已安装但未能自动识别，可手动指定安装位置。
+            </p>
+            <div className="gallery-video-install-actions">
+              <button className="secondary" onClick={() => setVideoInstallHint(null)}>取消</button>
+              <button
+                className="primary"
+                disabled={pickingVideoExe}
+                onClick={() => { void handlePickVideoExeManually(); }}
+              >
+                {pickingVideoExe ? '选择中…' : '手动选择安装位置…'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

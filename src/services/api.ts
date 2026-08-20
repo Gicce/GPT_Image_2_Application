@@ -67,6 +67,8 @@ export const api = {
   createTask: (params: CreateTaskParams): Promise<Task> => invoke('create_task', { params }),
   cancelTask: (taskId: string): Promise<void> => invoke('cancel_task', { taskId }),
   retryTask: (taskId: string): Promise<Task> => invoke('retry_task', { taskId }),
+  retryTaskSubtasks: (taskId: string, subTaskIndexes?: number[] | null): Promise<{ resetIndexes: number[]; resetCount: number }> =>
+    invoke('retry_task_subtasks', { taskId, subTaskIndexes: subTaskIndexes ?? null }),
   getImages: (): Promise<ImageRecord[]> => invoke('get_images'),
   rescanImageLibrary: (): Promise<ImageRecord[]> => invoke('rescan_image_library'),
   getImageMeta: (path: string): Promise<ImageMeta> => invoke('get_image_meta', { path }),
@@ -88,6 +90,11 @@ export const api = {
     height?: number | null;
     createdAt?: string | null;
     model?: string | null;
+    userPromptRaw?: string | null;
+    finalPrompt?: string | null;
+    finalNegativePrompt?: string | null;
+    promptOptimized?: boolean | null;
+    displayTitle?: string | null;
   }): Promise<VideoSyncResult> => invoke('sync_image_to_video', {
     params: {
       imageId: params.imageId,
@@ -99,6 +106,11 @@ export const api = {
       height: params.height ?? null,
       createdAt: params.createdAt ?? null,
       model: params.model ?? null,
+      userPromptRaw: params.userPromptRaw ?? null,
+      finalPrompt: params.finalPrompt ?? null,
+      finalNegativePrompt: params.finalNegativePrompt ?? null,
+      promptOptimized: params.promptOptimized ?? null,
+      displayTitle: params.displayTitle ?? null,
     },
   }),
   openExternalUrl: (url: string): Promise<void> => invoke('open_external_url', { url }),

@@ -35,6 +35,10 @@ export interface SubTask {
   image_id?: string;
   error?: string | null;
   label?: string;
+  /** 手动「重新生成」累计次数（旧数据缺省 0） */
+  retry_count?: number;
+  /** 历史 attempt 失败原因（最近在后，最多 5 条；成功后 error 清空但历史保留） */
+  attempt_errors?: string[];
 }
 
 export type TaskExecutionMode = 'single' | 'batch';

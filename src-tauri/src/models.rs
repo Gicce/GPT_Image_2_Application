@@ -109,6 +109,12 @@ pub struct SubTask {
     pub error: Option<String>,
     #[serde(default)]
     pub label: Option<String>,
+    /// 手动「重新生成」累计次数（旧 tasks.json 缺省 0）
+    #[serde(default)]
+    pub retry_count: u32,
+    /// 历史 attempt 失败原因（最近在后，最多保留 5 条；成功后 error 清空但历史保留）
+    #[serde(default)]
+    pub attempt_errors: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

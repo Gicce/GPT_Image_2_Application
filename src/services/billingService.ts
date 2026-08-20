@@ -107,18 +107,29 @@ export async function settleImageTask(
 // task.id 登记 request_id；useTaskStore.reportNewlyCompleted 在任务终态时
 // 按登记的 request_id settle（取后即删，天然幂等去重）。
 // 应用重启会丢失登记 → 无法 settle → 服务端 2h 自动释放兜底。
-const taskAuthorization = new Map<string, string>();
-
-export function registerTaskAuthorization(taskId: string, requestId: string): void {
-  if (!taskId || !requestId) return;
-  taskAuthorization.set(taskId, requestId);
+// retriedIndexes：V4.0.5 部分重试时登记本轮重试的子任务下标——结算只数
+// 这些槽位的最终完成数，绝不把上一轮已结算的成功子任务重复计入。
+export interface TaskAuthorization {
+  requestId: string;
+  retriedIndexes?: number[];
 }
 
-/** 取出并删除该任务的预占 ID；不存在（未授权 / 已结算 / 重启丢失）返回 undefined */
-export function takeTaskAuthorization(taskId: string): string | undefined {
-  const requestId = taskAuthorization.get(taskId);
-  if (requestId) taskAuthorization.delete(taskId);
-  return requestId;
+const taskAuthorization = new Map<string, TaskAuthorization>();
+
+export function registerTaskAuthorization(
+  taskId: string,
+  requestId: string,
+  retriedIndexes?: number[],
+): void {
+  if (!taskId || !requestId) return;
+  taskAuthorization.set(taskId, { requestId, retriedIndexes });
+}
+
+/** 取出并删除该任务的预占登记；不存在（未授权 / 已结算 / 重启丢失）返回 undefined */
+export function takeTaskAuthorization(taskId: string): TaskAuthorization | undefined {
+  const auth = taskAuthorization.get(taskId);
+  if (auth) taskAuthorization.delete(taskId);
+  return auth;
 }
 
 /**

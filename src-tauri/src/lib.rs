@@ -102,6 +102,7 @@ pub fn run() {
             commands::create_task,
             commands::cancel_task,
             commands::retry_task,
+            commands::retry_task_subtasks,
             commands::get_images,
             commands::rescan_image_library,
             commands::get_image_meta,

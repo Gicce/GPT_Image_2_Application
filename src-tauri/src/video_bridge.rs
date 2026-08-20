@@ -35,11 +35,23 @@ pub struct VideoSyncParams {
     pub task_id: Option<String>,
     pub file_path: String,
     pub file_name: String,
+    /// 兼容字段：仅旧调用方使用（等价 final_prompt）；新调用方应传 user_prompt_raw + final_prompt
     pub prompt: Option<String>,
     pub width: Option<i64>,
     pub height: Option<i64>,
     pub created_at: Option<String>,
     pub model: Option<String>,
+    // ---------- V0.4.0 契约补全：创作元数据完整同步 ----------
+    /// 用户原始创作需求（Task.user_prompt_raw）
+    pub user_prompt_raw: Option<String>,
+    /// AI 优化后真正提交模型的提示词（Task.final_prompt）
+    pub final_prompt: Option<String>,
+    /// 最终负面提示词（Task.final_negative_prompt / negative_prompt）
+    pub final_negative_prompt: Option<String>,
+    /// 是否经过 Prompt 优化（Task.prompt_optimized）
+    pub prompt_optimized: Option<bool>,
+    /// 素材显示标题（用于 Video 端 display_name）
+    pub display_title: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -430,7 +442,33 @@ pub async fn sync_image(params: VideoSyncParams) -> Result<VideoSyncResult, Stri
         ));
     }
 
-    // 去重键是 (source_app, source_asset_id)；接收端对重复 sourceAssetId 幂等返回同一素材
+    // 去重键是 (source_app, source_asset_id)；接收端对重复 sourceAssetId 幂等返回同一素材。
+    // V0.4.0 契约：user_prompt_raw → sourcePrompt（用户原话）；final_prompt → videoPrompt（优化稿）。
+    // 旧调用方只传 prompt（= final_prompt）时：sourcePrompt 回落 prompt，videoPrompt 仍为空
+    // 由接收端按"未优化"语义处理——绝不把优化稿伪装成用户原话的同时又丢失优化标记。
+    let raw = params
+        .user_prompt_raw
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| {
+            // 未传 final_prompt 说明走旧语义：prompt 既当 raw 也当优化稿无凭据，只落 raw
+            if params.final_prompt.is_none() {
+                params.prompt.clone().filter(|s| !s.trim().is_empty())
+            } else {
+                None
+            }
+        });
+    let optimized = params
+        .final_prompt
+        .clone()
+        .filter(|s| !s.trim().is_empty());
+    let negative = params
+        .final_negative_prompt
+        .clone()
+        .filter(|s| !s.trim().is_empty());
+    let optimized_flag = params
+        .prompt_optimized
+        .unwrap_or(optimized.is_some());
     let body = serde_json::json!({
         "sourceApp": SOURCE_APP,
         "sourceAssetId": params.image_id,
@@ -440,8 +478,12 @@ pub async fn sync_image(params: VideoSyncParams) -> Result<VideoSyncResult, Stri
         "mimeType": mime,
         "width": params.width,
         "height": params.height,
-        "sourcePrompt": params.prompt,
-        "videoPrompt": null,
+        "sourcePrompt": raw,
+        "videoPrompt": optimized,
+        "negativePrompt": negative,
+        "promptStatus": if optimized_flag { "optimized" } else { "not_optimized" },
+        "promptLanguage": "zh-CN",
+        "displayName": params.display_title.clone().filter(|s| !s.trim().is_empty()),
         "openCreator": false,
         "sourceTaskId": params.task_id,
         "sourceModel": params.model,
