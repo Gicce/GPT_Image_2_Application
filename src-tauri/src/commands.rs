@@ -78,7 +78,8 @@ pub(crate) fn read_windows_system_proxy() -> Option<String> {
     None
 }
 
-static HTTP_CLIENT: once_cell::sync::Lazy<reqwest::Client> = once_cell::sync::Lazy::new(|| {
+/// V4.0.6 起 pub(crate)：视觉理解命令（vision.rs）复用同一客户端（代理/超时一致）。
+pub(crate) static HTTP_CLIENT: once_cell::sync::Lazy<reqwest::Client> = once_cell::sync::Lazy::new(|| {
     let mut builder = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(120))
         .use_native_tls();
@@ -4594,35 +4595,56 @@ fn resolve_task_count(count: usize, batch_items_len: usize, execution_mode: &str
     }
 }
 
+/// V4.0.8：任务 task_type 最终决策（create / retry 共用，纯函数可测）。
+/// 规则：默认原样保留（空回落 generate）——图生图任务重试 / 重建后仍是图生图；
+/// 唯一例外是「参考绑定详情图」启发式把满足条件的 generate 升级为 edit。
+/// 任何图片任务类型都不可能经此函数进入文本会话通道。
+fn resolve_final_task_type(
+    original_task_type: &str,
+    reference_bound_design_text: bool,
+    source_image_count: usize,
+) -> String {
+    let mut task_type = if original_task_type.is_empty() {
+        "generate".to_string()
+    } else {
+        original_task_type.to_string()
+    };
+    if reference_bound_design_text && source_image_count >= 2 && task_type == "generate" {
+        task_type = "edit".to_string();
+    }
+    task_type
+}
+
 #[tauri::command]
 pub fn create_task(app: tauri::AppHandle, params: CreateTaskParams) -> Result<Task, String> {
+    // 视觉理解任务由前端驱动（BYOK 视觉模型分析），不产出图片文件：
+    // 放宽输出目录要求，也不参与详情图参考图数量校验
+    let is_vision_task = params.task_type == "vision_understanding";
     if params.prompt.trim().is_empty() {
         return Err("提示词不能为空".to_string());
     }
-    if params.output_dir.trim().is_empty() {
+    if params.output_dir.trim().is_empty() && !is_vision_task {
         return Err("请选择输出目录".to_string());
     }
     if params.task_type == "edit" && params.source_images.is_empty() {
         return Err("图生图任务必须至少提供一张源图片".to_string());
     }
-    let reference_bound_design_text = is_reference_bound_detail_task_text(&format!(
-        "{}\n{}",
-        params.user_prompt_raw, params.final_prompt
-    ));
+    let reference_bound_design_text = !is_vision_task
+        && is_reference_bound_detail_task_text(&format!(
+            "{}\n{}",
+            params.user_prompt_raw, params.final_prompt
+        ));
     if reference_bound_design_text && params.source_images.len() < 2 {
         return Err("该详情图任务至少需要 2 张参考图：1 张模特图 + 1 张产品白底图".to_string());
     }
 
     let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Local::now().to_rfc3339();
-    let mut task_type = if params.task_type.is_empty() {
-        "generate".to_string()
-    } else {
-        params.task_type.clone()
-    };
-    if reference_bound_design_text && params.source_images.len() >= 2 && task_type == "generate" {
-        task_type = "edit".to_string();
-    }
+    let task_type = resolve_final_task_type(
+        &params.task_type,
+        reference_bound_design_text,
+        params.source_images.len(),
+    );
     let prompt = params.prompt.clone();
     let negative_prompt = params.negative_prompt.clone();
 
@@ -4683,13 +4705,20 @@ pub fn create_task(app: tauri::AppHandle, params: CreateTaskParams) -> Result<Ta
         batch_items: params.batch_items.clone(),
         composite_layout: params.composite_layout.clone(),
         subject_entities: params.subject_entities.clone(),
+        source_task_id: params.source_task_id.clone(),
+        source_task_kind: params.source_task_kind.clone(),
+        stage_note: String::new(),
         sub_tasks: (0..count)
             .map(|i| SubTask {
                 index: i,
                 status: "pending".to_string(),
                 image_id: None,
                 error: None,
-                label: params.batch_items.get(i).map(|item| item.label.clone()),
+                label: if is_vision_task {
+                    Some("视觉分析".to_string())
+                } else {
+                    params.batch_items.get(i).map(|item| item.label.clone())
+                },
                 retry_count: 0,
                 attempt_errors: Vec::new(),
             })
@@ -4721,6 +4750,99 @@ pub fn cancel_task(app: tauri::AppHandle, task_id: String) -> Result<(), String>
     Ok(())
 }
 
+/// 视觉理解任务状态推进（纯函数部分，便于单测）。
+///
+/// 状态机：pending → running → completed / failed；活跃态可 → cancelled。
+/// 终态一律拒绝再次更新（防止页面侧旧请求覆盖新结果）。
+pub fn apply_vision_task_update(
+    task: &mut Task,
+    status: &str,
+    stage_note: &str,
+    plan_summary: &str,
+    error: &str,
+) -> Result<(), String> {
+    if task.task_type != "vision_understanding" {
+        return Err("仅视觉理解任务支持此更新通道".to_string());
+    }
+    if crate::reconciliation::is_terminal_status(&task.status) {
+        return Err("任务已结束，不能重复更新".to_string());
+    }
+    match status {
+        "running" => {
+            task.status = "running".to_string();
+            if task.started_at.is_none() {
+                task.started_at = Some(chrono::Local::now().to_rfc3339());
+            }
+        }
+        "completed" => {
+            task.status = "completed".to_string();
+            for st in task.sub_tasks.iter_mut() {
+                if !crate::reconciliation::is_terminal_status(&st.status) {
+                    st.status = "completed".to_string();
+                    st.error = None;
+                }
+            }
+            task.completed_at = Some(chrono::Local::now().to_rfc3339());
+        }
+        "failed" => {
+            task.status = "failed".to_string();
+            for st in task.sub_tasks.iter_mut() {
+                if !crate::reconciliation::is_terminal_status(&st.status) {
+                    st.status = "failed".to_string();
+                    st.error = Some(if error.is_empty() {
+                        "视觉理解失败".to_string()
+                    } else {
+                        error.to_string()
+                    });
+                }
+            }
+            task.completed_at = Some(chrono::Local::now().to_rfc3339());
+        }
+        "cancelled" => {
+            crate::reconciliation::cancel_task_in_place(task);
+        }
+        other => {
+            return Err(format!("非法的视觉理解任务状态：{other}"));
+        }
+    }
+    if !stage_note.is_empty() {
+        task.stage_note = stage_note.to_string();
+    }
+    if !plan_summary.is_empty() {
+        task.task_plan_summary = plan_summary.to_string();
+    }
+    let (success, failed) = (
+        task.sub_tasks.iter().filter(|st| st.status == "completed").count(),
+        task.sub_tasks.iter().filter(|st| st.status == "failed").count(),
+    );
+    task.success_count = success;
+    task.failed_count = failed;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn update_vision_task(
+    app: tauri::AppHandle,
+    params: crate::models::UpdateVisionTaskParams,
+) -> Result<Task, String> {
+    let updated = storage::with_tasks(&app, |tasks| {
+        let task = tasks
+            .iter_mut()
+            .find(|t| t.id == params.task_id)
+            .ok_or_else(|| "任务不存在".to_string())?;
+        apply_vision_task_update(
+            task,
+            &params.status,
+            &params.stage_note,
+            &params.plan_summary,
+            &params.error,
+        )?;
+        Ok::<Task, String>(task.clone())
+    })?;
+    let _ = app.emit("task-updated", &params.task_id);
+    Ok(updated)
+}
+
 #[tauri::command]
 pub fn retry_task(app: tauri::AppHandle, task_id: String) -> Result<Task, String> {
     let new_task = storage::with_tasks(&app, |tasks| {
@@ -4728,23 +4850,21 @@ pub fn retry_task(app: tauri::AppHandle, task_id: String) -> Result<Task, String
             .iter()
             .find(|t| t.id == task_id)
             .ok_or_else(|| "任务不存在".to_string())?;
+        // 视觉理解任务由前端驱动，队列重试会产生一个永远 pending 的僵尸任务
+        if original.task_type == "vision_understanding" {
+            return Err("视觉理解任务不支持队列重试，请在视觉理解页重新发起分析".to_string());
+        }
 
         let now = chrono::Local::now().to_rfc3339();
-        let mut task_type = if original.task_type.is_empty() {
-            "generate".to_string()
-        } else {
-            original.task_type.clone()
-        };
-        let reference_bound_design_text = is_reference_bound_detail_task_text(&format!(
-            "{}\n{}",
-            original.user_prompt_raw, original.final_prompt
-        ));
-        if reference_bound_design_text
-            && original.source_images.len() >= 2
-            && task_type == "generate"
-        {
-            task_type = "edit".to_string();
-        }
+        // V4.0.8：重试沿用原任务类型（图生图重试仍是图生图，参考图 / 参数全部保留）
+        let task_type = resolve_final_task_type(
+            &original.task_type,
+            is_reference_bound_detail_task_text(&format!(
+                "{}\n{}",
+                original.user_prompt_raw, original.final_prompt
+            )),
+            original.source_images.len(),
+        );
 
         let new_task = Task {
             id: uuid::Uuid::new_v4().to_string(),
@@ -4776,6 +4896,9 @@ pub fn retry_task(app: tauri::AppHandle, task_id: String) -> Result<Task, String
             batch_items: original.batch_items.clone(),
             composite_layout: original.composite_layout.clone(),
             subject_entities: original.subject_entities.clone(),
+            source_task_id: original.source_task_id.clone(),
+            source_task_kind: original.source_task_kind.clone(),
+            stage_note: String::new(),
             sub_tasks: (0..original.count)
                 .map(|i| SubTask {
                     index: i,
@@ -4818,6 +4941,9 @@ pub fn retry_task_subtasks(
             .iter_mut()
             .find(|t| t.id == task_id)
             .ok_or_else(|| "任务不存在".to_string())?;
+        if task.task_type == "vision_understanding" {
+            return Err("视觉理解任务不支持队列重试，请在视觉理解页重新发起分析".to_string());
+        }
         if !crate::reconciliation::is_terminal_status(&task.status) {
             return Err("任务仍在执行或排队中，请等待完成后再重试失败项".to_string());
         }
@@ -4834,6 +4960,34 @@ pub fn retry_task_subtasks(
         reset_count: reset.len(),
         reset_indexes: reset,
     })
+}
+
+/// V4.0.6 批量任务重做：基于源 Batch Task 的选中子项创建全新任务。
+/// 源任务（含子任务状态 / retry 历史 / 结果图）绝不被修改；
+/// 计费授权由前端在调用前完成（redo = 新的生成任务，正常授权结算）。
+#[tauri::command]
+pub fn create_batch_redo_task(
+    app: tauri::AppHandle,
+    request: crate::models::CreateBatchRedoRequest,
+) -> Result<Task, String> {
+    if request.source_task_id.trim().is_empty() {
+        return Err("缺少源任务 ID".to_string());
+    }
+    let new_task = storage::with_tasks(&app, |tasks| {
+        let source = tasks
+            .iter()
+            .find(|t| t.id == request.source_task_id)
+            .ok_or_else(|| "任务不存在".to_string())?;
+        let task = crate::batch_redo::build_batch_redo_task(
+            source,
+            &request,
+            chrono::Local::now().to_rfc3339(),
+        )?;
+        tasks.push(task.clone());
+        Ok::<Task, String>(task)
+    })?;
+    let _ = app.emit("task-updated", &new_task.id);
+    Ok(new_task)
 }
 
 #[tauri::command]
@@ -6420,6 +6574,27 @@ mod tests {
         assert_eq!(expect_intent(s), "CREATE_IMAGE");
     }
 
+    // ===== V4.0.8 任务类型决策：重试 / 重建绝不改变图生图语义 =====
+
+    #[test]
+    fn retry_keeps_edit_task_type() {
+        assert_eq!(resolve_final_task_type("edit", false, 3), "edit");
+        // 参考绑定启发式只升级 generate，绝不把 edit 改回 generate
+        assert_eq!(resolve_final_task_type("edit", true, 2), "edit");
+    }
+
+    #[test]
+    fn retry_upgrades_reference_bound_generate_to_edit_only_with_two_sources() {
+        assert_eq!(resolve_final_task_type("generate", true, 2), "edit");
+        assert_eq!(resolve_final_task_type("generate", true, 1), "generate");
+        assert_eq!(resolve_final_task_type("generate", false, 3), "generate");
+    }
+
+    #[test]
+    fn empty_task_type_falls_back_to_generate() {
+        assert_eq!(resolve_final_task_type("", false, 0), "generate");
+    }
+
     #[test]
     fn agent_run_payload_billing_mode_backward_compatible() {
         // 旧前端 payload（无 billing_mode 字段）必须继续反序列化成功（serde default）
@@ -7777,5 +7952,122 @@ mod tests {
         let (kind, reason) = classify_missing_text(&diag);
         assert_eq!(kind, "provider_response_payload_missing");
         assert!(reason.contains("544"));
+    }
+
+    // ===== V4.0.7 视觉理解任务状态机 =====
+
+    fn vision_task(status: &str) -> Task {
+        Task {
+            id: "vt-1".to_string(),
+            prompt: "分析参考图并生成复刻方案".to_string(),
+            negative_prompt: String::new(),
+            user_prompt_raw: "分析参考图".to_string(),
+            final_prompt: String::new(),
+            final_negative_prompt: String::new(),
+            prompt_optimized: false,
+            prompt_optimization: None,
+            agent_intent: String::new(),
+            task_source: "manual".to_string(),
+            size: "1024x1024".to_string(),
+            quality: "auto".to_string(),
+            output_format: "png".to_string(),
+            count: 1,
+            status: status.to_string(),
+            created_at: "2026-01-01T00:00:00".to_string(),
+            started_at: None,
+            completed_at: None,
+            output_dir: String::new(),
+            success_count: 0,
+            failed_count: 0,
+            sub_tasks: vec![SubTask {
+                index: 0,
+                status: "pending".to_string(),
+                image_id: None,
+                error: None,
+                label: Some("视觉分析".to_string()),
+                retry_count: 0,
+                attempt_errors: Vec::new(),
+            }],
+            task_type: "vision_understanding".to_string(),
+            source_images: vec!["D:/ref.jpg".to_string()],
+            execution_mode: "single".to_string(),
+            batch_strategy: String::new(),
+            task_plan_summary: String::new(),
+            batch_items: Vec::new(),
+            composite_layout: None,
+            subject_entities: Vec::new(),
+            source_task_id: None,
+            source_task_kind: String::new(),
+            stage_note: String::new(),
+        }
+    }
+
+    #[test]
+    fn vision_update_rejects_non_vision_task() {
+        let mut task = vision_task("pending");
+        task.task_type = "generate".to_string();
+        assert!(apply_vision_task_update(&mut task, "running", "", "", "").is_err());
+    }
+
+    #[test]
+    fn vision_update_running_sets_started_at_and_stage() {
+        let mut task = vision_task("pending");
+        apply_vision_task_update(&mut task, "running", "正在分析参考图片…", "分析中", "")
+            .expect("pending -> running must succeed");
+        assert_eq!(task.status, "running");
+        assert!(task.started_at.is_some());
+        assert_eq!(task.stage_note, "正在分析参考图片…");
+        assert_eq!(task.task_plan_summary, "分析中");
+    }
+
+    #[test]
+    fn vision_update_completed_finalizes_subtask_and_counts() {
+        let mut task = vision_task("running");
+        apply_vision_task_update(
+            &mut task,
+            "completed",
+            "视觉理解完成",
+            "已分析参考图：篮球运动员上篮 · 模型 GLM-5V-Turbo",
+            "",
+        )
+        .expect("running -> completed must succeed");
+        assert_eq!(task.status, "completed");
+        assert_eq!(task.sub_tasks[0].status, "completed");
+        assert_eq!(task.success_count, 1);
+        assert_eq!(task.failed_count, 0);
+        assert!(task.completed_at.is_some());
+        assert!(task.task_plan_summary.contains("篮球运动员"));
+    }
+
+    #[test]
+    fn vision_update_failed_records_error_on_subtask() {
+        let mut task = vision_task("running");
+        apply_vision_task_update(&mut task, "failed", "", "", "视觉理解失败，请重试或更换视觉模型。")
+            .expect("running -> failed must succeed");
+        assert_eq!(task.status, "failed");
+        assert_eq!(task.sub_tasks[0].status, "failed");
+        assert_eq!(
+            task.sub_tasks[0].error.as_deref(),
+            Some("视觉理解失败，请重试或更换视觉模型。")
+        );
+        assert_eq!(task.failed_count, 1);
+    }
+
+    #[test]
+    fn vision_update_rejects_terminal_and_invalid_status() {
+        let mut done = vision_task("completed");
+        assert!(apply_vision_task_update(&mut done, "running", "", "", "").is_err());
+        let mut task = vision_task("pending");
+        assert!(apply_vision_task_update(&mut task, "generating", "", "", "").is_err());
+        assert_eq!(task.status, "pending", "非法状态不得部分写入");
+    }
+
+    #[test]
+    fn vision_update_cancelled_from_pending() {
+        let mut task = vision_task("pending");
+        apply_vision_task_update(&mut task, "cancelled", "已取消", "", "")
+            .expect("pending -> cancelled must succeed");
+        assert_eq!(task.status, "cancelled");
+        assert_eq!(task.sub_tasks[0].status, "cancelled");
     }
 }

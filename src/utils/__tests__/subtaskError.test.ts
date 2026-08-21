@@ -24,6 +24,36 @@ describe('classifySubTaskError', () => {
     expect(result.title).toBe('模型调用方式与当前模型能力不匹配');
   });
 
+  it('V4.0.8 分层文案：网关误路由按 endpoint 区分文生图 / 图生图通道', () => {
+    const edits = classifySubTaskError(
+      '上游图片接口失败：model cannot process text conversation [code: text_conversation_not_supported] [endpoint: https://www.packyapi.com/v1/images/edits] (HTTP 400)',
+    );
+    expect(edits.kind).toBe('upstream_capability');
+    expect(edits.hint).toContain('图生图接口');
+    expect(edits.hint).toContain('误路由');
+
+    const generations = classifySubTaskError(
+      '上游图片接口失败：model cannot process text conversation [code: text_conversation_not_supported] [endpoint: https://www.packyapi.com/v1/images/generations] (HTTP 400)',
+    );
+    expect(generations.kind).toBe('upstream_capability');
+    expect(generations.hint).toContain('文生图接口');
+    expect(generations.hint).toContain('图生图携带参考图');
+  });
+
+  it('V4.0.8 分层文案：普通 4xx 按 endpoint 说明哪一层接口失败', () => {
+    const edits = classifySubTaskError(
+      '上游图片接口失败：invalid image [code: bad_request] [endpoint: https://www.packyapi.com/v1/images/edits] (HTTP 400)',
+    );
+    expect(edits.kind).toBe('upstream_4xx');
+    expect(edits.hint).toContain('当前服务商的图生图接口调用失败');
+
+    const generations = classifySubTaskError(
+      '上游图片接口失败：invalid prompt [code: bad_request] [endpoint: https://www.packyapi.com/v1/images/generations] (HTTP 400)',
+    );
+    expect(generations.kind).toBe('upstream_4xx');
+    expect(generations.hint).toContain('当前服务商的文生图接口调用失败');
+  });
+
   it('上游 500 → upstream_5xx', () => {
     const result = classifySubTaskError('上游图片接口失败：bad gateway (HTTP 502)');
     expect(result.kind).toBe('upstream_5xx');

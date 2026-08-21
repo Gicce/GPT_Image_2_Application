@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "provider_type": "openai_official",
+  "display_name": "OpenAI 官方 API",
+  "base_url": "https://api.openai.com/v1",
+  "updated_at": "2026-08-20",
+  "models": [
+    { "model_id": "gpt-4o", "display_name": "GPT-4o（视觉）", "capabilities": ["text", "vision", "tools", "structured_output"], "lifecycle": "active", "recommended": true },
+    { "model_id": "gpt-4o-mini", "display_name": "GPT-4o mini（视觉）", "capabilities": ["text", "vision", "tools", "structured_output"], "lifecycle": "active" },
+    { "model_id": "gpt-4.1", "display_name": "GPT-4.1（视觉）", "capabilities": ["text", "vision", "tools", "structured_output"], "lifecycle": "active" },
+    { "model_id": "gpt-4.1-mini", "display_name": "GPT-4.1 mini（视觉）", "capabilities": ["text", "vision", "tools"], "lifecycle": "active" },
+    { "model_id": "o4-mini", "display_name": "o4-mini（推理 · 视觉）", "capabilities": ["text", "vision", "reasoning"], "lifecycle": "active" }
+  ]
+}

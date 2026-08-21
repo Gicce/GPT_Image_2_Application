@@ -693,3 +693,53 @@
 .studio-recent-main .studio-recent-name {
   flex: none;
 }
+
+/* V4.0.7 视觉理解带入标记：已优化 Prompt 的一次性来源提示 */
+.studio-vision-carry {
+  margin: 0 0 6px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(31, 157, 85, 0.1);
+  color: #1f9d55;
+}
+
+/* ===== V4.0.8 参考图拖拽区（小型明确 Drop Zone，风格随深色主题变量） ===== */
+.studio-dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 12px 10px;
+  margin-bottom: 10px;
+  border: 1.5px dashed var(--border-color, #3a3f4b);
+  border-radius: 10px;
+  text-align: center;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.studio-dropzone-title {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-secondary, #9aa0ae);
+}
+
+.studio-dropzone-actions {
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.studio-dropzone-hint {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-faint, #6b7280);
+  letter-spacing: 0.02em;
+}
+
+.studio-dropzone.drag-active {
+  border-color: var(--accent-primary, #6366f1);
+  background: color-mix(in srgb, var(--accent-primary, #6366f1) 8%, transparent);
+}
+
+.studio-dropzone.drag-active .studio-dropzone-title {
+  color: var(--accent-primary, #6366f1);
+}

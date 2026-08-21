@@ -605,6 +605,17 @@ function PreviewModal(props: {
             <button onClick={() => { void copyText(fullPrompt, '复制提示词失败，请重试'); setMenuPos(null); }}>复制提示词</button>
           )}
           <button
+            disabled={!image.local_path || image.missing}
+            onClick={() => {
+              setMenuPos(null);
+              // 视觉理解入口：带原图路径进入 /vision 页（一次消费的 localStorage 传递，不复制文件）
+              localStorage.setItem('cy_vision_source_path', image.local_path);
+              window.dispatchEvent(new CustomEvent('cyimage-navigate', { detail: { page: 'vision' } }));
+            }}
+          >
+            视觉理解 / 提取 Prompt
+          </button>
+          <button
             disabled={syncingVideo || !image.local_path || image.missing}
             onClick={() => { setMenuPos(null); void syncToVideo(); }}
           >

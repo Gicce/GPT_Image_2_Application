@@ -1,9 +1,11 @@
+mod batch_redo;
 mod commands;
 mod models;
 mod reconciliation;
 mod storage;
 mod task_runner;
 mod video_bridge;
+mod vision;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -101,8 +103,13 @@ pub fn run() {
             commands::get_tasks,
             commands::create_task,
             commands::cancel_task,
+            commands::update_vision_task,
             commands::retry_task,
             commands::retry_task_subtasks,
+            commands::create_batch_redo_task,
+            vision::vision_analyze_image,
+            vision::vision_compare_images,
+            vision::compute_color_similarity,
             commands::get_images,
             commands::rescan_image_library,
             commands::get_image_meta,

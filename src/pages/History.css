@@ -1,8 +1,23 @@
+/* History 页固定高度双栏工作区：整页不随任务数增高，列表 / 详情各自独立滚动。
+   根因修复：此前 .history-layout 的 height:100% 在无固定高度的 .page 里失效，
+   左列表把整页撑高，右侧详情跟着整页滚动离开视口。 */
+.history-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.history-page .page-header {
+  flex-shrink: 0;
+  margin-bottom: 16px;
+}
+
 .history-layout {
   display: flex;
   gap: 24px;
   min-height: 0;
-  height: 100%;
+  flex: 1;
 }
 
 .history-list {
@@ -10,6 +25,13 @@
   min-width: 320px;
   overflow-y: auto;
   flex-shrink: 0;
+}
+
+.history-filter-empty {
+  padding: 32px 12px;
+  text-align: center;
+  color: var(--text-faint);
+  font-size: 13px;
 }
 
 .history-item {
@@ -399,6 +421,27 @@
   .history-overview-grid {
     grid-template-columns: 1fr;
   }
+
+  /* 窄窗口退化为上下布局：恢复整页自然滚动，列表限高，详情在下方可达 */
+  .history-page {
+    display: block;
+    height: auto;
+    overflow: visible;
+  }
+
+  .history-layout {
+    flex-direction: column;
+  }
+
+  .history-list {
+    width: auto;
+    max-width: none;
+    max-height: 40vh;
+  }
+
+  .history-detail {
+    max-width: none;
+  }
 }
 
 .detail-params {
@@ -477,17 +520,4 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.history-chat-section {
-  margin-top: 24px;
-  padding-top: 24px;
-  border-top: 1px solid var(--border-default);
-}
-
-.history-chat-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-secondary);
-  margin: 0 0 12px;
 }

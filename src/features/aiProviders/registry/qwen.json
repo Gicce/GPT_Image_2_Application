@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "provider_type": "qwen_official",
+  "display_name": "阿里云百炼 / Qwen 官方 API",
+  "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+  "updated_at": "2026-08-20",
+  "notes": [
+    "百炼兼容模式（OpenAI Compatible）端点；API Key 在阿里云百炼控制台创建。",
+    "实际可用模型以「同步模型」结果为准，此处仅为推荐目录。"
+  ],
+  "models": [
+    { "model_id": "qwen-vl-max", "display_name": "Qwen-VL-Max（视觉）", "capabilities": ["text", "vision", "structured_output"], "lifecycle": "active", "recommended": true },
+    { "model_id": "qwen-vl-plus", "display_name": "Qwen-VL-Plus（视觉）", "capabilities": ["text", "vision"], "lifecycle": "active" },
+    { "model_id": "qwen3-vl-plus", "display_name": "Qwen3-VL-Plus（视觉）", "capabilities": ["text", "vision", "reasoning", "structured_output"], "lifecycle": "active" },
+    { "model_id": "qwen-vl-ocr", "display_name": "Qwen-VL-OCR（文字识别）", "capabilities": ["text", "vision"], "lifecycle": "active" }
+  ]
+}

@@ -5,13 +5,14 @@ import { useImageStore } from '../store/useImageStore';
 import { useAuthStore } from '../store/useAuthStore';
 import { useImageEditStore } from '../store/useImageEditStore';
 import { useDraftStore } from '../store/useDraftStore';
+import type { VisionCarryDraft } from '../store/useDraftStore';
 import { api } from '../services/api';
 import { authorizeImageTask, settleImageTask, createRequestId, registerTaskAuthorization } from '../services/billingService';
 import { optimizePrompt, resolvePromptOptimizerModelLabel } from '../services/promptOptimizer';
 import { appendAiPlan, optimizeSinglePlan, planBatchFromRequirement } from '../services/batchPlanner';
 import type { ParsedAiPlan } from '../services/batchPlanner';
 import { SIZES, QUALITIES, QUALITY_LABELS, FORMATS } from '../types';
-import type { ImageRecord, PromptOptimizationSnapshot, Task } from '../types';
+import type { ImageRecord, Task } from '../types';
 import {
   buildBatchPlanTaskParams,
   clampPlanCount,
@@ -24,6 +25,16 @@ import {
   type GenerationPlan,
 } from '../utils/batchPlans';
 import { toastError, toastSuccess, toastInfo } from '../components/Toast';
+import { resolveSubmitOptimizationSnapshot } from '../features/vision/generationCarry';
+import { resolveVisionCarryPatch } from '../features/vision/carryApply';
+import { gateImageModelForKind } from '../features/imageModel/imageModelCapability';
+import {
+  INVALID_IMAGE_DROP_TOAST,
+  fileNameOfPath,
+  mergeSourceImages,
+  type DroppedImageFile,
+} from '../utils/imageDropFiles';
+import { useImageDrop } from '../hooks/useImageDrop';
 import { copyText } from '../utils/clipboard';
 import BatchPlanCard from '../components/BatchPlanCard';
 import BatchPlanDetailDrawer, { BpConfirmDialog } from '../components/BatchPlanDetailDrawer';
@@ -137,7 +148,12 @@ function StudioThumb({ path }: { path: string }) {
   return <img src={thumb} alt="" />;
 }
 
-function SourceImagePicker(props: { images: SourceImage[]; onChange: (images: SourceImage[]) => void }) {
+function SourceImagePicker(props: {
+  images: SourceImage[];
+  onChange: (images: SourceImage[]) => void;
+  /** V4.0.8 拖拽高亮（Tauri 窗口级事件由页面统一分发到此区域）。 */
+  dragActive?: boolean;
+}) {
   const [galleryOpen, setGalleryOpen] = useState(false);
   const { images: galleryImages, loadImages } = useImageStore();
   const [thumbs, setThumbs] = useState<Record<string, string>>({});
@@ -159,25 +175,34 @@ function SourceImagePicker(props: { images: SourceImage[]; onChange: (images: So
     }
   }, [props.images, thumbs]);
 
+  /** 三个入口（本地 / 图库 / 拖拽）统一走 mergeSourceImages：canonical path 去重，只有一套身份判定。 */
+  function appendImages(incoming: DroppedImageFile[]) {
+    const merged = mergeSourceImages(props.images, incoming);
+    if (merged.added.length > 0) props.onChange(merged.images);
+    return merged;
+  }
+
   async function pickLocal() {
     const path = await api.selectImageFile();
     if (!path) return;
-    if (props.images.some(item => item.path === path)) return;
-    props.onChange([...props.images, { path, name: path.split(/[\\/]/).pop() || path }]);
+    appendImages([{ path, name: fileNameOfPath(path) }]);
   }
 
   function pickFromGallery(image: ImageRecord) {
     if (image.missing) return;
-    if (props.images.some(item => item.path === image.local_path)) return;
-    props.onChange([...props.images, { path: image.local_path, name: image.file_name }]);
+    appendImages([{ path: image.local_path, name: image.file_name }]);
     setGalleryOpen(false);
   }
 
   return (
     <div className="studio-source-picker">
-      <div className="settings-actions-row">
-        <button type="button" className="settings-btn settings-btn-secondary settings-btn-sm" onClick={() => void pickLocal()}>从本地选择</button>
-        <button type="button" className="settings-btn settings-btn-secondary settings-btn-sm" onClick={() => { void loadImages(); setGalleryOpen(true); }}>从图片库选择</button>
+      <div className={`studio-dropzone${props.dragActive ? ' drag-active' : ''}`}>
+        <p className="studio-dropzone-title">🖼 {props.dragActive ? '松开即可添加参考图片' : '将图片拖到这里'}</p>
+        <div className="settings-actions-row studio-dropzone-actions">
+          <button type="button" className="settings-btn settings-btn-secondary settings-btn-sm" onClick={() => void pickLocal()}>从本地选择</button>
+          <button type="button" className="settings-btn settings-btn-secondary settings-btn-sm" onClick={() => { void loadImages(); setGalleryOpen(true); }}>从图片库选择</button>
+        </div>
+        <p className="studio-dropzone-hint">PNG / JPG / JPEG / WebP</p>
       </div>
       {props.images.length > 0 && (
         <div className="studio-source-grid">
@@ -532,6 +557,29 @@ export default function ImageStudio() {
     if (settings.default_output_dir) setOutputDir(settings.default_output_dir);
   }, [settings]);
 
+  // 视觉理解页「用此方案生成图片」（V4.0.6/4.0.7）：一次性草稿消费，绝不自动提交生成；
+  // 放在 settings 同步 effect 之后，避免默认值覆盖带入参数。
+  // V4.0.7：携带来源视觉理解任务 id 与已优化标记 —— 提交时冻结快照，绝不再执行一次 AI 优化。
+  // V4.0.8：生成方式不再强制文生图 —— 有原图默认图生图，原图直接作为参考图（复用素材不重复导入）。
+  const [visionCarryMeta, setVisionCarryMeta] = useState<VisionCarryDraft | null>(null);
+  useEffect(() => {
+    const carry = useDraftStore.getState().consumeVisionCarry();
+    if (!carry?.prompt?.trim()) return;
+    const patch = resolveVisionCarryPatch(carry);
+    setGenerationType(patch.generationType);
+    setGenerationMode(patch.generationMode);
+    if (patch.generationType === 'i2i') {
+      setI2iPrompt(patch.i2iPrompt);
+      if (patch.i2iSources.length > 0) updateI2iSources(patch.i2iSources);
+    } else {
+      setT2iPrompt(patch.t2iPrompt);
+      if (patch.t2iNegative) setT2iNegative(patch.t2iNegative);
+    }
+    if (patch.size) setSize(patch.size);
+    if (patch.quality) setQuality(patch.quality);
+    if (carry.sourceVisionTaskId || carry.optimization) setVisionCarryMeta(carry);
+  }, []);
+
   useEffect(() => { void loadTasks(); }, [loadTasks]);
 
   // 优化模型标签：Provider 配置变化时重新解析（hydrateProfiles 幂等，只读 localStorage）
@@ -556,6 +604,41 @@ export default function ImageStudio() {
   const singleOpt = isEdit ? i2iOpt : t2iOpt;
   const setSingleOpt = isEdit ? setI2iOpt : setT2iOpt;
   const singlePrompt = isEdit ? i2iPrompt : t2iPrompt;
+
+  // ===== V4.0.8 参考图拖拽（Tauri 窗口级事件）：单张 / 批量共用同一导入链，绝不触发任何 API =====
+  const isEditRef = useRef(isEdit);
+  isEditRef.current = isEdit;
+  const isSingleRef = useRef(isSingle);
+  isSingleRef.current = isSingle;
+
+  async function acceptDroppedSources(files: DroppedImageFile[]) {
+    if (!isEditRef.current) {
+      toastInfo('当前为文生图模式，添加参考图片请先切换到「图生图」。');
+      return;
+    }
+    // 真实图片校验：读缩略图即解码，损坏 / 占位文件剔除并提示，不影响其余合法图片
+    const readable: DroppedImageFile[] = [];
+    const broken: string[] = [];
+    for (const file of files) {
+      try {
+        await api.readThumbnail(file.path);
+        readable.push(file);
+      } catch {
+        broken.push(file.name);
+      }
+    }
+    const current = isSingleRef.current ? i2iSources : batchSources;
+    const merged = mergeSourceImages(current, readable);
+    if (merged.added.length === 0 && broken.length === 0) return;
+    if (isSingleRef.current) updateI2iSources(merged.images);
+    else setBatchSources(merged.images);
+    if (broken.length > 0) toastError(`无法读取图片文件：${broken.join('、')}`);
+  }
+
+  const { dragActive: sourceDragActive } = useImageDrop({
+    onDropImages: files => void acceptDroppedSources(files),
+    onDropInvalid: () => toastError(INVALID_IMAGE_DROP_TOAST),
+  });
 
   // ============================================================
   // 单张模式：AI 优化 + 提交
@@ -608,10 +691,11 @@ export default function ImageStudio() {
   async function submitSingle() {
     setError('');
     const promptText = singlePrompt.trim();
-    const manualNegative = isEdit ? '' : t2iNegative;
+    // 图生图：负面词来自视觉理解携带草稿（复刻链路冻结值）；文生图：表单负面词
+    const manualNegative = isEdit ? (visionCarryMeta?.negativePrompt?.trim() || '') : t2iNegative;
     const opt = singleOpt;
-    // 单张生成模式数量恒为 1；批量数量只在批量模式（方案规划）中设置
-    const count = 1;
+    // 单张生成数量默认 1；视觉理解复刻链路带入「生成参数」中选择的数量（1/2/4）
+    const count = visionCarryMeta?.count && visionCarryMeta.count > 0 ? visionCarryMeta.count : 1;
 
     if (!promptText) {
       setError(isEdit ? '请输入图片编辑需求。' : '请输入提示词。');
@@ -629,20 +713,30 @@ export default function ImageStudio() {
       setError('AI 优化进行中，请等待完成或先使用原提示词生成。');
       return;
     }
+    // V4.0.8 capability 门禁：图片模型不支持当前生成方式时客户端阻断，不等上游报错
+    const capabilityGate = gateImageModelForKind(isEdit ? 'i2i' : 't2i');
+    if (!capabilityGate.allowed) {
+      setError(capabilityGate.message || '当前图片模型不支持该生成方式。');
+      return;
+    }
 
     const adopted = opt.status === 'success' && opt.useOptimized && opt.positivePrompt.trim().length > 0;
     const finalPrompt = adopted ? opt.positivePrompt.trim() : promptText;
     const finalNegative = (adopted ? opt.negativePrompt : manualNegative).trim();
-    const snapshot: PromptOptimizationSnapshot = adopted
-      ? {
-          applied: true,
-          provider_name: opt.providerName || undefined,
-          model_name: opt.modelName || undefined,
-          original_prompt: opt.originalPrompt || promptText,
-          optimized_at: new Date().toISOString(),
-          manually_edited_after: opt.manuallyEdited,
-        }
-      : { applied: false };
+    // 优化快照决策（纯函数，底层硬保证）：视觉理解链路带入的 Prompt 已在视觉理解页
+    // 优化完成 → 冻结快照（source=vision_recreation）+ prompt_optimized=true，
+    // 提交生成绝不再次触发 AI 优化（重复优化防护）
+    const { visionOptimized, snapshot } = resolveSubmitOptimizationSnapshot({
+      adopted,
+      adoptedMeta: {
+        providerName: opt.providerName,
+        modelName: opt.modelName,
+        originalPrompt: opt.originalPrompt,
+        manuallyEdited: opt.manuallyEdited,
+      },
+      promptText,
+      visionCarry: visionCarryMeta,
+    });
 
     // 生成前预占额度：余额不足在此阻断，不会调用上游（与 BYOK 对话计费完全分离）
     const { isLoggedIn } = useAuthStore.getState();
@@ -665,7 +759,7 @@ export default function ImageStudio() {
         user_prompt_raw: promptText,
         final_prompt: finalPrompt,
         final_negative_prompt: finalNegative,
-        prompt_optimized: adopted,
+        prompt_optimized: adopted || visionOptimized,
         prompt_optimization: snapshot,
         size,
         quality,
@@ -676,10 +770,16 @@ export default function ImageStudio() {
         source_images: isEdit ? i2iSources.map(item => item.path) : [],
         execution_mode: 'single',
         task_source: 'manual',
+        ...(visionCarryMeta?.sourceVisionTaskId ? {
+          source_task_id: visionCarryMeta.sourceVisionTaskId,
+          source_task_kind: 'vision_understanding',
+        } : {}),
+        ...(visionCarryMeta?.taskPlanSummary ? { task_plan_summary: visionCarryMeta.taskPlanSummary } : {}),
       });
       if (billingRequestId) registerTaskAuthorization(created.id, billingRequestId);
       toastSuccess(`已提交生成任务（${count} 张），可在任务队列查看进度`);
-      // 保持原单张页面行为：提交成功后清空本次输入
+      // 保持原单张页面行为：提交成功后清空本次输入（视觉理解草稿一次性消费，同步清除）
+      setVisionCarryMeta(null);
       if (isEdit) {
         setI2iPrompt('');
         updateI2iSources([]);
@@ -972,6 +1072,12 @@ export default function ImageStudio() {
       setError('请选择输出目录。');
       return;
     }
+    // V4.0.8 capability 门禁：与单张提交同一判定（image_generation / image_edit）
+    const capabilityGate = gateImageModelForKind(isEdit ? 'i2i' : 't2i');
+    if (!capabilityGate.allowed) {
+      setError(capabilityGate.message || '当前图片模型不支持该生成方式。');
+      return;
+    }
 
     let built;
     try {
@@ -1034,12 +1140,19 @@ export default function ImageStudio() {
             {isEdit && (
               <div className="form-group">
                 <label>参考图片 <span className="required">*</span></label>
-                <SourceImagePicker images={i2iSources} onChange={updateI2iSources} />
+                <SourceImagePicker images={i2iSources} onChange={updateI2iSources} dragActive={sourceDragActive} />
               </div>
             )}
 
             <div className="form-group">
               <label>{isEdit ? '图片编辑需求' : '提示词'} <span className="required">*</span></label>
+              {visionCarryMeta?.optimization && (
+                <p className="form-hint studio-vision-carry">
+                  来自视觉理解复刻方案{visionCarryMeta.sourceVisionTaskId ? `（视觉理解任务 #${visionCarryMeta.sourceVisionTaskId.slice(0, 8)}）` : ''}：
+                  当前 Prompt 已优化，提交生成时不会再次执行 AI 优化。
+                  {isEdit && visionCarryMeta.negativePrompt?.trim() ? '负面提示词将随方案一并提交。' : ''}
+                </p>
+              )}
               <textarea
                 rows={4}
                 value={promptText}
@@ -1153,7 +1266,7 @@ export default function ImageStudio() {
             <div className="summary-divider" />
             <div className="summary-item highlight">
               <span className="summary-label">生成数量</span>
-              <span className="summary-value">1 张</span>
+              <span className="summary-value">{visionCarryMeta?.count && visionCarryMeta.count > 0 ? visionCarryMeta.count : 1} 张</span>
             </div>
             <div className="summary-item">
               <span className="summary-label">输出目录</span>
@@ -1189,7 +1302,7 @@ export default function ImageStudio() {
           <div className="form-group">
             <label>参考图片 <span className="required">*</span></label>
             <span className="form-hint studio-source-hint">所有方案共用当前参考图，可添加多张。</span>
-            <SourceImagePicker images={batchSources} onChange={setBatchSources} />
+            <SourceImagePicker images={batchSources} onChange={setBatchSources} dragActive={sourceDragActive} />
           </div>
         )}
 

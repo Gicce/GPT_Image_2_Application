@@ -31,6 +31,7 @@ import type {
   AIProviderModel,
   BillingMode,
   ModelUseScope,
+  ProviderCategory,
   ProviderValidationState,
   UseScopes,
 } from './types';
@@ -42,7 +43,9 @@ import {
   PROVIDER_TYPE_LABELS,
   USE_SCOPE_LABELS,
   defaultUseScopes,
+  profileCategory,
 } from './types';
+import { allowsVisionUse } from './store';
 
 type View = { kind: 'list' } | { kind: 'add' } | { kind: 'edit'; profileId: string };
 
@@ -50,6 +53,15 @@ const PROVIDER_ADD_OPTIONS: { type: AIProviderType; title: string; desc: string 
   { type: 'deepseek_official', title: 'DeepSeek 官方', desc: '官方 API，模型来自官方目录与自动发现' },
   { type: 'glm_official', title: '智谱 GLM 官方', desc: '官方 API，模型来自官方目录与自动发现' },
   { type: 'openai_compatible', title: '第三方 API', desc: 'OpenAI Compatible，可自定义模型' },
+];
+
+/** V4.0.6 视觉模型类别：图片输入 → 文本/JSON 理解的 Provider 模板（全部真实协议端点） */
+const VISION_PROVIDER_ADD_OPTIONS: { type: AIProviderType; title: string; desc: string }[] = [
+  { type: 'openai_official', title: 'OpenAI 官方', desc: '官方 API（api.openai.com），视觉理解走多模态接口' },
+  { type: 'gemini_official', title: 'Google Gemini 官方', desc: '官方 OpenAI 兼容端点，支持多图比较' },
+  { type: 'qwen_official', title: '阿里云百炼 / Qwen', desc: '百炼兼容模式端点，Qwen-VL / Qwen3-VL 视觉系列' },
+  { type: 'glm_official', title: '智谱 Vision', desc: 'GLM 官方 API（GLM-4V / GLM-5V 系列视觉模型）' },
+  { type: 'openai_compatible', title: '第三方 API', desc: '任何 OpenAI Compatible 视觉服务，可自定义模型' },
 ];
 
 function providerTypeLabel(type: AIProviderType): string {
@@ -140,31 +152,44 @@ function useScopeSummary(profile: AIProviderProfile): string {
   return parts.length > 0 ? parts.join(' · ') : '未启用任何功能';
 }
 
-export default function AgentProviderSettings() {
+export default function AgentProviderSettings({ category = 'agent' }: { category?: ProviderCategory }) {
   const [view, setView] = useState<View>({ kind: 'list' });
-  const { profiles, defaultProfileId } = useAIProviderStore();
+  const isVision = category === 'vision';
+  const { profiles, defaultProfileId, defaultVisionProfileId } = useAIProviderStore();
+  const categoryDefaultId = isVision ? defaultVisionProfileId : defaultProfileId;
   const ordered = useMemo(() => {
-    const def = profiles.find(p => p.id === defaultProfileId);
-    const rest = profiles.filter(p => p.id !== defaultProfileId);
+    const scoped = profiles.filter(p => profileCategory(p) === category);
+    const def = scoped.find(p => p.id === categoryDefaultId);
+    const rest = scoped.filter(p => p.id !== categoryDefaultId);
     return def ? [def, ...rest] : rest;
-  }, [profiles, defaultProfileId]);
+  }, [profiles, categoryDefaultId, category]);
 
   if (view.kind === 'add') {
-    return <AddProfileView onDone={() => setView({ kind: 'list' })} />;
+    return <AddProfileView onDone={() => setView({ kind: 'list' })} category={category} />;
   }
   if (view.kind === 'edit') {
-    return <EditProfileView profileId={view.profileId} onBack={() => setView({ kind: 'list' })} />;
+    return <EditProfileView profileId={view.profileId} onBack={() => setView({ kind: 'list' })} category={category} />;
   }
 
-  const active = useAIProviderStore.getState().getSelection('');
+  const active = isVision ? null : useAIProviderStore.getState().getSelection('');
 
   return (
     <div className="agent-provider-settings">
       <div className="settings-card agent-current-card">
         <div className="agent-current-head">
           <div>
-            <h3 className="settings-section-title">AI 模型服务</h3>
-            {active ? (
+            <h3 className="settings-section-title">{isVision ? '视觉模型服务' : 'AI 模型服务'}</h3>
+            {isVision ? (
+              ordered.length > 0 ? (
+                <p className="form-hint">
+                  {categoryDefaultId
+                    ? `默认视觉模型：${ordered.find(p => p.id === categoryDefaultId)?.name ?? ''} / ${ordered.find(p => p.id === categoryDefaultId)?.models.find(m => m.model_id === ordered.find(p => p.id === categoryDefaultId)?.default_model_id)?.display_name ?? ''}`
+                    : '尚未设置默认视觉模型服务，将使用第一个已启用服务。'}
+                </p>
+              ) : (
+                <p className="form-hint">尚未配置视觉模型。视觉理解、反向提取 Prompt 与高复刻评审只能使用你自己配置的图片理解模型。</p>
+              )
+            ) : active ? (
               <p className="form-hint">
                 当前默认：{active.profile.name} / {active.model.display_name || active.model.model_id}
                 <span className={`agent-dot ${active.model.test_status === 'available' ? 'ok' : active.model.test_status === 'failed' ? 'fail' : 'muted'}`}>●</span>
@@ -181,16 +206,20 @@ export default function AgentProviderSettings() {
 
       <div className="agent-provider-list-head">
         <div>
-          <h3 className="settings-section-title">已配置的模型服务</h3>
-          <p className="settings-section-desc">管理用于 AI 对话、任务规划、提示词优化和视觉理解的模型服务。</p>
+          <h3 className="settings-section-title">已配置的{isVision ? '视觉模型' : '模型'}服务</h3>
+          <p className="settings-section-desc">{isVision
+            ? '管理用于视觉理解、反向提取 Prompt 与高复刻双图评审的图片理解模型服务。'
+            : '管理用于 AI 对话、任务规划、提示词优化和视觉理解的模型服务。'}</p>
         </div>
-        <button className="settings-btn settings-btn-primary" onClick={() => setView({ kind: 'add' })}>+ 添加模型服务</button>
+        <button className="settings-btn settings-btn-primary" onClick={() => setView({ kind: 'add' })}>+ 添加{isVision ? '视觉模型服务' : '模型服务'}</button>
       </div>
 
       {ordered.length === 0 && (
         <div className="agent-provider-empty">
-          <p>还没有配置 AI 模型服务。</p>
-          <p className="form-hint">可添加 DeepSeek 官方、智谱 GLM 官方或第三方 OpenAI Compatible API。</p>
+          <p>还没有配置{isVision ? '视觉模型' : 'AI 模型'}服务。</p>
+          <p className="form-hint">{isVision
+            ? '可添加 OpenAI 官方、Google Gemini、阿里云百炼 / Qwen、智谱 Vision 或第三方 OpenAI Compatible 视觉服务。'
+            : '可添加 DeepSeek 官方、智谱 GLM 官方或第三方 OpenAI Compatible API。'}</p>
         </div>
       )}
 
@@ -199,15 +228,17 @@ export default function AgentProviderSettings() {
           const defaultModel = profile.models.find(m => m.model_id === profile.default_model_id);
           const hasToken = !!profileToken(profile);
           const newCount = profile.models.filter(m => isNewlyDiscovered(m)).length;
+          const isProfileVision = profileCategory(profile) === 'vision';
+          const visionCount = profile.models.filter(m => m.supports_vision).length;
           return (
-            <div className={`agent-provider-card ${profile.id === defaultProfileId ? 'is-default' : ''}`} key={profile.id}>
+            <div className={`agent-provider-card ${profile.id === categoryDefaultId ? 'is-default' : ''}`} key={profile.id}>
               <div className="agent-provider-logo">
                 <ProviderLogo providerType={profile.provider_type} name={profile.name} size={28} />
               </div>
               <div className="agent-provider-info">
                 <div className="agent-provider-name-row">
                   <strong>{profile.name}</strong>
-                  {profile.id === defaultProfileId && <span className="agent-badge-default">默认</span>}
+                  {profile.id === categoryDefaultId && <span className="agent-badge-default">默认</span>}
                   {!profile.enabled && <span className="agent-badge-disabled">已停用</span>}
                   {profile.billing_mode && <span className="agent-badge-muted">{BILLING_MODE_LABELS[profile.billing_mode]}</span>}
                   <span className={`form-hint ${hasToken ? 'form-hint-success' : ''}`}>
@@ -221,16 +252,20 @@ export default function AgentProviderSettings() {
                       ? `（${BILLING_MODE_LABELS[profile.billing_mode]}）`
                       : ''}
                     {hasToken
-                      ? `${defaultModel ? ` · ${defaultModel.display_name || defaultModel.model_id}` : ''} · ${profile.models.length} 个模型`
+                      ? `${defaultModel ? ` · ${defaultModel.display_name || defaultModel.model_id}` : ''} · ${isProfileVision ? `${visionCount} 个视觉模型` : `${profile.models.length} 个模型`}`
                       : ''}
                     {newCount > 0 && ` · ✨${newCount} 个新模型`}
                     {profile.last_model_sync_at && ` · 同步于 ${formatRelativeTime(profile.last_model_sync_at)}`}
                   </span>
                 </p>
-                {hasToken && <p className="form-hint agent-provider-meta">{useScopeSummary(profile)}</p>}
+                {hasToken && (
+                  <p className="form-hint agent-provider-meta">
+                    {isProfileVision ? '用于视觉理解 · 反向提取 Prompt · 高复刻评审' : useScopeSummary(profile)}
+                  </p>
+                )}
               </div>
               <div className="agent-provider-actions">
-                {profile.id !== defaultProfileId && profile.enabled && (
+                {profile.id !== categoryDefaultId && profile.enabled && (
                   <button className="settings-btn settings-btn-outline settings-btn-sm" onClick={() => useAIProviderStore.getState().setDefaultProfile(profile.id)}>设为默认</button>
                 )}
                 <button
@@ -242,7 +277,7 @@ export default function AgentProviderSettings() {
                 <button
                   className="settings-btn settings-btn-danger settings-btn-sm"
                   onClick={() => {
-                    const usingHint = profile.id === defaultProfileId ? '该模型服务是当前默认，删除后将自动切换到其它可用服务。' : '';
+                    const usingHint = profile.id === categoryDefaultId ? '该模型服务是当前默认，删除后将自动切换到其它可用服务。' : '';
                     if (window.confirm(`确认删除模型服务「${profile.name}」？${usingHint}`)) {
                       useAIProviderStore.getState().removeProfile(profile.id);
                     }
@@ -259,20 +294,24 @@ export default function AgentProviderSettings() {
   );
 }
 
-function AddProfileView({ onDone }: { onDone: () => void }) {
+function AddProfileView({ onDone, category = 'agent' }: { onDone: () => void; category?: ProviderCategory }) {
   const [selectedType, setSelectedType] = useState<AIProviderType | null>(null);
   const addProfile = useAIProviderStore(state => state.addProfile);
+  const isVision = category === 'vision';
+  const addOptions = isVision ? VISION_PROVIDER_ADD_OPTIONS : PROVIDER_ADD_OPTIONS;
 
   if (!selectedType) {
     return (
       <div className="agent-provider-settings">
         <div className="agent-edit-head">
           <button className="settings-btn settings-btn-secondary settings-btn-sm" onClick={onDone}>← 返回</button>
-          <h3 className="settings-section-title">添加 AI 模型服务</h3>
+          <h3 className="settings-section-title">添加{isVision ? '视觉模型' : 'AI 模型'}服务</h3>
         </div>
-        <p className="settings-section-desc">选择 Provider 后配置 API Key，模型将自动同步。创作能力（文生图 / 图生图 / 任务规划）属于 CyImagePro 本身，与 Provider 无关。</p>
+        <p className="settings-section-desc">{isVision
+          ? '选择视觉 Provider 后配置 API Key，模型将自动同步。视觉模型只用于图片理解（分析 / 反向 Prompt / 双图评审），不会用于图片生成。'
+          : '选择 Provider 后配置 API Key，模型将自动同步。创作能力（文生图 / 图生图 / 任务规划）属于 CyImagePro 本身，与 Provider 无关。'}</p>
         <div className="agent-add-grid">
-          {PROVIDER_ADD_OPTIONS.map(option => (
+          {addOptions.map(option => (
             <button key={option.type} className="agent-add-card" onClick={() => setSelectedType(option.type)}>
               <ProviderLogo providerType={option.type} name={option.title} size={22} />
               <strong>{option.title}</strong>
@@ -286,7 +325,8 @@ function AddProfileView({ onDone }: { onDone: () => void }) {
 
   return <ProfileFormView
     providerType={selectedType}
-    initial={createEmptyProfile(selectedType, '')}
+    category={category}
+    initial={createEmptyProfile(selectedType, '', category)}
     submitLabel="保存配置"
     onCancel={onDone}
     onSubmit={profile => {
@@ -296,7 +336,7 @@ function AddProfileView({ onDone }: { onDone: () => void }) {
   />;
 }
 
-function EditProfileView({ profileId, onBack }: { profileId: string; onBack: () => void }) {
+function EditProfileView({ profileId, onBack, category = 'agent' }: { profileId: string; onBack: () => void; category?: ProviderCategory }) {
   const profile = useAIProviderStore(state => state.profiles.find(p => p.id === profileId));
   const updateProfile = useAIProviderStore(state => state.updateProfile);
   if (!profile) {
@@ -310,6 +350,7 @@ function EditProfileView({ profileId, onBack }: { profileId: string; onBack: () 
   return (
     <ProfileFormView
       providerType={profile.provider_type}
+      category={category}
       initial={profile}
       isEdit
       submitLabel="保存"
@@ -384,6 +425,7 @@ function UnsavedChangesDialog(props: {
 
 function ProfileFormView(props: {
   providerType: AIProviderType;
+  category?: ProviderCategory;
   initial: AIProviderProfile;
   isEdit?: boolean;
   submitLabel: string;
@@ -392,6 +434,7 @@ function ProfileFormView(props: {
   onSaved?: () => void;
 }) {
   const { providerType, initial, isEdit } = props;
+  const isVision = (props.category ?? profileCategory(initial)) === 'vision';
   const billingModes = getBillingModes(providerType);
   const isCustom = allowCustomModels(providerType);
   const apiKeyLink = getOfficialApiKeyLink(providerType);
@@ -638,7 +681,9 @@ function ProfileFormView(props: {
           ← 返回
         </button>
         <h3 className="settings-section-title">
-          {isEdit ? `AI 模型服务 › ${initial.name}` : `添加模型服务 › ${providerTypeLabel(providerType)}`}
+          {isEdit
+            ? `${isVision ? '视觉模型服务' : 'AI 模型服务'} › ${initial.name}`
+            : `添加${isVision ? '视觉模型' : '模型'}服务 › ${providerTypeLabel(providerType)}`}
         </h3>
         <div className="provider-enabled-toggle">
           <span className="form-hint">{effectiveProfile.enabled ? '已启用' : '已停用'}</span>
@@ -825,6 +870,7 @@ function ProfileFormView(props: {
         <>
           <ModelCenterSection
             profile={effectiveProfile}
+            serviceCategory={isVision ? 'vision' : 'agent'}
             onSynced={(models, syncedAt, extra) => {
               if (isEdit && liveProfile) {
                 if (extra) store.getState().updateProfile(initial.id, extra);
@@ -834,8 +880,11 @@ function ProfileFormView(props: {
               }
             }}
           />
-          <UseScopeSection profile={effectiveProfile} isEdit={!!isEdit} profileId={initial.id} onDraftChange={patch} />
+          {!isVision && (
+            <UseScopeSection profile={effectiveProfile} isEdit={!!isEdit} profileId={initial.id} onDraftChange={patch} />
+          )}
           <DefaultModelSection
+            category={isVision ? 'vision' : 'agent'}
             profile={effectiveProfile}
             isEdit={!!isEdit}
             profileId={initial.id}
@@ -924,26 +973,35 @@ function ProfileFormView(props: {
 // ============================================================
 
 /**
- * AI 模型服务只管理对话类模型：分类仅保留 全部模型 / 支持视觉。
+ * 模型中心分类（档案类别感知）：
+ * - agent 档案：全部模型 / 支持视觉（视觉模型可作为对话模型的图片理解能力出现）
+ * - vision 档案：视觉模型（默认，按 capabilities 筛选）/ 全部模型
  * - 「推理 / Tools / 结构化输出」等是 Capability Tag，展示在模型卡上，不做一级分类
  * - 「手动添加」（model_source=custom）与「能力待识别」（capabilities=['unknown']）是内部概念，
  *   不作为普通用户的一级 Tab；图片 / 视频模型属于其它设置模块
  */
 type ModelCategory = 'all' | 'vision';
 
-const CATEGORY_TABS: { key: ModelCategory; label: string }[] = [
+const AGENT_CATEGORY_TABS: { key: ModelCategory; label: string }[] = [
   { key: 'all', label: '全部模型' },
   { key: 'vision', label: '支持视觉' },
 ];
 
+const VISION_CATEGORY_TABS: { key: ModelCategory; label: string }[] = [
+  { key: 'vision', label: '视觉模型' },
+  { key: 'all', label: '全部模型' },
+];
+
 function ModelCenterSection(props: {
   profile: AIProviderProfile;
+  serviceCategory: ProviderCategory;
   onSynced: (models: AIProviderModel[], syncedAt: string, extra?: Partial<AIProviderProfile>) => void;
 }) {
   const { profile } = props;
+  const isVision = props.serviceCategory === 'vision';
   const isCustom = allowCustomModels(profile.provider_type);
   const [search, setSearch] = useState('');
-  const [category, setCategory] = useState<ModelCategory>('all');
+  const [category, setCategory] = useState<ModelCategory>(isVision ? 'vision' : 'all');
   const [refreshing, setRefreshing] = useState(false);
   const [refreshNote, setRefreshNote] = useState('');
   const [batch, setBatch] = useState<{ done: number; total: number } | null>(null);
@@ -953,7 +1011,7 @@ function ModelCenterSection(props: {
   const [showAddModel, setShowAddModel] = useState(false);
   const [newModelId, setNewModelId] = useState('');
   const [newModelName, setNewModelName] = useState('');
-  const [newModelVision, setNewModelVision] = useState(false);
+  const [newModelVision, setNewModelVision] = useState(isVision);
   const [addError, setAddError] = useState('');
 
   // 并发安全的模型列表基准：批量检测两个 worker 同时回写时避免互相覆盖
@@ -1120,7 +1178,9 @@ function ModelCenterSection(props: {
         <div>
           <h4 className="settings-subsection-title">模型</h4>
           <p className="form-hint">
-            {`已同步 ${profile.models.length} 个模型`}
+            {isVision
+              ? `已同步 ${profile.models.length} 个模型 · ${profile.models.filter(m => m.supports_vision).length} 个支持视觉理解`
+              : `已同步 ${profile.models.length} 个模型`}
             {profile.last_model_sync_at && ` · 最后同步：${formatRelativeTime(profile.last_model_sync_at)}`}
           </p>
         </div>
@@ -1175,7 +1235,7 @@ function ModelCenterSection(props: {
           placeholder="搜索模型名称或 ID…"
         />
         <div className="model-category-tabs">
-          {CATEGORY_TABS.map(tab => (
+          {(isVision ? VISION_CATEGORY_TABS : AGENT_CATEGORY_TABS).map(tab => (
             <button
               key={tab.key}
               className={`model-category-tab ${category === tab.key ? 'active' : ''}`}
@@ -1264,7 +1324,13 @@ function ModelCenterSection(props: {
             </div>
           );
         })}
-        {filtered.length === 0 && <p className="form-hint">没有符合筛选条件的模型。</p>}
+        {filtered.length === 0 && (
+          <p className="form-hint">
+            {isVision && category === 'vision'
+              ? '当前目录暂无支持视觉理解的模型。请点击「刷新模型」同步目录，或切换到「全部模型」查看。'
+              : '没有符合筛选条件的模型。'}
+          </p>
+        )}
       </div>
 
       {isCustom && (
@@ -1325,6 +1391,7 @@ function ModelCenterSection(props: {
       {configModel && (
         <ModelConfigDialog
           profile={profile}
+          serviceCategory={isVision ? 'vision' : 'agent'}
           model={profile.models.find(m => m.id === configModel.id) || configModel}
           onClose={() => setConfigModel(null)}
           onApply={(patchModel, patchProfile) => {
@@ -1351,35 +1418,46 @@ function ModelCenterSection(props: {
 
 function ModelConfigDialog(props: {
   profile: AIProviderProfile;
+  serviceCategory: ProviderCategory;
   model: AIProviderModel;
   onClose: () => void;
   onApply: (patchModel: Partial<AIProviderModel>, patchProfile?: Partial<AIProviderProfile>) => void;
 }) {
   const { profile, model } = props;
+  const isVision = props.serviceCategory === 'vision';
   const [visible, setVisible] = useState(model.enabled);
   const [scopes, setScopes] = useState<UseScopes>(model.use_scopes ?? defaultUseScopes());
   const scopesDirty = JSON.stringify(scopes) !== JSON.stringify(model.use_scopes ?? defaultUseScopes());
 
-  const defaults: { key: string; label: string; active: boolean; apply: () => Partial<AIProviderProfile> }[] = [
-    {
-      key: 'chat',
-      label: '默认对话模型',
-      active: profile.default_model_id === model.model_id,
-      apply: () => ({ default_model_id: model.model_id }),
-    },
-    {
-      key: 'planner',
-      label: '默认任务规划模型',
-      active: (profile.planner_model_id || profile.default_model_id) === model.model_id,
-      apply: () => ({ planner_model_id: model.model_id }),
-    },
-    {
-      key: 'prompt_optimizer',
-      label: '默认 Prompt 优化模型',
-      active: (profile.prompt_optimizer_model_id || profile.default_model_id) === model.model_id,
-      apply: () => ({ prompt_optimizer_model_id: model.model_id }),
-    },
-  ];
+  // vision 档案：唯一默认位是「默认视觉理解模型」（default_model_id）；
+  // agent 用途默认（对话 / 规划 / Prompt 优化）不适用于视觉档案，禁止写入。
+  const defaults: { key: string; label: string; active: boolean; apply: () => Partial<AIProviderProfile> }[] = isVision
+    ? [{
+        key: 'vision',
+        label: '默认视觉理解模型',
+        active: profile.default_model_id === model.model_id,
+        apply: () => ({ default_model_id: model.model_id }),
+      }]
+    : [
+        {
+          key: 'chat',
+          label: '默认对话模型',
+          active: profile.default_model_id === model.model_id,
+          apply: () => ({ default_model_id: model.model_id }),
+        },
+        {
+          key: 'planner',
+          label: '默认任务规划模型',
+          active: (profile.planner_model_id || profile.default_model_id) === model.model_id,
+          apply: () => ({ planner_model_id: model.model_id }),
+        },
+        {
+          key: 'prompt_optimizer',
+          label: '默认 Prompt 优化模型',
+          active: (profile.prompt_optimizer_model_id || profile.default_model_id) === model.model_id,
+          apply: () => ({ prompt_optimizer_model_id: model.model_id }),
+        },
+      ];
 
   const capsUnknown = model.capabilities.length === 1 && model.capabilities[0] === 'unknown';
 
@@ -1398,19 +1476,23 @@ function ModelConfigDialog(props: {
             <Switch checked={visible} onChange={setVisible} label="在模型选择器中显示" />
           </div>
 
-          <h4 className="settings-subsection-title">允许用于</h4>
-          {ALL_USE_SCOPES.map(use => (
-            <div className="use-scope-row" key={use}>
-              <span>{USE_SCOPE_LABELS[use]}</span>
-              <Switch
-                checked={scopes[use]}
-                onChange={next => setScopes(current => ({ ...current, [use]: next }))}
-                label={USE_SCOPE_LABELS[use]}
-              />
-            </div>
-          ))}
+          {!isVision && (
+            <>
+              <h4 className="settings-subsection-title">允许用于</h4>
+              {ALL_USE_SCOPES.map(use => (
+                <div className="use-scope-row" key={use}>
+                  <span>{USE_SCOPE_LABELS[use]}</span>
+                  <Switch
+                    checked={scopes[use]}
+                    onChange={next => setScopes(current => ({ ...current, [use]: next }))}
+                    label={USE_SCOPE_LABELS[use]}
+                  />
+                </div>
+              ))}
+            </>
+          )}
           <div className="use-scope-row disabled">
-            <span>视觉理解</span>
+            <span>{isVision ? '图片理解能力' : '视觉理解'}</span>
             <span className="form-hint">{model.supports_vision ? '根据能力支持' : capsUnknown ? '能力待识别' : '不支持'}</span>
           </div>
 
@@ -1435,8 +1517,8 @@ function ModelConfigDialog(props: {
           <button className="settings-btn settings-btn-secondary" onClick={props.onClose}>取消</button>
           <button
             className="settings-btn settings-btn-primary"
-            disabled={!scopesDirty && visible === model.enabled}
-            onClick={() => props.onApply({ enabled: visible, use_scopes: scopes })}
+            disabled={visible === model.enabled && (isVision || !scopesDirty)}
+            onClick={() => props.onApply(isVision ? { enabled: visible } : { enabled: visible, use_scopes: scopes })}
           >
             应用
           </button>
@@ -1495,12 +1577,14 @@ function UseScopeSection(props: {
 // ============================================================
 
 function DefaultModelSection(props: {
+  category: ProviderCategory;
   profile: AIProviderProfile;
   isEdit: boolean;
   profileId: string;
   onDraftChange: (partial: Partial<AIProviderProfile>) => void;
 }) {
   const { profile, isEdit } = props;
+  const isVision = props.category === 'vision';
   const store = useAIProviderStore;
 
   function allowedModels(use: ModelUseScope) {
@@ -1511,11 +1595,45 @@ function DefaultModelSection(props: {
     });
   }
 
+  function visionAllowedModels() {
+    return profile.models.filter(m => m.enabled && m.lifecycle !== 'retired' && allowsVisionUse(m));
+  }
+
   function setDefault(patchValue: Partial<AIProviderProfile>) {
     if (isEdit) {
       store.getState().updateProfile(props.profileId, patchValue);
     }
     props.onDraftChange(patchValue);
+  }
+
+  if (isVision) {
+    const models = visionAllowedModels();
+    return (
+      <section className="settings-card">
+        <h4 className="settings-subsection-title">默认视觉模型</h4>
+        <div className="form-row form-row-wrap">
+          <div className="form-group">
+            <label>视觉理解默认模型</label>
+            {models.length > 0 ? (
+              <select value={profile.default_model_id} onChange={e => setDefault({ default_model_id: e.target.value })}>
+                {!models.some(m => m.model_id === profile.default_model_id) && (
+                  <option value="">请选择视觉模型</option>
+                )}
+                {models.map(model => (
+                  <option key={model.id} value={model.model_id}>
+                    {model.display_name || model.model_id}
+                    {model.lifecycle === 'missing' ? '（已停止发现）' : ''}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <p className="form-hint">暂无带「视觉理解」能力的启用模型，请先同步模型目录或调整模型能力。</p>
+            )}
+          </div>
+        </div>
+        <p className="form-hint">能力守卫：capabilities 明确声明但不含「视觉理解」的模型不会出现在此处；能力未知（未声明）的模型允许选择。</p>
+      </section>
+    );
   }
 
   const selects: { use: ModelUseScope; label: string; value: string; fallbackValue: string; onChange: (modelId: string) => void }[] = [

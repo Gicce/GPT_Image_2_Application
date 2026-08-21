@@ -12,6 +12,8 @@
 import { api } from './api';
 import { resolveByokConfigForUse } from '../features/aiProviders/store';
 import { buildProviderError, providerErrorCompact } from '../features/aiProviders/providerError';
+import type { RecreationFieldKey, VisualRecreationPlan } from '../features/vision/recreationPlan';
+import { PLAN_FIELD_LABELS } from '../features/vision/recreationPlan';
 
 export interface PromptOptimizeInput {
   /** 原始 Prompt（用户当前输入，不会被修改） */
@@ -151,11 +153,20 @@ export function parseOptimizerReply(reply: string): { prompt: string; negative?:
  *  - 解析失败返回 null（调用方回落旧文本协议或报错，绝不返回半截结果）。
  */
 export function parseOptimizerJson(reply: string): { prompt: string; negative?: string } | null {
+  const record = extractBalancedJsonRecord(reply);
+  if (!record) return null;
+  const positive = typeof record.positive_prompt === 'string' ? record.positive_prompt.trim() : '';
+  if (!positive) return null;
+  const negative = typeof record.negative_prompt === 'string' ? record.negative_prompt.trim() : '';
+  return { prompt: positive, negative: normalizeNegative(negative) };
+}
+
+/** cleanReply 后截取首个配平的 {...} 并 JSON.parse；失败返回 null。 */
+function extractBalancedJsonRecord(reply: string): Record<string, unknown> | null {
   const cleaned = cleanReply(reply);
   if (!cleaned.includes('{')) return null;
 
   let candidate = '';
-  // 优先取 fenced 代码块内的内容（```` 已经被 cleanReply 剥掉栅栏标记）
   const start = cleaned.indexOf('{');
   if (start === -1) return null;
   let depth = 0;
@@ -175,19 +186,13 @@ export function parseOptimizerJson(reply: string): { prompt: string; negative?: 
   }
   if (!candidate) return null;
 
-  let parsed: unknown;
   try {
-    parsed = JSON.parse(candidate);
+    const parsed = JSON.parse(candidate);
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
+    return parsed as Record<string, unknown>;
   } catch {
     return null;
   }
-  if (typeof parsed !== 'object' || parsed === null) return null;
-
-  const record = parsed as Record<string, unknown>;
-  const positive = typeof record.positive_prompt === 'string' ? record.positive_prompt.trim() : '';
-  if (!positive) return null;
-  const negative = typeof record.negative_prompt === 'string' ? record.negative_prompt.trim() : '';
-  return { prompt: positive, negative: normalizeNegative(negative) };
 }
 
 /** 编号/符号列表行 → 子 Prompt 条目（标题 | 提示词，无分隔符时截断生成标题） */
@@ -336,4 +341,244 @@ export function resolvePromptOptimizerModelLabel(): string | null {
   const byok = resolveByokConfigForUse('prompt_optimizer');
   if (!byok.ok) return null;
   return `${byok.profileName} / ${byok.modelEntity.display_name || byok.model}`;
+}
+
+// ===== 视觉理解复刻链路：统一「调整要求」→ 最终 Prompt 重建 =====
+
+const VISION_RECREATION_SYSTEM_PROMPT = `你是 CyImagePro 的视觉复刻 Prompt 重建专家。用户已对参考图完成视觉理解，得到一份结构化复刻方案和原始复刻 Prompt；现在用户在「调整要求」中用大白话提出修改意愿（例如"把主体换成蓝色小龙，整体更梦幻"），你负责基于原始方案重建最终生图 Prompt。
+
+规则：
+1. 锁定项规则（最高优先级）：标注为「锁定」的维度在最终 Prompt 中必须保持与结构化方案一致，显式强化保持约束（例如"保持原始上篮动作不变""保持原始镜头角度与构图关系"）；即使用户的调整要求与锁定项冲突，也优先保留锁定内容，并在 summary 中说明存在冲突、已优先保留锁定项。
+2. 未锁定的维度允许根据用户调整要求修改；用户没有提到的未锁定维度保持原始语义，不得漂移。
+3. 修改要整体自洽：例如替换主体后需要重建与新人选自洽的整体描述（性别、年龄、外观、服装与场景/动作/风格的衔接），不是简单字符串替换。
+4. 原始复刻 Prompt 中与修改无关的视觉结构必须原样保留语义，不得漂移。
+5. positive_prompt 一律使用简体中文，输出为适合 gpt-image-2（GPT Image 系）执行的自然语言长句描述；禁止 Markdown 列表堆砌关键词，禁止中英双份。
+6. negative_prompt 用简体中文列出要避免的元素（含典型负面项：低画质、模糊、错误人体结构、多余手指、水印、文字等），并结合修改后的内容重新整理；无可避免项时输出空字符串。
+7. summary 是一句话中文摘要，说明做了什么修改、保留了什么（例如"已根据调整要求将主体替换为蓝色小龙并增强梦幻氛围，保留锁定的背景、构图与光线"），用于任务提示与历史记录。
+
+输出格式（严格遵守）：只输出一个 JSON 对象，不要输出解释、前言或 Markdown 代码块。
+{"positive_prompt": "最终生图 Prompt", "negative_prompt": "负面提示词", "summary": "一句话修改摘要"}`;
+
+export interface VisionRecreationOptimizeResult {
+  optimizedPrompt: string;
+  optimizedNegativePrompt: string;
+  summary: string;
+  providerName: string;
+  modelName: string;
+}
+
+/** 复刻 Prompt 优化输入（统一「调整要求」链路，字段名与交互契约一致）。 */
+export interface VisionRecreationOptimizeInput {
+  /** 视觉理解编译出的原始复刻 Prompt。 */
+  originalRecreationPrompt: string;
+  /** 结构化复刻方案（含各维度锁定状态）。 */
+  structuredRecreationPlan: VisualRecreationPlan;
+  /** 锁定维度（与 structuredRecreationPlan.fields[].locked 一致）。 */
+  lockedFields: RecreationFieldKey[];
+  /** 用户在统一输入框写的大白话调整要求。 */
+  userAdjustmentInstruction: string;
+  /** 目标图片模型信息（默认 gpt-image-2）。 */
+  targetImageModelInfo?: string;
+  /** 原始负面提示词（供优化器重新整理）。 */
+  originalNegativePrompt?: string;
+}
+
+/** 失败归因（决定用户态中文文案；技术细节只进开发态日志）。 */
+export type VisionOptimizerErrorKind =
+  | 'config_error'
+  | 'provider_error'
+  | 'empty_response'
+  | 'parse_failed'
+  | 'missing_instruction'
+  | 'request_failed';
+
+export type VisionRecreationOptimizeOutcome =
+  | { ok: true; result: VisionRecreationOptimizeResult }
+  | { ok: false; kind: VisionOptimizerErrorKind; error: string };
+
+/** summary 缺省文案（模型未输出 summary 时的兜底，不让解析失败）。 */
+const DEFAULT_OPTIMIZE_SUMMARY = '已根据调整要求重新优化最终生图 Prompt。';
+
+/**
+ * 解析视觉复刻优化输出（JSON 主协议）：
+ * {"positive_prompt","negative_prompt","summary"}。
+ * summary / negative 缺失不视为失败 —— 只要有可用的 positive_prompt 即通过
+ * （历史缺陷：summary 必填导致模型省略 summary 时整次优化报
+ * 「AI 未返回有效的优化结果」）。
+ */
+export function parseVisionOptimizerJson(
+  reply: string,
+): { prompt: string; negative?: string; summary?: string } | null {
+  const record = extractBalancedJsonRecord(reply);
+  if (!record) return null;
+  const positive = typeof record.positive_prompt === 'string' ? record.positive_prompt.trim() : '';
+  if (!positive) return null;
+  const negative = typeof record.negative_prompt === 'string' ? record.negative_prompt.trim() : '';
+  const summary = typeof record.summary === 'string' ? record.summary.trim() : '';
+  return { prompt: positive, negative: normalizeNegative(negative), summary: summary || undefined };
+}
+
+/** 摘要段标签：SUMMARY / 修改摘要 / 摘要（行首锚定） */
+const SUMMARY_LABEL = /(?:^|\n)\s*(?:SUMMARY|修改摘要|摘要)\s*[:：]\s*/i;
+
+/**
+ * 多级兜底解析：JSON 主协议 → 文本标签协议（SUMMARY/NEGATIVE/OPTIMIZED）
+ * → 整段视为优化结果。返回 null 仅当清洗后没有任何可用正文。
+ */
+export function parseVisionOptimizerReply(
+  reply: string,
+): { prompt: string; negative?: string; summary?: string } | null {
+  const json = parseVisionOptimizerJson(reply);
+  if (json) return json;
+
+  const cleaned = cleanReply(reply);
+  if (!cleaned) return null;
+
+  // 摘要标签段先摘出（避免混入 prompt 正文）
+  let summary: string | undefined;
+  let body = cleaned;
+  const summaryMatch = body.match(SUMMARY_LABEL);
+  if (summaryMatch && summaryMatch.index !== undefined) {
+    summary = body.slice(summaryMatch.index + summaryMatch[0].length).trim().split('\n')[0].trim();
+    body = body.slice(0, summaryMatch.index);
+  }
+
+  const { body: withoutNegative, negative } = splitNegative(body);
+  const labelMatch = withoutNegative.match(OPTIMIZED_LABEL);
+  const prompt = (labelMatch && labelMatch.index !== undefined
+    ? withoutNegative.slice(0, labelMatch.index) + withoutNegative.slice(labelMatch.index + labelMatch[0].length)
+    : withoutNegative
+  ).trim();
+  if (prompt) return { prompt, negative, summary: summary || undefined };
+  return null;
+}
+
+/** 构建复刻优化 user 内容（纯函数，供测试锁定「锁定项真正进入提示词」）。 */
+export function buildVisionRecreationUserContent(input: VisionRecreationOptimizeInput): string {
+  const planLines = input.structuredRecreationPlan.fields
+    .map(field => {
+      const flag = field.locked ? '锁定（必须保持不变）' : '可修改（允许按调整要求修改）';
+      return `- ${field.label}［${flag}］：${field.value || '（未识别）'}`;
+    })
+    .join('\n');
+  const lockedLines = input.lockedFields.length
+    ? input.lockedFields.map(key => PLAN_FIELD_LABELS[key] ?? key).join('、')
+    : '（无）';
+
+  return [
+    '【结构化复刻方案】',
+    `参考图概述：${input.structuredRecreationPlan.summary}`,
+    planLines,
+    '',
+    '【锁定项（最高优先级：必须保持不变，与调整要求冲突时优先保留锁定项）】',
+    lockedLines,
+    '',
+    '【用户调整要求（大白话）】',
+    input.userAdjustmentInstruction.trim(),
+    '',
+    '【原始复刻 Prompt】',
+    input.originalRecreationPrompt,
+    '',
+    '【原始 Negative Prompt】',
+    input.originalNegativePrompt?.trim() || '（无）',
+    '',
+    `目标图片模型：${input.targetImageModelInfo || 'gpt-image-2（GPT Image 系，自然语言长句偏好）'}`,
+    '',
+    '请基于以上信息重建最终生图 Prompt：按调整要求修改未锁定维度，锁定维度显式强化保持约束，其余视觉结构保持原语义。',
+  ].join('\n');
+}
+
+/** 开发态诊断日志：区分空响应 / 解析失败，附返回片段（生产构建不输出）。 */
+function logVisionOptimizerFailure(kind: VisionOptimizerErrorKind, detail: unknown): void {
+  if (!import.meta.env.DEV) return;
+  console.warn(`[视觉复刻优化失败] kind=${kind}`, detail);
+}
+
+/**
+ * 复刻方案 Prompt 重建：原始复刻 Prompt + 结构化方案 + 锁定项 + 用户调整要求
+ * → 最终生图 Prompt。只在复刻方案处于 dirty 状态时调用（optimized 状态禁止重复优化）。
+ */
+export async function optimizeVisionRecreation(
+  input: VisionRecreationOptimizeInput,
+): Promise<VisionRecreationOptimizeOutcome> {
+  const byok = resolveByokConfigForUse('prompt_optimizer');
+  if (!byok.ok) {
+    return { ok: false, kind: 'config_error', error: byok.error };
+  }
+  const instruction = input.userAdjustmentInstruction.trim();
+  if (!instruction) {
+    return {
+      ok: false,
+      kind: 'missing_instruction',
+      error: '请先在「调整要求」输入框中描述你希望调整的内容。',
+    };
+  }
+
+  const userContent = buildVisionRecreationUserContent({ ...input, userAdjustmentInstruction: instruction });
+
+  try {
+    const runResult = await api.runAgentRequest({
+      mode: 'chat',
+      base_url: byok.baseUrl,
+      token: byok.token,
+      model: byok.model,
+      billing_mode: byok.billingMode,
+      system_prompt: VISION_RECREATION_SYSTEM_PROMPT,
+      messages: [{ role: 'user', content: userContent }],
+    }) as AgentRunResult;
+
+    if (!runResult.ok) {
+      const providerError = buildProviderError({
+        providerId: byok.profileId,
+        providerType: byok.providerType,
+        providerName: byok.profileName,
+        billingMode: byok.billingMode,
+        modelId: byok.model,
+        failure: {
+          ok: false,
+          error_kind: runResult.error_kind,
+          error_message: runResult.error_message,
+          status: runResult.status,
+        },
+      });
+      return { ok: false, kind: 'provider_error', error: providerErrorCompact(providerError) };
+    }
+
+    const reply = runResult.reply || '';
+    if (!reply.trim()) {
+      logVisionOptimizerFailure('empty_response', { model: byok.model, replyLength: 0 });
+      return {
+        ok: false,
+        kind: 'empty_response',
+        error: '模型未返回可用结果，请重试。',
+      };
+    }
+
+    const parsed = parseVisionOptimizerReply(reply);
+    if (!parsed) {
+      logVisionOptimizerFailure('parse_failed', {
+        model: byok.model,
+        replyLength: reply.length,
+        replyHead: reply.slice(0, 200),
+      });
+      return {
+        ok: false,
+        kind: 'parse_failed',
+        error: '返回结果格式异常，请稍后重试。',
+      };
+    }
+    return {
+      ok: true,
+      result: {
+        optimizedPrompt: parsed.prompt,
+        optimizedNegativePrompt: parsed.negative ?? '',
+        summary: parsed.summary || DEFAULT_OPTIMIZE_SUMMARY,
+        providerName: byok.profileName,
+        modelName: byok.modelEntity.display_name || byok.model,
+      },
+    };
+  } catch (error: any) {
+    logVisionOptimizerFailure('request_failed', error);
+    return { ok: false, kind: 'request_failed', error: error?.message || '提示词优化请求失败，请重试。' };
+  }
 }

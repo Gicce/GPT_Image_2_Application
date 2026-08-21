@@ -172,6 +172,9 @@ pub struct PromptOptimizationSnapshot {
     pub optimized_at: String,
     #[serde(default)]
     pub manually_edited_after: bool,
+    /// 优化来源标记：vision_recreation = 视觉理解复刻链路（已优化，禁止重复优化）
+    #[serde(default)]
+    pub source: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -223,6 +226,15 @@ pub struct Task {
     pub composite_layout: Option<TaskCompositeLayout>,
     #[serde(default)]
     pub subject_entities: Vec<String>,
+    /// 来源任务 id（视觉理解 → 图片生成 的链路关联；普通任务为 None）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_task_id: Option<String>,
+    /// 来源任务类型快照（如 vision_understanding），任务列表免查源即可显示来源
+    #[serde(default)]
+    pub source_task_kind: String,
+    /// 执行中的阶段性中文提示（视觉理解任务等前端驱动任务用；终态后保留最后一条）
+    #[serde(default)]
+    pub stage_note: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -356,6 +368,70 @@ pub struct CreateTaskParams {
     pub composite_layout: Option<TaskCompositeLayout>,
     #[serde(default)]
     pub subject_entities: Vec<String>,
+    #[serde(default)]
+    pub source_task_id: Option<String>,
+    #[serde(default)]
+    pub source_task_kind: String,
+}
+
+/// 视觉理解任务的阶段性状态更新（前端驱动；task_runner 不参与执行）。
+#[derive(Debug, Deserialize)]
+pub struct UpdateVisionTaskParams {
+    pub task_id: String,
+    /// running | completed | failed | cancelled
+    pub status: String,
+    /// 执行中的阶段性中文提示（如"正在分析参考图片…"）
+    #[serde(default)]
+    pub stage_note: String,
+    /// 任务摘要（完成后写入 task_plan_summary，任务列表展示"已分析参考图：…"）
+    #[serde(default)]
+    pub plan_summary: String,
+    /// 失败原因（status=failed 时写入子任务错误）
+    #[serde(default)]
+    pub error: String,
+}
+
+/// V4.0.6 批量任务重做：应用到全部选中子项的统一参数覆盖。
+/// None / 空串 = 继承源任务对应字段。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct BatchRedoGlobalOverrides {
+    #[serde(default)]
+    pub size: Option<String>,
+    #[serde(default)]
+    pub quality: Option<String>,
+    #[serde(default)]
+    pub output_format: Option<String>,
+    #[serde(default)]
+    pub output_dir: Option<String>,
+    /// 追加到每个选中子项生效 Prompt 之前（不覆盖原内容）
+    #[serde(default)]
+    pub prompt_prefix: Option<String>,
+    /// 追加到每个选中子项生效 Prompt 之后
+    #[serde(default)]
+    pub prompt_suffix: Option<String>,
+}
+
+/// 单个子任务级覆盖（优先级最高，index 指向源任务 batch_items 下标）
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct BatchRedoItemOverride {
+    pub index: usize,
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub prompt: Option<String>,
+    /// Some("") 表示显式清空该子项负面词
+    #[serde(default)]
+    pub negative_prompt: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct CreateBatchRedoRequest {
+    pub source_task_id: String,
+    pub selected_indexes: Vec<usize>,
+    #[serde(default)]
+    pub global_overrides: BatchRedoGlobalOverrides,
+    #[serde(default)]
+    pub item_overrides: Vec<BatchRedoItemOverride>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

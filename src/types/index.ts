@@ -61,6 +61,8 @@ export interface PromptOptimizationSnapshot {
   optimized_at?: string;
   /** 采用后用户又手动编辑过最终提示词。 */
   manually_edited_after?: boolean;
+  /** 优化来源标记：vision_recreation = 视觉理解复刻链路（已优化，禁止重复优化）。 */
+  source?: string;
 }
 
 export interface TaskBatchItem {
@@ -106,12 +108,18 @@ export interface Task {
   success_count: number;
   failed_count: number;
   sub_tasks: SubTask[];
-  task_type: 'generate' | 'edit' | 'remove_background' | '';
+  task_type: 'generate' | 'edit' | 'remove_background' | 'vision_understanding' | '';
   source_images: string[];
   execution_mode?: TaskExecutionMode;
   batch_strategy?: TaskBatchStrategy;
   task_plan_summary?: string;
   batch_items?: TaskBatchItem[];
+  /** 来源任务 id（视觉理解 → 图片生成 的链路关联）。 */
+  source_task_id?: string;
+  /** 来源任务类型快照（如 vision_understanding），任务列表免查源即可显示来源。 */
+  source_task_kind?: string;
+  /** 执行中的阶段性中文提示（前端驱动的视觉理解任务用）。 */
+  stage_note?: string;
 }
 
 export interface ImageRecord {
@@ -159,7 +167,7 @@ export interface CreateTaskParams {
   output_format: string;
   count: number;
   output_dir: string;
-  task_type: 'generate' | 'edit' | 'remove_background' | '';
+  task_type: 'generate' | 'edit' | 'remove_background' | 'vision_understanding' | '';
   source_images: string[];
   execution_mode?: TaskExecutionMode;
   batch_strategy?: TaskBatchStrategy;
@@ -169,6 +177,10 @@ export interface CreateTaskParams {
   composite_layout?: TaskCompositeLayout;
   /** 复合构图的每格主体（例如 ["泰山","黄山","华山"]）。 */
   subject_entities?: string[];
+  /** 来源任务 id（视觉理解 → 图片生成 链路；写入后任务列表显示来源关系）。 */
+  source_task_id?: string;
+  /** 来源任务类型快照（vision_understanding）。 */
+  source_task_kind?: string;
 }
 
 /** 单张复合构图布局（一张图内部的分格结构）。 */
@@ -177,7 +189,33 @@ export interface TaskCompositeLayout {
   panelCount: number;
 }
 
-export type PageType = 'agent' | 'imagestudio' | 'queue' | 'gallery' | 'history' | 'settings' | 'about' | 'account';
+export type PageType = 'agent' | 'imagestudio' | 'vision' | 'queue' | 'gallery' | 'history' | 'settings' | 'about' | 'account';
+
+// ===== V4.0.6 批量任务重做 =====
+
+export interface BatchRedoGlobalOverrides {
+  size?: string | null;
+  quality?: string | null;
+  output_format?: string | null;
+  output_dir?: string | null;
+  prompt_prefix?: string | null;
+  prompt_suffix?: string | null;
+}
+
+export interface BatchRedoItemOverride {
+  index: number;
+  label?: string | null;
+  prompt?: string | null;
+  /** 空串 = 显式清空该项负面词 */
+  negative_prompt?: string | null;
+}
+
+export interface CreateBatchRedoRequest {
+  source_task_id: string;
+  selected_indexes: number[];
+  global_overrides: BatchRedoGlobalOverrides;
+  item_overrides: BatchRedoItemOverride[];
+}
 
 export interface ChatAttachment {
   id: string;
@@ -959,6 +997,157 @@ export interface VisionUnderstandResult {
   error_kind?: 'connect' | 'timeout' | 'auth' | 'rate_limit' | 'server' | 'invalid_response' | 'invalid_request' | 'model_error' | 'vision_error';
   error_message?: string;
   status?: number | null;
+}
+
+// ===== V4.0.6 视觉理解（结构化分析 / 双图评审 / 本地色彩）=====
+
+export interface NormalizedRegion {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface VisionSubject {
+  label: string;
+  count?: number | null;
+  appearance: string[];
+  pose?: string | null;
+  action?: string | null;
+  position?: NormalizedRegion | null;
+  orientation?: string | null;
+  clothing: string[];
+  relations: string[];
+}
+
+export interface VisionObject {
+  label: string;
+  count?: number | null;
+  position?: NormalizedRegion | null;
+  attributes: string[];
+}
+
+export interface SceneAnalysis {
+  environment: string;
+  location: string;
+  time_of_day: string;
+  weather: string;
+  background: string;
+  foreground: string;
+}
+
+export interface CompositionAnalysis {
+  subject_placement: string;
+  symmetry: string;
+  rule_of_thirds?: boolean | null;
+  horizon?: string | null;
+  negative_space: string;
+  crop: string;
+  depth_layers: string;
+}
+
+export interface CameraAnalysis {
+  shot_type: string;
+  focal_length_estimate?: string | null;
+  perspective: string;
+  angle: string;
+  depth_of_field: string;
+  lens_characteristics: string;
+}
+
+export interface LightingAnalysis {
+  source: string;
+  direction: string;
+  softness: string;
+  key_fill_rim: string;
+  contrast: string;
+  time_of_day: string;
+  exposure: string;
+}
+
+export interface ColorAnalysis {
+  dominant_palette: string[];
+  temperature: string;
+  saturation: string;
+  contrast: string;
+}
+
+export interface StyleAnalysis {
+  category: string;
+  medium: string;
+  texture: string;
+  rendering: string;
+  photographic_characteristics: string;
+}
+
+export interface TextElement {
+  content: string;
+  position?: NormalizedRegion | null;
+  style: string;
+}
+
+export interface VisionAnalysis {
+  summary: string;
+  subjects: VisionSubject[];
+  objects: VisionObject[];
+  scene: SceneAnalysis;
+  composition: CompositionAnalysis;
+  camera: CameraAnalysis;
+  lighting: LightingAnalysis;
+  colors: ColorAnalysis;
+  style: StyleAnalysis;
+  text_elements: TextElement[];
+  fine_details: string[];
+  generation_risks: string[];
+}
+
+export interface VisionComparison {
+  subject: number;
+  composition: number;
+  style: number;
+  lighting: number;
+  color: number;
+  objects?: number | null;
+  text?: number | null;
+  missing_elements: string[];
+  extra_elements: string[];
+  layout_differences: string[];
+  style_differences: string[];
+  lighting_differences: string[];
+  color_differences: string[];
+  prompt_corrections: string[];
+}
+
+export interface VisionAnalyzeResult {
+  ok: boolean;
+  analysis?: VisionAnalysis | null;
+  error_kind?: string | null;
+  error_message?: string | null;
+  status?: number | null;
+}
+
+export interface VisionCompareResult {
+  ok: boolean;
+  comparison?: VisionComparison | null;
+  error_kind?: string | null;
+  error_message?: string | null;
+  status?: number | null;
+}
+
+export interface ColorProfile {
+  dominant_colors: string[];
+  brightness: number;
+  saturation: number;
+  contrast: number;
+  hue_histogram: number[];
+}
+
+export interface ColorSimilarityResult {
+  ok: boolean;
+  score: number;
+  source?: ColorProfile | null;
+  candidate?: ColorProfile | null;
+  error_message?: string | null;
 }
 
 export interface AgentRunRequestResult {

@@ -3,7 +3,7 @@
   "provider_type": "glm_official",
   "display_name": "智谱 GLM 官方 API",
   "base_url": "https://open.bigmodel.cn/api/paas/v4",
-  "updated_at": "2026-08-15",
+  "updated_at": "2026-08-21",
   "billing_modes": [
     {
       "mode": "api",
@@ -33,10 +33,22 @@
     { "model_id": "glm-5", "display_name": "GLM-5", "capabilities": ["text", "reasoning", "tools"], "lifecycle": "active" },
     { "model_id": "glm-5-turbo", "display_name": "GLM-5 Turbo", "capabilities": ["text"], "lifecycle": "active" },
     { "model_id": "glm-4.7", "display_name": "GLM-4.7", "capabilities": ["text", "reasoning", "tools"], "lifecycle": "active" },
+    { "model_id": "glm-4.7-flashx", "display_name": "GLM-4.7-FlashX", "capabilities": ["text"], "lifecycle": "active" },
+    { "model_id": "glm-4.7-flash", "display_name": "GLM-4.7-Flash（免费）", "capabilities": ["text"], "lifecycle": "active" },
     { "model_id": "glm-4.6", "display_name": "GLM-4.6", "capabilities": ["text", "reasoning", "tools"], "lifecycle": "active" },
     { "model_id": "glm-4.5", "display_name": "GLM-4.5", "capabilities": ["text", "reasoning", "tools"], "lifecycle": "active" },
-    { "model_id": "glm-4.5-air", "display_name": "GLM-4.5 Air", "capabilities": ["text"], "lifecycle": "active" },
-    { "model_id": "glm-4-flash", "display_name": "GLM-4 Flash", "capabilities": ["text"], "lifecycle": "active" },
+    { "model_id": "glm-4.5-air", "display_name": "GLM-4.5-Air", "capabilities": ["text"], "lifecycle": "active" },
+    { "model_id": "glm-4.5-airx", "display_name": "GLM-4.5-AirX", "capabilities": ["text"], "lifecycle": "active" },
+    { "model_id": "glm-4-long", "display_name": "GLM-4-Long（1M 上下文）", "capabilities": ["text"], "lifecycle": "active" },
+    { "model_id": "glm-4-flashx-250414", "display_name": "GLM-4-FlashX-250414", "capabilities": ["text"], "lifecycle": "active" },
+    { "model_id": "glm-4-flash-250414", "display_name": "GLM-4-Flash-250414（免费）", "capabilities": ["text"], "lifecycle": "active" },
+    { "model_id": "glm-4-flash", "display_name": "GLM-4 Flash", "capabilities": ["text"], "lifecycle": "deprecated" },
+    { "model_id": "glm-5v-turbo", "display_name": "GLM-5V-Turbo", "capabilities": ["text", "vision", "video_vision", "reasoning", "tools", "structured_output"], "lifecycle": "active" },
+    { "model_id": "glm-4.6v", "display_name": "GLM-4.6V", "capabilities": ["text", "vision", "video_vision", "reasoning", "tools", "structured_output"], "lifecycle": "active" },
+    { "model_id": "glm-4.6v-flash", "display_name": "GLM-4.6V-Flash（免费）", "capabilities": ["text", "vision", "reasoning", "tools"], "lifecycle": "active" },
+    { "model_id": "glm-4.1v-thinking-flashx", "display_name": "GLM-4.1V-Thinking-FlashX", "capabilities": ["text", "vision", "reasoning"], "lifecycle": "active" },
+    { "model_id": "glm-4.1v-thinking-flash", "display_name": "GLM-4.1V-Thinking-Flash（免费）", "capabilities": ["text", "vision", "reasoning"], "lifecycle": "active" },
+    { "model_id": "glm-4v-flash", "display_name": "GLM-4V-Flash（免费）", "capabilities": ["text", "vision"], "lifecycle": "active" },
     { "model_id": "glm-4v", "display_name": "GLM-4V（视觉）", "capabilities": ["text", "vision"], "lifecycle": "deprecated" },
     { "model_id": "glm-4v-plus", "display_name": "GLM-4V Plus（视觉）", "capabilities": ["text", "vision"], "lifecycle": "deprecated" }
   ]

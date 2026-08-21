@@ -1,7 +1,7 @@
 import { create } from 'zustand';
-import type { AIProviderProfile, AIProviderModel, AIModelSelection, BillingMode, ProviderValidationState, ModelUseScope, UseScopes } from './types';
-import { defaultUseScopes } from './types';
-import { allowCustomModels, resolveProviderBaseUrl } from './registry/registry';
+import type { AIProviderProfile, AIProviderModel, AIModelSelection, BillingMode, ProviderValidationState, ModelUseScope, ProviderCategory, UseScopes } from './types';
+import { defaultUseScopes, profileCategory } from './types';
+import { allowCustomModels, resolveProviderBaseUrl, getBuiltInRegistry, mergeModelCatalogs, type RegistryModelEntry } from './registry/registry';
 import {
   migrateLegacyAgentSettings,
   upgradePersistedProfile,
@@ -12,6 +12,7 @@ import {
   validateCustomModelId,
 } from './migration';
 import { useSettingsStore } from '../../store/useSettingsStore';
+import { invalidateModelTestStatus, isModelAvailableForVision } from './modelUsability';
 
 export interface ModelSyncSummary {
   added: string[];
@@ -25,6 +26,8 @@ interface AIProviderState {
   /** 当前聊天会话级选择（conversationId -> selection）；'' 为全局兜底 */
   selections: Record<string, AIModelSelection>;
   defaultProfileId: string;
+  /** V4.0.6 视觉模型默认档案（category='vision' 的档案独立默认，与 Agent 默认互不干扰） */
+  defaultVisionProfileId: string;
   /** migration marker：旧 agent_* 配置只迁移一次 */
   migrated: boolean;
   hydrated: boolean;
@@ -82,6 +85,7 @@ type PersistShape = {
   profiles: AIProviderProfile[];
   selections: Record<string, AIModelSelection>;
   defaultProfileId: string;
+  defaultVisionProfileId?: string;
   migrated: boolean;
 };
 
@@ -95,6 +99,7 @@ function readPersisted(): PersistShape | null {
       profiles: parsed.profiles,
       selections: parsed.selections && typeof parsed.selections === 'object' ? parsed.selections : {},
       defaultProfileId: parsed.defaultProfileId || '',
+      defaultVisionProfileId: parsed.defaultVisionProfileId || '',
       migrated: !!parsed.migrated,
     };
   } catch {
@@ -115,10 +120,55 @@ function writePersisted(state: PersistShape): boolean {
   }
 }
 
+/**
+ * 启动时把内置 Registry 幂等合并进已落库目录（官方 Provider）。
+ * 解决「registry 升级新增模型后，老用户目录仍是旧列表，需手动刷新」的问题。
+ * 规则与手动同步一致：新增 Registry 模型、刷新已知模型 metadata；
+ * 绝不删除模型、绝不改默认模型、custom 模型不受影响。
+ * 注意：此处没有 Discovery 结果，merge 误标的 missing（动态发现模型）一律恢复原状态。
+ */
+function mergeBuiltinRegistryIntoModels(models: AIProviderModel[], registry: RegistryModelEntry[]): AIProviderModel[] {
+  if (models.length === 0) return models;
+  const prevById = new Map(models.map(m => [m.model_id, m]));
+  const { models: merged } = mergeModelCatalogs({ existing: models, registry });
+  return merged.map(next => {
+    const prev = prevById.get(next.model_id);
+    if (prev && next.lifecycle === 'missing' && prev.lifecycle !== 'missing') {
+      return { ...next, lifecycle: prev.lifecycle };
+    }
+    return next;
+  });
+}
+
+function mergeBuiltinRegistryIntoProfile(profile: AIProviderProfile): AIProviderProfile {
+  const registry = getBuiltInRegistry(profile.provider_type)?.models;
+  if (!registry || registry.length === 0) return profile;
+  const models = mergeBuiltinRegistryIntoModels(profile.models, registry);
+  let changed = models !== profile.models;
+  let modeStates = profile.mode_states;
+  if (profile.mode_states) {
+    const next: typeof profile.mode_states = {};
+    for (const [mode, state] of Object.entries(profile.mode_states)) {
+      if (!state?.models) continue;
+      const stateModels = mergeBuiltinRegistryIntoModels(state.models, registry);
+      if (stateModels !== state.models) {
+        changed = true;
+        next[mode as BillingMode] = { ...state, models: stateModels };
+      } else {
+        next[mode as BillingMode] = state;
+      }
+    }
+    if (changed) modeStates = next;
+  }
+  if (!changed) return profile;
+  return { ...profile, models, ...(modeStates !== profile.mode_states ? { mode_states: modeStates } : {}) };
+}
+
 export const useAIProviderStore = create<AIProviderState>((set, get) => ({
   profiles: [],
   selections: {},
   defaultProfileId: '',
+  defaultVisionProfileId: '',
   migrated: false,
   hydrated: false,
 
@@ -126,7 +176,23 @@ export const useAIProviderStore = create<AIProviderState>((set, get) => ({
     if (get().hydrated) return;
     const persisted = readPersisted();
     if (persisted && persisted.migrated) {
-      set({ ...persisted, profiles: persisted.profiles.map(upgradePersistedProfile), hydrated: true });
+      const profiles = persisted.profiles
+        .map(upgradePersistedProfile)
+        .map(mergeBuiltinRegistryIntoProfile);
+      set({
+        ...persisted,
+        defaultVisionProfileId: persisted.defaultVisionProfileId || '',
+        profiles,
+        hydrated: true,
+      });
+      // registry 合并结果回写 localStorage，避免每次启动重复计算
+      writePersisted({
+        profiles,
+        selections: persisted.selections,
+        defaultProfileId: persisted.defaultProfileId,
+        defaultVisionProfileId: persisted.defaultVisionProfileId || '',
+        migrated: persisted.migrated,
+      });
       return;
     }
 
@@ -138,6 +204,7 @@ export const useAIProviderStore = create<AIProviderState>((set, get) => ({
       profiles,
       selections: {},
       defaultProfileId: migratedProfile?.id || '',
+      defaultVisionProfileId: '',
       migrated: true,
     };
     writePersisted(next);
@@ -145,8 +212,8 @@ export const useAIProviderStore = create<AIProviderState>((set, get) => ({
   },
 
   persist: () => {
-    const { profiles, selections, defaultProfileId, migrated } = get();
-    return writePersisted({ profiles, selections, defaultProfileId, migrated });
+    const { profiles, selections, defaultProfileId, defaultVisionProfileId, migrated } = get();
+    return writePersisted({ profiles, selections, defaultProfileId, defaultVisionProfileId, migrated });
   },
 
   addProfile: profile => {
@@ -155,24 +222,31 @@ export const useAIProviderStore = create<AIProviderState>((set, get) => ({
   },
 
   updateProfile: (id, patch) => {
+    // 连接相关配置变更（Base URL / Provider 类型）→ 全目录测试状态失效（V4.0.7）
+    const connectionChanged = patch.base_url !== undefined || patch.provider_type !== undefined;
     set(state => ({
-      profiles: state.profiles.map(profile =>
-        profile.id === id
-          ? { ...profile, ...patch, updated_at: new Date().toISOString() }
-          : profile,
-      ),
+      profiles: state.profiles.map(profile => {
+        if (profile.id !== id) return profile;
+        const models = connectionChanged
+          ? invalidateModelTestStatus(patch.models ?? profile.models)
+          : patch.models ?? profile.models;
+        return { ...profile, ...patch, models, updated_at: new Date().toISOString() };
+      }),
     }));
     return get().persist();
   },
 
   removeProfile: id => {
-    const { profiles, defaultProfileId, selections } = get();
+    const { profiles, defaultProfileId, defaultVisionProfileId, selections } = get();
+    const removed = profiles.find(profile => profile.id === id);
     const remaining = profiles.filter(profile => profile.id !== id);
-    // 安全回退：优先下一个 enabled profile；没有则清空选择（绝不恢复内置 GPT Agent）
-    const fallback = remaining.find(profile => profile.enabled) || null;
+    // 安全回退：只在同类别档案内挑选（视觉档案删除绝不影响 Agent 默认，反之亦然）
+    const removedCategory = removed ? profileCategory(removed) : 'agent';
+    const sameCategory = remaining.filter(profile => profileCategory(profile) === removedCategory);
+    const fallback = sameCategory.find(profile => profile.enabled) || null;
     const nextSelections: Record<string, AIModelSelection> = {};
     for (const [conversationId, selection] of Object.entries(selections)) {
-      if (selection.profileId === id && fallback) {
+      if (selection.profileId === id && fallback && profileCategory(fallback) === 'agent') {
         nextSelections[conversationId] = { profileId: fallback.id, modelId: fallback.default_model_id };
       } else if (selection.profileId === id) {
         // 无 fallback：丢弃该会话选择，进入"未配置 AI 智能体"状态
@@ -183,13 +257,21 @@ export const useAIProviderStore = create<AIProviderState>((set, get) => ({
     set({
       profiles: remaining,
       selections: nextSelections,
-      defaultProfileId: defaultProfileId === id ? (fallback?.id || '') : defaultProfileId,
+      defaultProfileId: defaultProfileId === id ? (removedCategory === 'agent' ? (fallback?.id || '') : defaultProfileId) : defaultProfileId,
+      defaultVisionProfileId: defaultVisionProfileId === id ? (removedCategory === 'vision' ? (fallback?.id || '') : defaultVisionProfileId) : defaultVisionProfileId,
     });
     get().persist();
   },
 
+  /** 类别感知的默认设置：按目标档案自身 category 写入对应默认位。 */
   setDefaultProfile: id => {
-    set({ defaultProfileId: id });
+    const profile = get().profiles.find(item => item.id === id);
+    if (!profile) return;
+    if (profileCategory(profile) === 'vision') {
+      set({ defaultVisionProfileId: id });
+    } else {
+      set({ defaultProfileId: id });
+    }
     get().persist();
   },
 
@@ -222,18 +304,23 @@ export const useAIProviderStore = create<AIProviderState>((set, get) => ({
   },
 
   saveApiKey: (id, apiKey) => {
+    const profile = get().profiles.find(item => item.id === id);
     get().updateProfile(id, {
       api_key: apiKey.trim(),
       api_key_saved_at: new Date().toISOString(),
       validation_state: 'unknown',
+      // Key 变更后旧的「测试通过」不可信 → 全目录待测试（重新测试成功前不进业务页面）
+      ...(profile ? { models: invalidateModelTestStatus(profile.models) } : {}),
     });
   },
 
   clearApiKey: id => {
+    const profile = get().profiles.find(item => item.id === id);
     get().updateProfile(id, {
       api_key: '',
       api_key_saved_at: new Date().toISOString(),
       validation_state: 'unknown',
+      ...(profile ? { models: invalidateModelTestStatus(profile.models) } : {}),
     });
   },
 
@@ -316,16 +403,17 @@ export const useAIProviderStore = create<AIProviderState>((set, get) => ({
     set(state => ({
       profiles: state.profiles.map(item => {
         if (item.id !== profileId) return item;
-        const models = item.models.map(model =>
-          model.id === modelRowId
-            ? {
-                ...model,
-                ...(patch.model_id !== undefined ? { model_id: patch.model_id.trim() } : {}),
-                ...(patch.display_name !== undefined ? { display_name: patch.display_name.trim() || patch.model_id?.trim() || model.model_id } : {}),
-                ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
-              }
-            : model,
-        );
+        const models = item.models.map(model => {
+          if (model.id !== modelRowId) return model;
+          const next = {
+            ...model,
+            ...(patch.model_id !== undefined ? { model_id: patch.model_id.trim() } : {}),
+            ...(patch.display_name !== undefined ? { display_name: patch.display_name.trim() || patch.model_id?.trim() || model.model_id } : {}),
+            ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
+          };
+          // Model ID 变更 = 连接目标变化 → 该模型测试状态失效
+          return patch.model_id !== undefined ? invalidateModelTestStatus([next])[0] : next;
+        });
         const renamedTarget = models.find(model => model.id === modelRowId);
         return {
           ...item,
@@ -433,9 +521,11 @@ export const useAIProviderStore = create<AIProviderState>((set, get) => ({
 
   getSelection: (conversationId) => {
     const { selections, profiles, defaultProfileId } = get();
+    // Agent 链路只认 agent 类别档案 —— 视觉档案（category='vision'）绝不混入对话解析
+    const agentProfiles = profiles.filter(item => profileCategory(item) === 'agent');
     const resolve = (selection: AIModelSelection | undefined) => {
       if (!selection) return null;
-      const profile = profiles.find(item => item.id === selection.profileId && item.enabled);
+      const profile = agentProfiles.find(item => item.id === selection.profileId && item.enabled);
       if (!profile) return null;
       const model = profile.models.find(item => item.model_id === selection.modelId && item.enabled);
       if (!model) return null;
@@ -444,8 +534,8 @@ export const useAIProviderStore = create<AIProviderState>((set, get) => ({
     return resolve(selections[conversationId || ''])
       || resolve(selections[''])
       || (() => {
-        const profile = profiles.find(item => item.id === defaultProfileId && item.enabled)
-          || profiles.find(item => item.enabled);
+        const profile = agentProfiles.find(item => item.id === defaultProfileId && item.enabled)
+          || agentProfiles.find(item => item.enabled);
         if (!profile) return null;
         const model = profile.models.find(item => item.model_id === profile.default_model_id && item.enabled)
           || profile.models.find(item => item.enabled);
@@ -515,9 +605,11 @@ export const useAIProviderStore = create<AIProviderState>((set, get) => ({
       planner: p => p.planner_model_id || p.default_model_id,
       prompt_optimizer: p => p.prompt_optimizer_model_id || p.default_model_id,
     };
+    // 三个 scope 全是文本用途：视觉类别档案（category='vision'）不参与 agent 解析
+    const candidateProfiles = state.profiles.filter(p => profileCategory(p) === 'agent');
     const ordered = [
-      ...state.profiles.filter(p => p.id === state.defaultProfileId),
-      ...state.profiles.filter(p => p.id !== state.defaultProfileId),
+      ...candidateProfiles.filter(p => p.id === state.defaultProfileId),
+      ...candidateProfiles.filter(p => p.id !== state.defaultProfileId),
     ];
     for (const profile of ordered) {
       if (!profileAllows(profile)) continue;
@@ -545,7 +637,11 @@ export function resolveConversationAgent(
 ): { profile: AIProviderProfile; model: AIProviderModel } | null {
   const state = useAIProviderStore.getState();
   if (conversation?.selected_agent_profile_id) {
-    const profile = state.profiles.find(item => item.id === conversation.selected_agent_profile_id && item.enabled);
+    const profile = state.profiles.find(
+      item => item.id === conversation.selected_agent_profile_id
+        && item.enabled
+        && profileCategory(item) === 'agent',
+    );
     if (profile) {
       const model = profile.models.find(item => item.model_id === conversation.selected_agent_model_id && item.enabled)
         || profile.models.find(item => item.enabled);
@@ -657,6 +753,131 @@ export function profileToSendSettings(profile: AIProviderProfile, model: AIProvi
     agent_context_window: profile.context_window,
     vision_model: profile.vision_model_id || visionModelIdFallback,
   };
+}
+
+// ======================= V4.0.6 视觉模型解析 =======================
+
+/**
+ * 视觉能力守卫：capabilities 已明确声明但不含 vision → 拦截（纯文本模型绝不当视觉模型用）；
+ * unknown / 未声明（旧数据、Discovery 新 id）→ 放行（与 supportsTextUse 同一容错语义）。
+ * 禁止按模型名字符串猜测能力。
+ */
+export function allowsVisionUse(model: AIProviderModel): boolean {
+  const caps = model.capabilities ?? [];
+  if (caps.length === 0 || caps.includes('unknown')) return true;
+  return caps.includes('vision');
+}
+
+export const NO_VISION_MODEL_ERROR =
+  '尚未配置视觉模型，请先前往「设置与更新 → 视觉模型」配置。';
+
+export const VISION_CAPABILITY_MISMATCH_ERROR =
+  '当前模型不支持图片输入（能力守卫拦截）。请在「设置与更新 → 视觉模型」启用带「视觉理解」能力的模型。';
+
+export const VISION_MODEL_NOT_TESTED_ERROR =
+  '所选视觉模型尚未通过测试或测试结果已失效，请前往「设置与更新 → 视觉模型」重新测试，通过后即可使用。';
+
+export type ByokVisionConfig =
+  | {
+      ok: true;
+      token: string;
+      model: string;
+      baseUrl: string;
+      profileId: string;
+      profileName: string;
+      modelEntity: AIProviderModel;
+    }
+  | {
+      ok: false;
+      reason: 'no_selection' | 'missing_key' | 'capability_mismatch' | 'model_not_tested';
+      error: string;
+    };
+
+/**
+ * 默认视觉模型解析（视觉理解工作流唯一入口）：
+ * 1. 页面临时切换（preferred.profileId/modelId，须为 vision 类别 + 能力允许）
+ * 2. defaultVisionProfileId 指向的档案默认模型
+ * 3. 任意启用的 vision 档案中首个能力允许的模型
+ * 绝不复用 defaultAgentModel，也绝不静默换 provider。
+ */
+export function resolveByokVisionConfig(
+  preferred?: { profileId?: string; modelId?: string },
+): ByokVisionConfig {
+  const state = useAIProviderStore.getState();
+  const visionProfiles = state.profiles.filter(p => profileCategory(p) === 'vision' && p.enabled);
+
+  const buildError = (reason: 'no_selection' | 'missing_key' | 'capability_mismatch' | 'model_not_tested', error: string) =>
+    ({ ok: false as const, reason, error });
+
+  if (preferred?.profileId) {
+    const profile = visionProfiles.find(p => p.id === preferred.profileId);
+    if (profile) {
+      const model = preferred.modelId
+        ? profile.models.find(m => m.model_id === preferred.modelId && m.enabled)
+        : undefined;
+      if (model) {
+        if (!(model.capabilities ?? []).includes('vision')) {
+          return buildError('capability_mismatch', VISION_CAPABILITY_MISMATCH_ERROR);
+        }
+        // 模型中心测试状态是唯一准入依据：未测试/测试失败（含限流暂时异常）不放行
+        if (!isModelAvailableForVision(profile, model)) {
+          return buildError('model_not_tested', VISION_MODEL_NOT_TESTED_ERROR);
+        }
+        const token = (profile.api_key || '').trim() || (profile.fallback_token || '').trim();
+        if (!token) {
+          return buildError('missing_key', `视觉模型服务「${profile.name}」尚未配置 API Key，请前往「设置与更新 → 视觉模型」保存后再使用。`);
+        }
+        return {
+          ok: true,
+          token,
+          model: model.model_id,
+          baseUrl: resolveProviderBaseUrl(profile.provider_type, profile.billing_mode) || profile.base_url,
+          profileId: profile.id,
+          profileName: profile.name,
+          modelEntity: model,
+        };
+      }
+    }
+    // 首选失效（档案删除/停用/模型不存在）→ 继续默认解析，不静默换 provider 由默认链路兜底
+  }
+
+  const def = visionProfiles.find(p => p.id === state.defaultVisionProfileId) || visionProfiles[0];
+  if (!def) {
+    return buildError('no_selection', NO_VISION_MODEL_ERROR);
+  }
+  const usable = def.models.filter(m => isModelAvailableForVision(def, m));
+  const model = usable.find(m => m.model_id === def.default_model_id) || usable[0];
+  if (!model) {
+    const visionCapable = def.models.filter(
+      m => m.enabled && m.lifecycle !== 'retired' && m.lifecycle !== 'missing' && (m.capabilities ?? []).includes('vision'),
+    );
+    if (visionCapable.length > 0) {
+      return buildError('model_not_tested', `视觉模型服务「${def.name}」中的视觉模型均未通过测试（或测试已失效），请前往「设置与更新 → 视觉模型」执行模型测试。`);
+    }
+    return buildError('capability_mismatch', `视觉模型服务「${def.name}」中没有带「视觉理解」能力的启用模型，请同步模型目录或更换模型。`);
+  }
+  const token = (def.api_key || '').trim() || (def.fallback_token || '').trim();
+  if (!token) {
+    return buildError('missing_key', `视觉模型服务「${def.name}」尚未配置 API Key，请前往「设置与更新 → 视觉模型」保存后再使用。`);
+  }
+  return {
+    ok: true,
+    token,
+    model: model.model_id,
+    baseUrl: resolveProviderBaseUrl(def.provider_type, def.billing_mode) || def.base_url,
+    profileId: def.id,
+    profileName: def.name,
+    modelEntity: model,
+  };
+}
+
+/** 默认视觉模型展示信息（页面顶部「视觉模型：xxx」）。 */
+export function resolveDefaultVisionModel(): { profile: AIProviderProfile; model: AIProviderModel } | null {
+  const config = resolveByokVisionConfig();
+  if (!config.ok) return null;
+  const profile = useAIProviderStore.getState().profiles.find(p => p.id === config.profileId);
+  if (!profile) return null;
+  return { profile, model: config.modelEntity };
 }
 
 export { buildBuiltInModels };

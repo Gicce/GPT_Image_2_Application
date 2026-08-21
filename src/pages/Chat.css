@@ -3171,3 +3171,43 @@
   background: var(--bg-inset);
   color: var(--text-primary);
 }
+
+/* ===== V4.0.8 对话输入区图片拖入 ===== */
+.chat-input-box {
+  position: relative;
+}
+
+.chat-input-box.drop-active {
+  border-color: var(--accent-primary, #6366f1);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary, #6366f1) 25%, transparent);
+}
+
+.chat-drop-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--bg-elevated, #1d2129) 88%, transparent);
+  border: 1.5px dashed var(--accent-primary, #6366f1);
+  pointer-events: none;
+}
+
+.chat-drop-overlay span {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--accent-primary, #6366f1);
+}
+
+.chat-drop-overlay small {
+  font-size: 11px;
+  color: var(--text-secondary, #9aa0ae);
+}
+
+.agent-attachment-guidance.warn {
+  color: var(--accent-warning, #d4a017);
+}

@@ -19,6 +19,7 @@ import './App.css';
 const Auth = lazy(() => import('./pages/Auth'));
 const AgentChat = lazy(() => import('./pages/AgentChat'));
 const ImageStudio = lazy(() => import('./pages/ImageStudio'));
+const VisionUnderstanding = lazy(() => import('./pages/VisionUnderstanding'));
 const TaskQueue = lazy(() => import('./pages/TaskQueue'));
 const Gallery = lazy(() => import('./pages/Gallery'));
 const History = lazy(() => import('./pages/History'));
@@ -29,6 +30,7 @@ const Account = lazy(() => import('./pages/Account'));
 const PAGE_COMPONENTS: Record<PageType, JSX.Element> = {
   agent: <AgentChat />,
   imagestudio: <ImageStudio />,
+  vision: <VisionUnderstanding />,
   queue: <TaskQueue />,
   gallery: <Gallery />,
   history: <History />,
@@ -148,7 +150,7 @@ export default function App() {
   }, [isLoggedIn, requestedPage, clearRequestedPage]);
 
   function handleNavigate(page: PageType) {
-    const authRequiredPages: PageType[] = ['agent', 'imagestudio', 'queue', 'account'];
+    const authRequiredPages: PageType[] = ['agent', 'imagestudio', 'vision', 'queue', 'account'];
     if (authRequiredPages.includes(page) && !isLoggedIn) {
       setShowAuth(true);
       useAuthStore.getState().setRequestedPage(page);

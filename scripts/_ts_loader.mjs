@@ -35,6 +35,13 @@ export async function loadTs(relativePath) {
     '--bundle',
     '--format=esm',
     '--platform=node',
+    // registry.ts 等模块会 import 图片资产（Provider Logo）；smoke 不消费内容，按 file 处理即可
+    '--loader:.png=file',
+    '--loader:.svg=file',
+    '--loader:.jpg=file',
+    '--loader:.jpeg=file',
+    '--loader:.webp=file',
+    '--loader:.css=file',
   ], { stdio: 'pipe' });
 
   const mod = await import(pathToFileURL(outPath).href);

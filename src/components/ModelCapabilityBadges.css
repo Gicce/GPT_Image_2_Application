@@ -1,0 +1,32 @@
+.mcap-badges {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.mcap-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  font-size: 11px;
+  line-height: 18px;
+  border-radius: 4px;
+  border: 1px solid var(--border-color, #d9d9d9);
+  color: var(--text-secondary, #666);
+  background: var(--bg-secondary, #fafafa);
+  cursor: default;
+  user-select: none;
+}
+
+.mcap-badge.mcap-vision,
+.mcap-badge.mcap-video_vision {
+  color: #1d6fd1;
+  border-color: rgba(29, 111, 209, 0.35);
+  background: rgba(29, 111, 209, 0.08);
+}
+
+.mcap-badge.mcap-reasoning {
+  color: #7a4fd1;
+  border-color: rgba(122, 79, 209, 0.35);
+  background: rgba(122, 79, 209, 0.08);
+}

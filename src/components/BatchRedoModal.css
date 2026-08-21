@@ -1,0 +1,194 @@
+.batch-redo-modal {
+  width: min(980px, 92vw);
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.batch-redo-body {
+  display: flex;
+  gap: 16px;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.batch-redo-left {
+  width: 46%;
+  min-width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+}
+
+.batch-redo-select-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.batch-redo-chip {
+  border: 1px solid var(--border-color, #d9d9d9);
+  background: transparent;
+  color: var(--text-secondary, #666);
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.batch-redo-chip:hover {
+  border-color: var(--accent, #4f6ef7);
+  color: var(--accent, #4f6ef7);
+}
+
+.batch-redo-item-list {
+  overflow-y: auto;
+  border: 1px solid var(--border-color, #e5e5e5);
+  border-radius: 8px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 200px;
+  max-height: 52vh;
+}
+
+.batch-redo-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+
+.batch-redo-item:hover {
+  background: var(--bg-hover, rgba(0, 0, 0, 0.04));
+}
+
+.batch-redo-item.selected {
+  border-color: var(--accent, #4f6ef7);
+  background: var(--accent-soft, rgba(79, 110, 247, 0.08));
+}
+
+.batch-redo-item.active {
+  outline: 1px dashed var(--accent, #4f6ef7);
+}
+
+.batch-redo-item-check input {
+  cursor: pointer;
+  margin-top: 3px;
+}
+
+.batch-redo-item-index {
+  font-size: 12px;
+  color: var(--text-faint, #999);
+  min-width: 26px;
+  margin-top: 2px;
+}
+
+.batch-redo-item-thumb {
+  width: 44px;
+  height: 44px;
+  object-fit: cover;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+.batch-redo-item-status {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.batch-redo-item-status.status-completed {
+  color: #2e7d32;
+  background: rgba(46, 125, 50, 0.12);
+}
+
+.batch-redo-item-status.status-failed {
+  color: #c62828;
+  background: rgba(198, 40, 40, 0.12);
+}
+
+.batch-redo-item-status.status-running,
+.batch-redo-item-status.status-pending {
+  color: #996f00;
+  background: rgba(255, 196, 0, 0.15);
+}
+
+.batch-redo-item-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.batch-redo-item-info strong {
+  font-size: 13px;
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.batch-redo-item-prompt {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--text-secondary, #777);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.batch-redo-item-error {
+  margin: 2px 0 0;
+  font-size: 11px;
+  color: #c62828;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.batch-redo-item-retry {
+  margin: 2px 0 0;
+  font-size: 11px;
+  color: var(--text-faint, #999);
+}
+
+.batch-redo-right {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.batch-redo-section h4 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
+.batch-redo-active-tag {
+  margin-left: 8px;
+  font-size: 12px;
+  color: var(--accent, #4f6ef7);
+}
+
+.batch-redo-hint {
+  font-size: 12px;
+  color: var(--text-faint, #999);
+}
+
+.batch-redo-note {
+  font-size: 12px;
+  color: var(--text-faint, #999);
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--accent-soft, rgba(79, 110, 247, 0.06));
+}

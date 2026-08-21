@@ -221,6 +221,9 @@ mod tests {
             batch_items: Vec::new(),
             composite_layout: None,
             subject_entities: Vec::new(),
+            source_task_id: None,
+            source_task_kind: String::new(),
+            stage_note: String::new(),
             sub_tasks: sub
                 .iter()
                 .enumerate()

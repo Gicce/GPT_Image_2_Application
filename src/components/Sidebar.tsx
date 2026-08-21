@@ -13,6 +13,7 @@ interface SidebarProps {
 const menuItems: { id: PageType; label: string; icon: string }[] = [
   { id: 'agent', label: 'AI 智能体', icon: '◎' },
   { id: 'imagestudio', label: '图片生成', icon: '✦' },
+  { id: 'vision', label: '视觉理解', icon: '◍' },
   { id: 'queue', label: '任务队列', icon: '▣' },
   { id: 'gallery', label: '图片库', icon: '▦' },
   { id: 'history', label: '历史记录', icon: '◷' },

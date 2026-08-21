@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { CreateTaskParams, Task, TaskStage } from '../types';
+import type { CreateBatchRedoRequest, CreateTaskParams, Task, TaskStage } from '../types';
 import { TERMINAL_TASK_STATUSES } from '../types';
 import { api } from '../services/api';
 import { useAuthStore } from './useAuthStore';
@@ -86,6 +86,12 @@ interface TaskState {
   retryTask: (taskId: string) => Promise<Task>;
   /** V4.0.5 只重试失败的子任务（指定下标 = 单个；缺省 = 全部失败项），已完成子任务保持原结果 */
   retryTaskFailed: (taskId: string, subTaskIndexes?: number[]) => Promise<{ resetIndexes: number[]; resetCount: number }>;
+  /**
+   * V4.0.6 批量重做：基于源任务选中子项创建**全新**批量任务（源任务完全不可变）。
+   * redo 是新的生成单元 → 走正常计费授权（按选中数 authorize → 新任务登记 → 终态自动结算），
+   * 绝不使用 retry 的计费路径，也绝不触碰源任务结果。
+   */
+  redoBatchTask: (taskId: string, request: CreateBatchRedoRequest) => Promise<Task>;
   refreshTask: (taskId: string) => Promise<void>;
   cancelTask: (taskId: string) => Promise<void>;
   deleteTask: (taskId: string, deleteImages: boolean) => Promise<void>;
@@ -219,6 +225,33 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     await get().loadTasks();
     console.log('[TaskExecution] failed subtasks retried', taskId, result.resetIndexes);
     return result;
+  },
+
+  redoBatchTask: async (taskId, request) => {
+    console.log('[AgentTask] batch redo', taskId, { selected: request.selected_indexes.length });
+    const original = get().tasks.find(t => t.id === taskId);
+    if (!original) throw new Error('任务不存在');
+    if (request.selected_indexes.length === 0) throw new Error('请至少选择一个子任务');
+
+    // redo = 新的生成任务：按选中数正常预占（与 retry 的按槽位预占是完全独立的两条路径）
+    const { isLoggedIn } = useAuthStore.getState();
+    let requestId: string | undefined;
+    if (isLoggedIn) {
+      requestId = createRequestId('batch-redo');
+      await authorizeImageTask(requestId, request.selected_indexes.length);
+    }
+    let redone: Task;
+    try {
+      redone = await api.createBatchRedoTask(request);
+    } catch (err) {
+      if (requestId) void settleImageTask(requestId, false, 0, 'batch redo create failed');
+      throw err;
+    }
+    knownTaskIds.add(redone.id);
+    if (requestId) registerTaskAuthorization(redone.id, requestId);
+    await get().loadTasks();
+    console.log('[TaskExecution] batch redo task created', redone.id);
+    return redone;
   },
 
   refreshTask: async (taskId) => {

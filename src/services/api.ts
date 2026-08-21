@@ -9,6 +9,8 @@ import type {
   AgentTemplateImportPayload,
   AgentTemplateLog,
   ChatConversation,
+  ColorSimilarityResult,
+  CreateBatchRedoRequest,
   CreateTaskParams,
   EnvCheckResult,
   GenerateTestImageResult,
@@ -17,6 +19,8 @@ import type {
   Settings,
   Task,
   VideoSyncResult,
+  VisionAnalyzeResult,
+  VisionCompareResult,
   VisionUnderstandPayload,
   VisionUnderstandResult,
 } from '../types';
@@ -66,9 +70,68 @@ export const api = {
   getTasks: (): Promise<Task[]> => invoke('get_tasks'),
   createTask: (params: CreateTaskParams): Promise<Task> => invoke('create_task', { params }),
   cancelTask: (taskId: string): Promise<void> => invoke('cancel_task', { taskId }),
+  /** V4.0.7 视觉理解任务状态推进（前端驱动；pending → running → completed/failed/cancelled） */
+  updateVisionTask: (params: {
+    taskId: string;
+    status: 'running' | 'completed' | 'failed' | 'cancelled';
+    stageNote?: string;
+    planSummary?: string;
+    error?: string;
+  }): Promise<Task> =>
+    invoke('update_vision_task', {
+      params: {
+        task_id: params.taskId,
+        status: params.status,
+        stage_note: params.stageNote ?? '',
+        plan_summary: params.planSummary ?? '',
+        error: params.error ?? '',
+      },
+    }),
   retryTask: (taskId: string): Promise<Task> => invoke('retry_task', { taskId }),
   retryTaskSubtasks: (taskId: string, subTaskIndexes?: number[] | null): Promise<{ resetIndexes: number[]; resetCount: number }> =>
     invoke('retry_task_subtasks', { taskId, subTaskIndexes: subTaskIndexes ?? null }),
+  /** V4.0.6 批量重做：基于源任务选中子项创建全新任务（源任务不可变；计费在 store 层授权） */
+  createBatchRedoTask: (request: CreateBatchRedoRequest): Promise<Task> =>
+    invoke('create_batch_redo_task', { request }),
+  /** V4.0.6 视觉理解：单图结构化分析（BYOK 视觉模型，OpenAI 兼容 chat completions） */
+  visionAnalyzeImage: (request: {
+    imagePath: string;
+    baseUrl: string;
+    token: string;
+    model: string;
+    mode?: string;
+    extraInstructions?: string;
+  }): Promise<VisionAnalyzeResult> =>
+    invoke('vision_analyze_image', {
+      request: {
+        image_path: request.imagePath,
+        base_url: request.baseUrl,
+        token: request.token,
+        model: request.model,
+        mode: request.mode ?? 'reverse_prompt',
+        extra_instructions: request.extraInstructions ?? '',
+      },
+    }),
+  /** V4.0.6 双图交叉评审（源图 + 候选图 → 分维度相似度 JSON） */
+  visionCompareImages: (request: {
+    sourcePath: string;
+    candidatePath: string;
+    baseUrl: string;
+    token: string;
+    model: string;
+  }): Promise<VisionCompareResult> =>
+    invoke('vision_compare_images', {
+      request: {
+        source_path: request.sourcePath,
+        candidate_path: request.candidatePath,
+        base_url: request.baseUrl,
+        token: request.token,
+        model: request.model,
+      },
+    }),
+  /** V4.0.6 本地色彩相似度（无 AI 调用） */
+  computeColorSimilarity: (sourcePath: string, candidatePath: string): Promise<ColorSimilarityResult> =>
+    invoke('compute_color_similarity', { sourcePath, candidatePath }),
   getImages: (): Promise<ImageRecord[]> => invoke('get_images'),
   rescanImageLibrary: (): Promise<ImageRecord[]> => invoke('rescan_image_library'),
   getImageMeta: (path: string): Promise<ImageMeta> => invoke('get_image_meta', { path }),

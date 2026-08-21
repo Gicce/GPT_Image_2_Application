@@ -31,6 +31,20 @@ const NETWORK_TIMEOUT_PREFIX = '图片服务连接失败（timeout）';
 const NETWORK_PREFIX = '图片服务连接失败';
 const UPSTREAM_PREFIX = '上游图片接口失败';
 
+/**
+ * V4.0.8 分层错误文案：Rust 侧错误消息带 [endpoint: …] 标签（与网络错误一致），
+ * 据此区分「文生图接口」与「图生图接口」—— 用户能看出是哪一层失败，
+ * 不再全部泛化成同一句「能力不匹配」。
+ */
+const ENDPOINT_RE = /\[endpoint:\s*([^\]]+)\]/;
+
+function upstreamEndpoint(text: string): 'edits' | 'generations' | null {
+  const endpoint = ENDPOINT_RE.exec(text)?.[1] || '';
+  if (endpoint.includes('/v1/images/edits')) return 'edits';
+  if (endpoint.includes('/v1/images/generations')) return 'generations';
+  return null;
+}
+
 export function classifySubTaskError(message?: string | null): ClassifiedSubTaskError {
   const text = (message ?? '').trim();
   if (!text) {
@@ -62,7 +76,23 @@ export function classifySubTaskError(message?: string | null): ClassifiedSubTask
   if (text.startsWith(UPSTREAM_PREFIX)) {
     const code = /\[code:\s*([^\]]+)\]/.exec(text)?.[1];
     const httpStatus = /\(HTTP\s+(\d+)\)/.exec(text)?.[1];
+    const endpoint = upstreamEndpoint(text);
     if (code === 'text_conversation_not_supported') {
+      // 上游网关把图片请求误路由到文本会话通道（V4.0.5 已取证 packyapi 网关行为）
+      if (endpoint === 'edits') {
+        return {
+          kind: 'upstream_capability',
+          title: '模型调用方式与当前模型能力不匹配',
+          hint: '当前服务商的图生图接口被上游网关误路由到文本会话通道。可直接重新生成；若持续出现请检查服务商模型配置。',
+        };
+      }
+      if (endpoint === 'generations') {
+        return {
+          kind: 'upstream_capability',
+          title: '模型调用方式与当前模型能力不匹配',
+          hint: '当前服务商的文生图接口被上游网关误路由到文本会话通道。可直接重新生成；若持续出现请检查服务商配置；需要保持人物 / 主体一致时，建议改用图生图携带参考图。',
+        };
+      }
       return {
         kind: 'upstream_capability',
         title: '模型调用方式与当前模型能力不匹配',
@@ -74,6 +104,20 @@ export function classifySubTaskError(message?: string | null): ClassifiedSubTask
         kind: 'upstream_5xx',
         title: '上游图片服务暂时不可用',
         hint: '服务端瞬时异常，请稍后重新生成。',
+      };
+    }
+    if (endpoint === 'edits') {
+      return {
+        kind: 'upstream_4xx',
+        title: '图生图请求被上游拒绝',
+        hint: '当前服务商的图生图接口调用失败。请查看技术详情；确认参考图与参数合规后重新生成。',
+      };
+    }
+    if (endpoint === 'generations') {
+      return {
+        kind: 'upstream_4xx',
+        title: '图片生成请求被上游拒绝',
+        hint: '当前服务商的文生图接口调用失败。请查看技术详情；确认提示词与参数合规后重新生成。',
       };
     }
     return {

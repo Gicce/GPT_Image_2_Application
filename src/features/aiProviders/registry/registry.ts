@@ -1,5 +1,8 @@
 import glmJson from './glm.json';
 import deepseekJson from './deepseek.json';
+import openaiJson from './openai.json';
+import geminiJson from './gemini.json';
+import qwenJson from './qwen.json';
 import glmLogo from '../../../assets/providers/glm.png';
 import deepseekLogo from '../../../assets/providers/deepseek.svg';
 import genericApiLogo from '../../../assets/providers/generic-api.svg';
@@ -35,13 +38,23 @@ export const REMOTE_MODEL_REGISTRY_BASE = '';
 const REGISTRY_TTL_MS = 24 * 60 * 60 * 1000;
 const CACHE_KEY_PREFIX = 'model_registry_cache_v1:';
 
-const BUILT_IN: Record<'deepseek_official' | 'glm_official', ProviderRegistry> = {
+export type OfficialProviderType =
+  | 'deepseek_official'
+  | 'glm_official'
+  | 'openai_official'
+  | 'gemini_official'
+  | 'qwen_official';
+
+const BUILT_IN: Record<OfficialProviderType, ProviderRegistry> = {
   deepseek_official: deepseekJson as ProviderRegistry,
   glm_official: glmJson as ProviderRegistry,
+  openai_official: openaiJson as ProviderRegistry,
+  gemini_official: geminiJson as ProviderRegistry,
+  qwen_official: qwenJson as ProviderRegistry,
 };
 
 export function isOfficialProvider(type: AIProviderType): boolean {
-  return type === 'deepseek_official' || type === 'glm_official';
+  return type !== 'openai_compatible';
 }
 
 /**
@@ -52,6 +65,9 @@ export function isOfficialProvider(type: AIProviderType): boolean {
 export const PROVIDER_LOGOS: Record<AIProviderType, string> = {
   glm_official: glmLogo,
   deepseek_official: deepseekLogo,
+  openai_official: genericApiLogo,
+  gemini_official: genericApiLogo,
+  qwen_official: genericApiLogo,
   openai_compatible: genericApiLogo,
 };
 
@@ -76,6 +92,21 @@ export const PROVIDER_OFFICIAL_LINKS: Record<AIProviderType, { apiKey?: string; 
     apiKey: 'https://platform.deepseek.com/api_keys',
     docs: 'https://api-docs.deepseek.com/',
   },
+  // OpenAI 官方 API Key 管理页
+  openai_official: {
+    apiKey: 'https://platform.openai.com/api-keys',
+    docs: 'https://platform.openai.com/docs/',
+  },
+  // Google AI Studio（Gemini API Key 管理页）
+  gemini_official: {
+    apiKey: 'https://aistudio.google.com/app/apikey',
+    docs: 'https://ai.google.dev/gemini-api/docs/openai',
+  },
+  // 阿里云百炼控制台（API Key 管理页）
+  qwen_official: {
+    apiKey: 'https://bailian.console.aliyun.com/?apiKey=1',
+    docs: 'https://help.aliyun.com/zh/model-studio/developer-reference/compatibility-of-openai-with-dashscope',
+  },
   openai_compatible: {},
 };
 
@@ -84,8 +115,8 @@ export function getOfficialApiKeyLink(type: AIProviderType): string | null {
 }
 
 export function getBuiltInRegistry(type: AIProviderType): ProviderRegistry | null {
-  if (type === 'deepseek_official' || type === 'glm_official') return BUILT_IN[type];
-  return null;
+  if (type === 'openai_compatible') return null;
+  return BUILT_IN[type as OfficialProviderType] || null;
 }
 
 /** Provider 支持的连接使用方式（来自 registry 定义）。单模式 Provider 返回 1 项；第三方返回空。 */

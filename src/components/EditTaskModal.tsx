@@ -82,7 +82,8 @@ export default function EditTaskModal({ task, onClose }: Props) {
     try {
       const newTask = await api.createTask({
         prompt: prompt.trim(),
-        negative_prompt: '',
+        // V4.0.8：编辑重发保留原任务负面词（此前被静默丢弃）
+        negative_prompt: (task.final_negative_prompt || task.negative_prompt || '').trim(),
         size,
         quality,
         output_format: format,

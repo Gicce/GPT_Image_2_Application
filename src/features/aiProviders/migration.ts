@@ -1,4 +1,4 @@
-import type { AIProviderProfile, AIProviderModel, AIProviderType, BillingMode, ProviderModeState, UseScopes } from './types';
+import type { AIProviderProfile, AIProviderModel, AIProviderType, BillingMode, ProviderCategory, ProviderModeState, UseScopes } from './types';
 import { defaultUseScopes } from './types';
 import { resolveProviderBaseUrl, defaultBillingMode, getBillingModes, getBuiltInRegistry } from './registry/registry';
 import { generateProfileId, generateModelId, officialModelRowId } from './registry/id';
@@ -10,6 +10,9 @@ export function resolveProviderTypeByBaseUrl(baseUrl: string): AIProviderType {
   if (normalized === 'https://api.deepseek.com/v1') return 'deepseek_official';
   if (normalized === 'https://open.bigmodel.cn/api/paas/v4'
     || normalized === 'https://open.bigmodel.cn/api/coding/paas/v4') return 'glm_official';
+  if (normalized === 'https://api.openai.com/v1') return 'openai_official';
+  if (normalized === 'https://generativelanguage.googleapis.com/v1beta/openai') return 'gemini_official';
+  if (normalized === 'https://dashscope.aliyuncs.com/compatible-mode/v1') return 'qwen_official';
   return 'openai_compatible';
 }
 
@@ -31,14 +34,21 @@ export function buildBuiltInModels(providerType: AIProviderType): AIProviderMode
     }));
 }
 
-/** 某模式从未配置过时生成的空白连接状态（Key 空、模型来自内置 Registry）。 */
-export function buildEmptyModeState(providerType: AIProviderType): ProviderModeState {
+/** 某模式从未配置过时生成的空白连接状态（Key 空、模型来自内置 Registry）。
+ *  category='vision'（视觉模型服务档案）时默认模型取 Registry 首个视觉模型，
+ *  避免「新增视觉模型服务 → 默认模型却是纯文本模型」。 */
+export function buildEmptyModeState(providerType: AIProviderType, category: ProviderCategory = 'agent'): ProviderModeState {
   const models = buildBuiltInModels(providerType);
-  const recommended = getBuiltInRegistry(providerType)?.models.find(entry => entry.recommended && entry.lifecycle === 'active');
+  const registryModels = getBuiltInRegistry(providerType)?.models || [];
+  const recommended = registryModels.find(entry => entry.recommended && entry.lifecycle === 'active');
+  const firstVision = models.find(m => m.capabilities.includes('vision'));
+  const defaultModelId = category === 'vision'
+    ? (firstVision?.model_id || recommended?.model_id || models[0]?.model_id || '')
+    : (recommended?.model_id || models[0]?.model_id || '');
   return {
     api_key: '',
     models,
-    default_model_id: recommended?.model_id || models[0]?.model_id || '',
+    default_model_id: defaultModelId,
     vision_model_id: '',
     validation_state: 'unknown',
   };
@@ -76,7 +86,9 @@ export function applyBillingModeToProfile(profile: AIProviderProfile, mode: Bill
   if (profile.billing_mode === mode) return profile;
 
   const stashed = syncActiveModeState(profile);
-  const target: ProviderModeState = stashed.mode_states?.[mode] || buildEmptyModeState(profile.provider_type);
+  const profileCategoryValue = profile.category;
+  const target: ProviderModeState = stashed.mode_states?.[mode]
+    || buildEmptyModeState(profile.provider_type, profileCategoryValue ?? 'agent');
 
   return {
     ...stashed,
@@ -95,14 +107,15 @@ export function applyBillingModeToProfile(profile: AIProviderProfile, mode: Bill
   };
 }
 
-export function createEmptyProfile(providerType: AIProviderType, name = ''): AIProviderProfile {
+export function createEmptyProfile(providerType: AIProviderType, name = '', category: ProviderCategory = 'agent'): AIProviderProfile {
   const now = new Date().toISOString();
   const mode = defaultBillingMode(providerType);
-  const state = buildEmptyModeState(providerType);
+  const state = buildEmptyModeState(providerType, category);
   const profile: AIProviderProfile = {
     id: generateProfileId(),
     name,
     provider_type: providerType,
+    category,
     base_url: resolveProviderBaseUrl(providerType, mode),
     api_key: '',
     enabled: true,

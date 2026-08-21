@@ -1,20 +1,27 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTaskStore } from '../store/useTaskStore';
 import { useImageStore } from '../store/useImageStore';
 import { api } from '../services/api';
 import type { ImageRecord, SubTask, Task } from '../types';
 import type { GenerationPlan } from '../utils/batchPlans';
 import { batchStrategyLabel, executionModeLabel, formatTaskDateTime, promptOptimizationState } from '../utils/taskDisplay';
+import {
+  filterTasksByCategory,
+  getTaskCategoryCounts,
+  getTaskCategoryLabel,
+  type TaskCategoryFilter,
+} from '../utils/taskCategory';
 import { copyText } from '../utils/clipboard';
 import { toastError, toastSuccess } from '../components/Toast';
 import PromptTextBlock from '../components/PromptTextBlock';
 import BatchPlanDetailDrawer from '../components/BatchPlanDetailDrawer';
+import TaskFilterBar from '../components/TaskFilterBar';
 import './History.css';
 import './ImageEdit.css';
 import '../components/BatchPlans.css';
 
 const STATUS_LABELS: Record<string, string> = {
-  pending: '排队中',
+  pending: '等待中',
   running: '执行中',
   completed: '已完成',
   failed: '失败',
@@ -39,17 +46,12 @@ const SUB_STATUS_META: Record<SubTask['status'], { label: string; cls: string }>
 
 const IMAGE_EXECUTION_MODEL = 'GPT Image 2';
 
-function getTaskTypeLabel(task: Task): string {
-  if (task.task_type === 'edit') return '图生图';
-  if (task.task_type === 'remove_background') return '透明背景';
-  return '文生图';
-}
-
 function getSourceLabel(task: Task): string {
   return task.task_source === 'agent' ? 'AI Agent' : '手动';
 }
 
 function getApiEndpoint(task: Task): string {
+  if (task.task_type === 'vision_understanding') return 'BYOK 视觉模型（用户自配，非服务端计费）';
   if (task.task_type === 'edit') return 'POST https://www.packyapi.com/v1/images/edits';
   if (task.task_type === 'remove_background') return 'POST https://api.remove.bg/v1.0/removebg';
   return 'POST https://www.packyapi.com/v1/images/generations';
@@ -148,6 +150,9 @@ export default function History() {
   const [sourceUrls, setSourceUrls] = useState<Record<string, string>>({});
   const [expandedPrompts, setExpandedPrompts] = useState<Set<string>>(new Set());
   const [planDrawerIndex, setPlanDrawerIndex] = useState<number | null>(null);
+  const [activeCategory, setActiveCategory] = useState<TaskCategoryFilter>('all');
+  // 右侧详情独立滚动容器：切任务时回到顶部
+  const detailScrollRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     void loadTasks();
@@ -161,10 +166,8 @@ export default function History() {
     .filter(task => ['completed', 'failed', 'running', 'pending', 'cancelled'].includes(task.status))
     .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
-  const taskIds = new Set(tasks.map(task => task.id));
-  const chatImages = images
-    .filter(img => !taskIds.has(img.task_id))
-    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+  const categoryCounts = getTaskCategoryCounts(historyTasks);
+  const visibleHistoryTasks = filterTasksByCategory(historyTasks, activeCategory);
 
   useEffect(() => {
     if (!selectedTaskId || taskImages.length === 0) return;
@@ -189,28 +192,6 @@ export default function History() {
   }, [selectedTaskId, taskImages]);
 
   useEffect(() => {
-    if (chatImages.length === 0) return;
-    let cancelled = false;
-    const load = async () => {
-      const urls: Record<string, string> = {};
-      const batchSize = 6;
-      for (let i = 0; i < chatImages.length; i += batchSize) {
-        if (cancelled) return;
-        const batch = chatImages.slice(i, i + batchSize);
-        const results = await Promise.all(batch.map(img => img.missing ? Promise.resolve('') : api.readThumbnail(img.local_path).catch(() => '')));
-        batch.forEach((img, index) => {
-          if (results[index]) urls[img.id] = results[index];
-        });
-      }
-      if (!cancelled) setImageUrls(prev => ({ ...prev, ...urls }));
-    };
-    void load();
-    return () => {
-      cancelled = true;
-    };
-  }, [chatImages]);
-
-  useEffect(() => {
     const loadSourceUrls = async () => {
       if (!selectedTask || selectedTask.source_images.length === 0) {
         setSourceUrls({});
@@ -229,9 +210,10 @@ export default function History() {
     void loadSourceUrls();
   }, [selectedTask]);
 
-  // 切换任务时关闭方案抽屉，避免旧任务的抽屉残留
+  // 切换任务：关闭旧任务的方案抽屉 + 详情滚动回顶部（不继承上一个任务的滚动位置）
   useEffect(() => {
     setPlanDrawerIndex(null);
+    if (detailScrollRef.current) detailScrollRef.current.scrollTop = 0;
   }, [selectedTaskId]);
 
   const togglePrompt = (e: React.MouseEvent, id: string) => {
@@ -251,11 +233,19 @@ export default function History() {
   const drawerPlan = planDrawerIndex !== null ? planItems[planDrawerIndex] : undefined;
 
   return (
-    <div className="page">
+    <div className="page history-page">
       <div className="page-header">
         <h2>历史记录</h2>
         <p>查看任务概览、批量方案、执行提示词快照和结果图片。</p>
       </div>
+
+      {historyTasks.length > 0 && (
+        <TaskFilterBar
+          typeCounts={categoryCounts}
+          activeType={activeCategory}
+          onTypeChange={setActiveCategory}
+        />
+      )}
 
       <div className="history-layout">
         <div className="history-list">
@@ -263,8 +253,10 @@ export default function History() {
             <div className="empty-state">
               <p>暂无历史记录</p>
             </div>
+          ) : visibleHistoryTasks.length === 0 ? (
+            <div className="history-filter-empty">当前筛选条件下没有任务</div>
           ) : (
-            historyTasks.map(task => (
+            visibleHistoryTasks.map(task => (
               <div
                 key={task.id}
                 className={`history-item ${selectedTaskId === task.id ? 'active' : ''}`}
@@ -278,12 +270,15 @@ export default function History() {
                   {task.user_prompt_raw || task.prompt}
                 </p>
                 <div className="history-meta">
-                  <span>{getTaskTypeLabel(task)}</span>
+                  <span>{getTaskCategoryLabel(task)}</span>
                   <span>{getSourceLabel(task)}</span>
                   <span>{executionModeLabel(task)}</span>
+                  {task.source_task_kind === 'vision_understanding' && (
+                    <span>来源：视觉理解任务{task.source_task_id ? ` #${task.source_task_id.slice(0, 8)}` : ''}</span>
+                  )}
                   <span>{STATUS_LABELS[task.status] || task.status}</span>
                   <span>{task.size}</span>
-                  <span>{task.count} 张</span>
+                  {task.task_type !== 'vision_understanding' && <span>{task.count} 张</span>}
                   <span className="success">成功 {task.success_count}</span>
                   {task.failed_count > 0 && <span className="fail">失败 {task.failed_count}</span>}
                 </div>
@@ -294,7 +289,7 @@ export default function History() {
         </div>
 
         {selectedTask ? (
-          <div className="history-detail">
+          <div className="history-detail" ref={detailScrollRef}>
             <HistoryTaskDetail
               task={selectedTask}
               taskImages={taskImages}
@@ -311,24 +306,6 @@ export default function History() {
           </div>
         )}
       </div>
-
-      {chatImages.length > 0 && (
-        <div className="history-chat-section">
-          <h3 className="history-chat-title">对话历史图片 ({chatImages.length})</h3>
-          <div className="history-images">
-            {chatImages.map(img => (
-              <div key={img.id} className="history-img-item" onClick={() => !img.missing && api.openFile(img.local_path)}>
-                {imageUrls[img.id] ? (
-                  <img src={imageUrls[img.id]} alt={img.file_name} />
-                ) : (
-                  <div className="gallery-loading">{img.missing ? '文件缺失' : '加载中...'}</div>
-                )}
-                <span>{img.file_name}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
 
       {drawerPlan && selectedTask && (
         <BatchPlanDetailDrawer
@@ -448,7 +425,7 @@ function HistoryTaskDetail(props: {
   return (
     <>
       <div className="history-detail-head">
-        <h3>{getTaskTypeLabel(task)}任务详情</h3>
+        <h3>{getTaskCategoryLabel(task)}任务详情</h3>
         <span className={`bp-status-badge ${STATUS_BADGE_CLS[task.status] || 'pending'}`}>
           {STATUS_LABELS[task.status] || task.status}
         </span>
@@ -461,9 +438,18 @@ function HistoryTaskDetail(props: {
         </h4>
         <div className="history-overview">
           <div className="history-overview-grid">
-            <div className="detail-row"><span>生成方式</span><span>{getTaskTypeLabel(task)}</span></div>
+            <div className="detail-row"><span>生成方式</span><span>{getTaskCategoryLabel(task)}</span></div>
             <div className="detail-row"><span>生成模式</span><span>{executionModeLabel(task)}</span></div>
             <div className="detail-row"><span>任务来源</span><span>{getSourceLabel(task)}</span></div>
+            {task.source_task_kind === 'vision_understanding' && (
+              <div className="detail-row">
+                <span>来源链路</span>
+                <span>视觉理解任务{task.source_task_id ? ` #${task.source_task_id.slice(0, 8)}` : ''} → 图片生成任务</span>
+              </div>
+            )}
+            {task.task_plan_summary && (
+              <div className="detail-row"><span>任务摘要</span><span>{task.task_plan_summary}</span></div>
+            )}
             {isPlanBatch && (
               <div className="detail-row"><span>方案数量</span><span>{planItems.length}</span></div>
             )}

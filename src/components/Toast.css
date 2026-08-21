@@ -1,3 +1,11 @@
+/*
+ * Toast 全局提示（深浅主题高对比度）。
+ *
+ * 历史缺陷：曾引用 App.css 中不存在的 --bg-elevated / --border-color，
+ * 深色主题下回退为白底 + 近白文字，提示内容完全不可读。
+ * 现约定：只允许引用主题表已定义的变量（回归测试守卫见 components/__tests__/Toast.test.ts）。
+ */
+
 .toast-host {
   position: fixed;
   top: 20px;
@@ -14,16 +22,18 @@
 .toast-item {
   pointer-events: auto;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 10px;
-  max-width: min(420px, calc(100vw - 48px));
-  padding: 10px 14px;
+  max-width: min(560px, calc(100vw - 48px));
+  padding: 12px 14px;
   border-radius: 10px;
-  font-size: 0.875rem;
-  color: var(--text-primary, #1f2328);
-  background: var(--bg-elevated, #ffffff);
-  border: 1px solid var(--border-color, rgba(0, 0, 0, 0.08));
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-primary);
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  border-left-width: 3px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
   animation: toast-in 0.18s ease-out;
 }
 
@@ -32,22 +42,31 @@
   to { opacity: 1; transform: translateY(0); }
 }
 
+/* 类型 = 左侧色条 + 图标底色（图标均配 --text-on-accent 白字，双主题可读） */
+.toast-success { border-left-color: var(--accent-success); }
+.toast-error { border-left-color: var(--accent-danger); }
+.toast-warning { border-left-color: var(--accent-orange); }
+.toast-info,
+.toast-loading { border-left-color: var(--accent-primary); }
+
 .toast-icon {
   flex: none;
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
+  margin-top: 1px;
   border-radius: 50%;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   font-size: 12px;
   font-weight: 700;
-  color: #fff;
+  color: var(--text-on-accent);
 }
 
-.toast-success .toast-icon { background: #22c55e; }
-.toast-error .toast-icon { background: #ef4444; }
-.toast-info .toast-icon { background: var(--accent-primary, #3b82f6); }
+.toast-success .toast-icon { background: var(--accent-success); }
+.toast-error .toast-icon { background: var(--accent-danger); }
+.toast-warning .toast-icon { background: var(--accent-orange); }
+.toast-info .toast-icon { background: var(--accent-primary); }
 
 .toast-loading .toast-icon {
   background: transparent;
@@ -58,8 +77,8 @@
   display: inline-block;
   width: 14px;
   height: 14px;
-  border: 2px solid var(--accent-primary-light, rgba(59, 130, 246, 0.25));
-  border-top-color: var(--accent-primary, #3b82f6);
+  border: 2px solid var(--accent-primary-light, rgba(99, 102, 241, 0.25));
+  border-top-color: var(--accent-primary);
   border-radius: 50%;
   animation: toast-spin 0.7s linear infinite;
 }
@@ -68,23 +87,40 @@
   to { transform: rotate(360deg); }
 }
 
-.toast-message {
+/* 标题 / 正文分层：标题加粗主文本色，正文次级文本色（深色主题对比度 ≥ 9:1） */
+.toast-content {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.toast-title {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.toast-message {
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .toast-close {
   flex: none;
   border: none;
   background: transparent;
-  color: var(--text-muted, #6b7280);
+  color: var(--text-muted);
   font-size: 16px;
   line-height: 1;
   cursor: pointer;
-  padding: 2px 4px;
-  border-radius: 4px;
+  padding: 4px 6px;
+  margin: -2px -4px 0 0;
+  border-radius: 6px;
 }
 
 .toast-close:hover {
-  background: var(--bg-hover, rgba(0, 0, 0, 0.06));
+  background: var(--bg-hover);
+  color: var(--text-primary);
 }

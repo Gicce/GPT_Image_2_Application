@@ -27,7 +27,7 @@ const {
 } = registryMod;
 
 const migration = await loadTs('../src/features/aiProviders/migration.ts');
-const { createEmptyProfile, upgradePersistedProfile } = migration;
+const { createEmptyProfile, upgradePersistedProfile, buildEmptyModeState } = migration;
 
 // ============ 一、Built-in Registry ============
 
@@ -207,6 +207,19 @@ const { createEmptyProfile, upgradePersistedProfile } = migration;
   assert.equal(current.validation_state, 'valid');
   assert.ok(current.last_validated_at);
 
+  // V4.0.7 连接配置变更 → 测试状态失效：Key 变更后全目录复位 untested（重新测试成功前不进业务页面）
+  const modelRow = current.models.find(m => m.model_id === 'glm-5.3');
+  store.setModelTestResult(pid, modelRow.id, { test_status: 'available' });
+  store.saveApiKey(pid, 'sk-glm-key-2');
+  current = useAIProviderStore.getState().profiles.find(p => p.id === pid);
+  const afterKeyChange = current.models.find(m => m.model_id === 'glm-5.3');
+  assert.equal(afterKeyChange.test_status, 'untested', 'Key 变更后旧的测试通过状态必须失效');
+  store.setModelTestResult(pid, modelRow.id, { test_status: 'available' });
+  store.updateProfile(pid, { base_url: 'https://open.bigmodel.cn/api/paas/v4' });
+  current = useAIProviderStore.getState().profiles.find(p => p.id === pid);
+  const afterBaseUrlChange = current.models.find(m => m.model_id === 'glm-5.3');
+  assert.equal(afterBaseUrlChange.test_status, 'untested', 'Base URL 变更后旧的测试通过状态必须失效');
+
   // 模型同步：消失的模型保留 + default 引用不变
   const merged = mergeModelCatalogs({
     existing: current.models,
@@ -246,6 +259,146 @@ const { createEmptyProfile, upgradePersistedProfile } = migration;
   assert.equal(noKey.ok, false);
   assert.ok(noKey.errorMessage.includes('API Key'));
   console.log('✓ Agent Prompt Builder：独立 Builder Prompt + 未配置时明确报错');
+}
+
+// ============ 九、视觉模型 Registry（V4.0.6） ============
+
+{
+  const glm = getBuiltInRegistry('glm_official');
+  const visionRequired = [
+    'glm-5v-turbo', 'glm-4.6v', 'glm-4.6v-flash',
+    'glm-4.1v-thinking-flashx', 'glm-4.1v-thinking-flash', 'glm-4v-flash',
+  ];
+  for (const id of visionRequired) {
+    const entry = glm.models.find(m => m.model_id === id);
+    assert.ok(entry, `视觉 Registry 应包含 ${id}`);
+    assert.ok(entry.capabilities.includes('vision'), `${id} 必须声明 vision 能力`);
+    assert.equal(entry.lifecycle, 'active');
+  }
+  // API ID 与显示名分离：请求用 model_id，UI 用 display_name
+  const glm5v = glm.models.find(m => m.model_id === 'glm-5v-turbo');
+  assert.equal(glm5v.display_name, 'GLM-5V-Turbo');
+  assert.ok(glm5v.capabilities.includes('text'));
+  assert.ok(glm5v.capabilities.includes('tools'), 'GLM-5V-Turbo 支持工具调用');
+  // 纯文本模型绝不携带 vision 能力（能力来自 registry 数据，不是名字猜测）
+  for (const textId of ['glm-5.3', 'glm-4.7', 'glm-4.5-air']) {
+    const entry = glm.models.find(m => m.model_id === textId);
+    assert.ok(entry, `${textId} 应存在`);
+    assert.ok(!entry.capabilities.includes('vision'), `${textId} 是纯文本模型，不得带 vision`);
+  }
+  // supports_vision 派生：buildBuiltInModels / createEmptyProfile 落库模型
+  const visionProfile = createEmptyProfile('glm_official', '智谱 Vision', 'vision');
+  const visionModels = visionProfile.models.filter(m => m.supports_vision);
+  assert.ok(visionModels.length >= 6, '视觉能力筛选应命中全部 GLM 视觉模型');
+  assert.ok(visionModels.every(m => m.capabilities.includes('vision')), 'supports_vision 必须由 capabilities 派生');
+  const textOnly = visionProfile.models.filter(m => !m.supports_vision);
+  assert.ok(textOnly.length > 0 && textOnly.every(m => !m.capabilities.includes('vision')), '纯文本模型不出现在视觉筛选中');
+  console.log(`✓ 视觉 Registry：glm-5v-turbo 等 ${visionRequired.length} 个视觉模型 + 纯文本模型不带 vision`);
+}
+
+// ============ 十、视觉档案默认模型（category 感知） ============
+
+{
+  const visionState = buildEmptyModeState('glm_official', 'vision');
+  assert.equal(visionState.default_model_id, 'glm-5v-turbo', '视觉档案默认模型 = Registry 首个视觉模型（不是文本 recommended）');
+  const agentState = buildEmptyModeState('glm_official', 'agent');
+  assert.equal(agentState.default_model_id, 'glm-5.3', 'agent 档案默认模型 = recommended 文本模型');
+
+  const visionProfile = createEmptyProfile('glm_official', '视觉', 'vision');
+  assert.equal(visionProfile.category, 'vision');
+  assert.equal(visionProfile.default_model_id, 'glm-5v-turbo');
+  const agentProfile = createEmptyProfile('glm_official', 'AI');
+  assert.equal(agentProfile.default_model_id, 'glm-5.3');
+  console.log('✓ 新建档案默认模型按 category 区分（vision→视觉模型 / agent→文本模型）');
+}
+
+// ============ 十一、旧目录升级：hydrate 自动合并内置 Registry ============
+
+{
+  const storeMod = await loadTs('../src/features/aiProviders/store.ts');
+  const { useAIProviderStore } = storeMod;
+  // 模拟 v4.0.5 旧落库目录（12 模型时代）+ 一个 Discovery 来源模型
+  const legacy = createEmptyProfile('glm_official', '旧 GLM');
+  const oldIds = ['glm-5.3', 'glm-5.2', 'glm-5.1', 'glm-5', 'glm-5-turbo', 'glm-4.7', 'glm-4.6', 'glm-4.5', 'glm-4.5-air', 'glm-4-flash', 'glm-4v', 'glm-4v-plus'];
+  legacy.models = legacy.models.filter(m => oldIds.includes(m.model_id));
+  legacy.models.push({
+    id: 'd1', model_id: 'glm-discovered-x', display_name: 'glm-discovered-x',
+    model_source: 'provider_discovery', enabled: true, supports_vision: false,
+    capabilities: ['unknown'], lifecycle: 'unknown', test_status: 'untested',
+  });
+  legacy.default_model_id = 'glm-5.3';
+  globalThis.localStorage.setItem('agent_profiles_state_v1', JSON.stringify({
+    profiles: [legacy], selections: {}, defaultProfileId: legacy.id, defaultVisionProfileId: '', migrated: true,
+  }));
+  useAIProviderStore.setState({ hydrated: false });
+  useAIProviderStore.getState().hydrate();
+
+  const merged = useAIProviderStore.getState().profiles.find(p => p.id === legacy.id);
+  assert.ok(merged, 'hydrate 后档案必须存在');
+  const glm5v = merged.models.find(m => m.model_id === 'glm-5v-turbo');
+  assert.ok(glm5v, '升级启动后 glm-5v-turbo 必须自动进入目录（无需手动刷新）');
+  assert.ok(glm5v.capabilities.includes('vision') && glm5v.supports_vision === true, '新模型能力来自 Registry');
+  assert.equal(merged.default_model_id, 'glm-5.3', 'hydrate 合并绝不切换默认模型');
+  const discovered = merged.models.find(m => m.model_id === 'glm-discovered-x');
+  assert.equal(discovered.lifecycle, 'unknown', 'hydrate 合并无 Discovery 结果，不得误标 missing');
+  console.log('✓ 旧目录升级：hydrate 自动合并 Registry 新模型，默认模型与 discovery 状态不变');
+}
+
+// ============ 十二、AI / Vision 双默认位独立 + 能力守卫 ============
+
+{
+  const storeMod = await loadTs('../src/features/aiProviders/store.ts');
+  const { useAIProviderStore, resolveByokVisionConfig } = storeMod;
+  useAIProviderStore.setState({ profiles: [], selections: {}, defaultProfileId: '', defaultVisionProfileId: '', migrated: true });
+  const agentP = createEmptyProfile('glm_official', 'AI 服务');
+  const visionP = createEmptyProfile('glm_official', '视觉服务', 'vision');
+  agentP.api_key = 'sk-agent';
+  visionP.api_key = 'sk-vision';
+  useAIProviderStore.getState().addProfile(agentP);
+  useAIProviderStore.getState().addProfile(visionP);
+  useAIProviderStore.getState().setDefaultProfile(agentP.id);
+  useAIProviderStore.getState().setDefaultProfile(visionP.id);
+
+  const st = useAIProviderStore.getState();
+  assert.equal(st.defaultProfileId, agentP.id, 'agent 默认位');
+  assert.equal(st.defaultVisionProfileId, visionP.id, 'vision 默认位独立（类别感知写入）');
+
+  // V4.0.7 准入：新建档案模型默认 untested —— 测试通过前视觉解析不放行
+  const untested = resolveByokVisionConfig();
+  assert.equal(untested.ok, false);
+  assert.equal(untested.reason, 'model_not_tested');
+  // 模拟测试通过后恢复可用（429/测试失败同样可经重新测试恢复）
+  const visionProfileInStore = useAIProviderStore.getState().profiles.find(p => p.id === visionP.id);
+  const visionModel = visionProfileInStore && visionProfileInStore.models.find(m => m.model_id === 'glm-5v-turbo');
+  assert.ok(visionModel, '视觉档案应包含 glm-5v-turbo');
+  useAIProviderStore.getState().setModelTestResult(visionP.id, visionModel.id, { test_status: 'available' });
+
+  // 视觉解析：走 vision 档案的默认视觉模型
+  const vc = resolveByokVisionConfig();
+  assert.equal(vc.ok, true);
+  assert.equal(vc.profileId, visionP.id);
+  assert.equal(vc.model, 'glm-5v-turbo');
+  assert.equal(vc.token, 'sk-vision');
+
+  // Agent 解析：只认 agent 档案，绝不混入 vision 档案
+  const sel = st.getSelection('');
+  assert.ok(sel, 'agent 选择必须可解析');
+  assert.equal(sel.profile.id, agentP.id);
+  assert.equal(sel.model.model_id, 'glm-5.3');
+
+  // 能力守卫：明确声明且不含 vision 的纯文本模型拦截（禁止名字猜测）
+  const mismatch = resolveByokVisionConfig({ profileId: visionP.id, modelId: 'glm-5.3' });
+  assert.equal(mismatch.ok, false);
+  assert.equal(mismatch.reason, 'capability_mismatch');
+  assert.ok(mismatch.error.includes('视觉'), '能力守卫错误必须是中文');
+
+  // 修改 AI 默认不影响 vision 默认位（独立持久化）
+  const agentP2 = createEmptyProfile('glm_official', 'AI 备用');
+  useAIProviderStore.getState().addProfile(agentP2);
+  useAIProviderStore.getState().setDefaultProfile(agentP2.id);
+  assert.equal(useAIProviderStore.getState().defaultProfileId, agentP2.id);
+  assert.equal(useAIProviderStore.getState().defaultVisionProfileId, visionP.id, '切换 AI 默认不得覆盖视觉默认');
+  console.log('✓ AI / Vision 双默认位独立持久化 + 视觉解析走视觉档案 + 纯文本模型能力守卫');
 }
 
 console.log('\n全部通过：model-registry');

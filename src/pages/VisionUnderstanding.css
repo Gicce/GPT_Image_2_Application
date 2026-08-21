@@ -1,0 +1,775 @@
+.vision-page {
+  max-width: 960px;
+}
+
+.vision-card {
+  background: var(--bg-card, #fff);
+  border: 1px solid var(--border-color, #e5e5e5);
+  border-radius: 10px;
+  padding: 16px;
+  margin-bottom: 14px;
+}
+
+.vision-card h3 {
+  margin: 0 0 8px;
+  font-size: 15px;
+}
+
+/* ===== 参考图 ===== */
+.vision-dropzone {
+  border: 1.5px dashed var(--border-color, #ccc);
+  border-radius: 10px;
+  padding: 36px 16px;
+  text-align: center;
+}
+
+.vision-dropzone-title {
+  font-size: 14px;
+  margin: 0 0 12px;
+}
+
+.vision-dropzone-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  margin-bottom: 12px;
+}
+
+.vision-source-loaded {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.vision-source-img {
+  max-width: 320px;
+  max-height: 260px;
+  border-radius: 8px;
+  object-fit: contain;
+  background: var(--bg-hover, rgba(0, 0, 0, 0.04));
+}
+
+.vision-source-meta p {
+  margin: 4px 0;
+  font-size: 13px;
+  color: var(--text-secondary, #666);
+}
+
+.vision-source-path {
+  word-break: break-all;
+  font-size: 12px !important;
+  color: var(--text-faint, #999) !important;
+}
+
+.vision-source-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+/* ===== 配置行 ===== */
+.vision-config-row {
+  display: flex;
+  gap: 12px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+
+.vision-config-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 200px;
+}
+
+.vision-config-item.vision-config-grow {
+  flex: 1;
+  min-width: 280px;
+}
+
+.vision-config-item label {
+  font-size: 12px;
+  color: var(--text-faint, #888);
+}
+
+.vision-config-item select {
+  padding: 7px 10px;
+  border: 1px solid var(--border-color, #d9d9d9);
+  border-radius: 6px;
+  background: var(--bg-input, #fff);
+  color: var(--text-primary, #222);
+}
+
+.vision-no-model {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text-warning, #996f00);
+}
+
+/* 模型选择器 + 能力徽章（能力来源于模型配置，禁止按名称猜测） */
+.vision-model-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.vision-model-field select {
+  flex: 1;
+  min-width: 200px;
+}
+
+/* 页头操作区（重新开始等危险操作放右侧，不挤主标题） */
+.vision-page .page-header.vision-page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.vision-page-header .vision-btn-danger {
+  flex-shrink: 0;
+}
+
+/* ===== 按钮 ===== */
+.vision-btn {
+  border: 1px solid var(--border-input, #d9d9d9);
+  background: var(--bg-input, #fff);
+  color: var(--text-primary, #333);
+  border-radius: 6px;
+  padding: 7px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.vision-btn:hover:not(:disabled) {
+  border-color: var(--accent-primary, #4f6ef7);
+  color: var(--accent-primary, #4f6ef7);
+}
+
+.vision-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.vision-btn-primary {
+  background: var(--accent-primary, #4f6ef7);
+  border-color: var(--accent-primary, #4f6ef7);
+  color: var(--text-on-accent, #fff);
+}
+
+.vision-btn-primary:hover:not(:disabled) {
+  color: var(--text-on-accent, #fff);
+  opacity: 0.92;
+}
+
+.vision-btn-caution {
+  background: var(--badge-warn-bg);
+  border-color: var(--accent-orange);
+  color: var(--badge-warn-text);
+}
+
+.vision-btn-caution:hover:not(:disabled) {
+  border-color: var(--accent-orange);
+  color: var(--badge-warn-text);
+  opacity: 0.92;
+}
+
+.vision-btn-danger {
+  border-color: var(--accent-danger);
+  color: var(--badge-danger-text);
+}
+
+.vision-btn-sm {
+  padding: 3px 10px;
+  font-size: 12px;
+}
+
+/* ===== 状态 / 错误 ===== */
+.vision-error p {
+  color: var(--text-error, #c0392b);
+  margin: 0;
+  font-size: 13px;
+}
+
+.vision-stage {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.vision-stage p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-secondary, #666);
+}
+
+.vision-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border-default, #ccc);
+  border-top-color: var(--accent-primary, #4f6ef7);
+  border-radius: 50%;
+  animation: vision-spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes vision-spin {
+  to { transform: rotate(360deg); }
+}
+
+.vision-hint {
+  font-size: 12px;
+  color: var(--text-faint, #999);
+  margin: 8px 0 0;
+}
+
+/* ===== 分析结果 ===== */
+.vision-section-toggle {
+  border: none;
+  background: none;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary, #333);
+  cursor: pointer;
+  padding: 0;
+}
+
+.vision-analysis {
+  margin-top: 12px;
+  font-size: 13px;
+}
+
+.vision-analysis p {
+  margin: 4px 0;
+}
+
+.vision-analysis ul {
+  margin: 4px 0 8px;
+  padding-left: 18px;
+}
+
+.vision-analysis-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 16px;
+}
+
+.vision-warnings {
+  margin-top: 10px;
+  padding: 10px;
+  border-radius: 8px;
+  background: rgba(255, 196, 0, 0.08);
+}
+
+.vision-warnings ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: var(--text-secondary, #777);
+}
+
+/* ===== Prompt ===== */
+.vision-prompt-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.vision-prompt-head h3 {
+  margin: 0;
+}
+
+.vision-prompt-head-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.vision-prompt-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px;
+  border: 1px solid var(--border-input, #d9d9d9);
+  border-radius: 8px;
+  background: var(--bg-input, #fff);
+  color: var(--text-primary, #222);
+  font-size: 13px;
+  line-height: 1.6;
+  resize: vertical;
+}
+
+.vision-recommended p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-secondary, #666);
+}
+
+/* ===== 统一「调整要求」输入框（页面内输入，替代旧弹窗入口） ===== */
+.vision-adjust-box {
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid var(--border-input, #d9d9d9);
+  border-radius: 10px;
+  background: var(--bg-input, #fff);
+}
+
+.vision-adjust-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary, #222);
+  margin-bottom: 4px;
+}
+
+.vision-adjust-desc {
+  margin: 0 0 8px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary, #666);
+}
+
+.vision-adjust-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px;
+  border: 1px solid var(--border-input, #d9d9d9);
+  border-radius: 8px;
+  background: var(--bg-input, #fff);
+  color: var(--text-primary, #222);
+  font-size: 13px;
+  line-height: 1.6;
+  resize: vertical;
+}
+
+/* ===== 生成参数（可选控件，与图生图参数交互一致） ===== */
+.vision-genparams .vision-config-row {
+  margin-top: 4px;
+}
+
+.vision-actions-card {
+  display: flex;
+  gap: 10px;
+}
+
+/* ===== 相似度 ===== */
+.vision-score {
+  font-size: 15px;
+  margin: 0 0 10px;
+}
+
+.vision-score strong {
+  font-size: 22px;
+  color: var(--accent-primary, #4f6ef7);
+}
+
+.vision-score-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  font-size: 13px;
+  color: var(--text-secondary, #666);
+  margin-bottom: 6px;
+}
+
+.vision-iterations {
+  margin-top: 12px;
+  font-size: 13px;
+}
+
+.vision-iteration {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+  border-bottom: 1px dashed var(--border-color, #eee);
+}
+
+.vision-differences {
+  margin-top: 12px;
+  font-size: 13px;
+}
+
+.vision-differences ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.vision-differences li.diff-missing { color: #c62828; }
+.vision-differences li.diff-extra { color: #996f00; }
+.vision-differences li.diff-layout,
+.vision-differences li.diff-text { color: var(--text-secondary, #666); }
+
+/* ===== 弹窗（项目标准对话框结构：标题 / 说明 / 内容 / 底部按钮） ===== */
+.vision-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--bg-overlay, rgba(0, 0, 0, 0.5));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.vision-modal {
+  width: min(560px, 92vw);
+  max-height: 86vh;
+  overflow-y: auto;
+  background: var(--bg-dialog, var(--bg-card, #fff));
+  border: 1px solid var(--border-default, #e5e7eb);
+  border-radius: 12px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.3);
+}
+
+.vision-modal-header {
+  padding: 18px 20px 0;
+}
+
+.vision-modal-header h3 {
+  margin: 0;
+  font-size: 16px;
+  color: var(--text-dialog-title, var(--text-primary, #1a1a1a));
+}
+
+.vision-modal-desc {
+  margin: 8px 20px 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-dialog-desc, var(--text-secondary, #444));
+}
+
+.vision-modal-body {
+  padding: 14px 20px 0;
+}
+
+.vision-modal-body p {
+  font-size: 13px;
+}
+
+.vision-modal-body .vision-hint {
+  margin: 2px 0 4px;
+}
+
+.vision-modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 16px;
+  padding: 12px 20px 16px;
+  border-top: 1px solid var(--border-light, #f3f4f6);
+}
+
+.vision-confirm-grid {
+  display: flex;
+  gap: 12px;
+  margin: 12px 0;
+}
+
+.vision-confirm-grid > div {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.vision-confirm-grid label {
+  font-size: 12px;
+  color: var(--text-faint, #888);
+}
+
+.vision-confirm-grid select {
+  padding: 7px 10px;
+  border: 1px solid var(--border-input, #d9d9d9);
+  border-radius: 6px;
+  background: var(--bg-input, #fff);
+  color: var(--text-primary, #222);
+}
+
+.vision-confirm-facts {
+  margin: 10px 0;
+  padding-left: 18px;
+  font-size: 12px;
+  line-height: 1.8;
+  color: var(--text-secondary, #666);
+}
+
+.vision-gallery-modal {
+  width: min(760px, 92vw);
+}
+
+.vision-gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 8px;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.vision-gallery-item {
+  aspect-ratio: 1;
+  border-radius: 8px;
+  overflow: hidden;
+  cursor: pointer;
+  border: 1px solid var(--border-color, #eee);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-hover, rgba(0, 0, 0, 0.04));
+}
+
+.vision-gallery-item img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.vision-gallery-item:hover {
+  border-color: var(--accent-primary, #4f6ef7);
+}
+
+/* ===== V4.0.7 复刻工作台：视觉理解任务横幅 / 主状态栏 / 方案摘要卡片 / 主操作 ===== */
+
+.vision-task-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  border-left: 3px solid var(--accent-primary, #4f7cff);
+}
+
+.vision-task-type {
+  font-weight: 600;
+  color: var(--accent-primary, #4f7cff);
+}
+
+.vision-task-id {
+  font-family: monospace;
+  opacity: 0.75;
+}
+
+.vision-task-desc {
+  flex: 1 1 320px;
+  font-size: 12px;
+  opacity: 0.75;
+  margin: 0;
+}
+
+/* 主状态栏：标签用 badge-*-text（主题化高对比），引导语用次级文本色 */
+.vision-status-bar {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  margin: 4px 0 10px;
+}
+
+.vision-status-label {
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.vision-status-note {
+  flex: 1 1 320px;
+  font-size: 12px;
+  line-height: 1.6;
+  margin: 0;
+  color: var(--text-secondary, #666);
+}
+
+.vision-status-bar.tone-gray {
+  background: var(--badge-muted-bg);
+  border-left: 3px solid var(--border-subtle, #555);
+}
+
+.vision-status-bar.tone-gray .vision-status-label {
+  color: var(--text-secondary, #666);
+}
+
+.vision-status-bar.tone-green {
+  background: var(--badge-success-bg);
+  border-left: 3px solid var(--accent-success, #059669);
+}
+
+.vision-status-bar.tone-green .vision-status-label {
+  color: var(--badge-success-text, #065f46);
+}
+
+.vision-status-bar.tone-orange {
+  background: var(--badge-warn-bg);
+  border-left: 3px solid var(--accent-orange, #e8913a);
+}
+
+.vision-status-bar.tone-orange .vision-status-label {
+  color: var(--badge-warn-text, #92400e);
+}
+
+.vision-status-bar.tone-blue {
+  background: var(--badge-info-bg);
+  border-left: 3px solid var(--accent-primary, #6366f1);
+}
+
+.vision-status-bar.tone-blue .vision-status-label {
+  color: var(--badge-info-text, #1e40af);
+}
+
+.vision-status-bar.tone-red {
+  background: var(--badge-danger-bg);
+  border-left: 3px solid var(--accent-danger, #dc2626);
+}
+
+.vision-status-bar.tone-red .vision-status-label {
+  color: var(--badge-danger-text, #991b1b);
+}
+
+/* 方案摘要卡片：一眼看懂哪些会跟着变（可修改）、哪些尽量保留（锁定） */
+.vision-plan-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 8px 12px;
+  margin: 10px 0 4px;
+}
+
+.vision-plan-field {
+  border: 1px solid var(--border-default, #e5e7eb);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--bg-subtle, #fafafa);
+}
+
+.vision-plan-field-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px;
+}
+
+.vision-plan-field-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary, #333);
+}
+
+.vision-lock-badge {
+  border: 1px solid transparent;
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+  background: var(--badge-muted-bg);
+  color: var(--badge-muted-text, #6b7280);
+}
+
+.vision-lock-badge:hover:not(:disabled) {
+  filter: brightness(1.05);
+}
+
+.vision-lock-badge:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.vision-lock-badge.is-locked {
+  background: var(--badge-warn-bg);
+  color: var(--badge-warn-text, #92400e);
+  border-color: var(--accent-orange, #e8913a);
+}
+
+.vision-lock-badge.is-unlocked {
+  background: var(--badge-info-bg);
+  color: var(--badge-info-text, #1e40af);
+  border-color: var(--accent-primary, #6366f1);
+}
+
+.vision-plan-field p {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--text-tertiary, #555);
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* 主操作按钮：优化复刻 Prompt（次）→ 确认生成图片（主） */
+.vision-plan-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-top: 12px;
+}
+
+.vision-plan-actions-spacer {
+  flex: 1 1 auto;
+  min-width: 8px;
+}
+
+.vision-plan-summary {
+  margin: 10px 0 0;
+  font-size: 12px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--badge-info-bg);
+  color: var(--text-secondary, #666);
+}
+
+/* ===== 生成方式（V4.0.8）：文生图 / 图生图 ===== */
+.vision-genmode-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.vision-genmode-btn {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border: 1.5px solid var(--border-color, #d9d9d9);
+  border-radius: 10px;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.vision-genmode-btn:hover:not(:disabled) {
+  border-color: var(--accent-primary, #4f6ef7);
+}
+
+.vision-genmode-btn.active {
+  border-color: var(--accent-primary, #4f6ef7);
+  background: color-mix(in srgb, var(--accent-primary, #4f6ef7) 10%, transparent);
+}
+
+.vision-genmode-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.vision-genmode-label {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.vision-genmode-btn.active .vision-genmode-label {
+  color: var(--accent-primary, #4f6ef7);
+}
+
+.vision-genmode-hint {
+  font-size: 12px;
+  color: var(--text-secondary, #666);
+  line-height: 1.4;
+}

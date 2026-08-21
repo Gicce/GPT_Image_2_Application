@@ -56,6 +56,10 @@ import {
 import { SKILL_REGISTRY, getSkillById, detectSkill } from '../agent/skills';
 import { getAttachmentDisplayLabel } from '../utils/agent/attachmentLabels';
 import { formatConversationForClipboard } from '../utils/conversationExport';
+import { INVALID_IMAGE_DROP_TOAST, type DroppedImageFile } from '../utils/imageDropFiles';
+import { resolveChatImageReadiness } from '../utils/chatImageReadiness';
+import { buildDroppedChatAttachmentDraft } from '../utils/chatDropAttachments';
+import { useImageDrop } from '../hooks/useImageDrop';
 import 'highlight.js/styles/atom-one-dark.css';
 import './Chat.css';
 import './ImageEdit.css';
@@ -1099,6 +1103,32 @@ export default function Chat() {
     });
   };
 
+  // ===== V4.0.8 OS 文件拖入：只加入当前模式附件（与按钮/图库/粘贴同一数据结构），
+  // 绝不自动发送、绝不触发模型调用；付款行为仍由发送按钮显式触发。=====
+  async function acceptDroppedChatImages(files: DroppedImageFile[]) {
+    const broken: string[] = [];
+    for (const file of files) {
+      try {
+        const dataUrl = await api.readImageData(file.path);
+        addAttachment(buildDroppedChatAttachmentDraft(file, dataUrl));
+      } catch {
+        broken.push(file.name);
+      }
+    }
+    if (broken.length > 0) toastError(`无法读取图片文件：${broken.join('、')}`);
+  }
+
+  const { dragActive: chatDragActive } = useImageDrop({
+    onDropImages: files => void acceptDroppedChatImages(files),
+    onDropInvalid: () => toastError(INVALID_IMAGE_DROP_TOAST),
+  });
+
+  // chat 模式图片附件需经图片理解模型转摘要：无视觉模型时附件落位即提示（不等发送后报错）。
+  // task 模式附件直接作为参考图，无需视觉模型。
+  const chatVisionWarning = !isTaskMode && attachments.some(att => att.type === 'image')
+    ? resolveChatImageReadiness({ visionModel: settings.vision_model }).message ?? null
+    : null;
+
   const handlePaste = useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const items = e.clipboardData?.items;
     if (!items) return;
@@ -2117,7 +2147,16 @@ export default function Chat() {
             {attachmentGuidance && (
               <div className="agent-attachment-guidance">{attachmentGuidance}</div>
             )}
-            <div className="chat-input-box">
+            {chatVisionWarning && (
+              <div className="agent-attachment-guidance warn">{chatVisionWarning}</div>
+            )}
+            <div className={`chat-input-box${chatDragActive ? ' drop-active' : ''}`}>
+              {chatDragActive && (
+                <div className="chat-drop-overlay">
+                  <span>🖼 松开以添加图片</span>
+                  <small>仅支持 PNG / JPG / JPEG / WebP，添加后不会自动发送</small>
+                </div>
+              )}
               <textarea
                 ref={inputRef}
                 value={input}

@@ -1,5 +1,70 @@
 # Changelog
 
+## v4.0.8（2026-08-22）
+
+### Added
+
+- **图片生成参考图拖拽（Drop Zone）**：图生图（单张 / 批量）参考图区域新增拖拽框，可直接从 Windows 文件资源管理器拖入 PNG / JPG / JPEG / WebP；拖入悬停时边框高亮、文案变化；本地选择 / 图片库选择 / 拖拽三个入口共用同一导入链（`imageDropFiles.ts` canonical path 去重，反斜杠与正斜杠、大小写差异判定为同一文件）；拖入即解码校验（读缩略图），损坏文件剔除并提示，不影响其余合法图片；混拖中非法文件（txt / exe / 目录）给轻提示；文生图模式下拖入提示先切换图生图。拖入只加入参考图列表，绝不自动提交生成
+- **AI 智能体对话图片拖入**：把图片直接拖到对话输入区即可添加附件（输入框覆盖「松开以添加图片」轻提示）；附件结构与「添加照片」按钮 / 图库 / 粘贴完全一致（`buildDroppedChatAttachmentDraft`，同一 `ChatAttachment` 体系，无第三套拖拽附件）；拖入不自动发送、不触发任何模型调用；chat 模式下无可用视觉模型时附件落位即提示「当前模型不支持图片理解，请切换到支持视觉输入的模型」（`chatImageReadiness.ts`，不等发送后报服务端错误）
+- **视觉理解生成方式（文生图 / 图生图）**：视觉理解完成后「确认生成图片」前可选生成方式：图生图自动携带视觉理解原图作为参考图（复用既有素材路径，不复制不重复导入），更适合人物 / 服装 / 主体一致性；文生图仅按最终 Prompt 重新创作。默认策略：有原图 → 图生图（不写死关键词判断），用户始终可手动切换；生成方式存入 Vision Workspace（切页面 / 重启恢复）；携带草稿（VisionCarryDraft）新增 `generationMode / sourceImagePath / sourceAssetId`，图生图模式跳转图片工作室后直接看到参考图 + Prompt + 参数完整状态
+- **图片模型能力（capability）单一来源**：新增 `features/imageModel/imageModelCapability.ts` —— 图片执行模型目录（V4 = gpt-image-2，双能力）与 capability 门禁唯一入口；文生图要求 `image_generation`、图生图要求 `image_edit`；模型不支持当前生成方式时提交前客户端阻断（「当前图片模型不支持图生图，请切换支持图片编辑的模型。」），不等上游报错；判定依据显式 capability 目录，不按 endpoint 名或模型名猜测
+
+### Fixed
+
+- **视觉理解复刻链路不再强制文生图（V4.0.8 核心修复）**：此前「确认生成图片」硬编码切到文生图并丢弃原图（ImageStudio 消费视觉草稿时强制 `t2i`），导致人物复刻变成纯文生图任务、走 `/v1/images/generations` 通道且不携带参考图；现在默认图生图并携带原图走 `/v1/images/edits` multipart 通道（参考图真实进入图片生成请求，不是把路径写进 Prompt）
+- **子任务错误分层文案**：上游图片接口错误消息带 `[endpoint: …]` 标签（与网络错误一致），前端按通道区分——`text_conversation_not_supported` 时区分「服务商图生图接口 / 文生图接口被网关误路由到文本会话通道」（该错误码 V4.0.5 已取证为 packyapi 网关误路由，客户端无法阻止网关行为，但用户现在能看出是哪一层失败）；普通 4xx 区分「当前服务商的图生图接口调用失败 / 文生图接口调用失败」
+- **编辑重发保留负面提示词**：EditTaskModal 此前把原任务负面词静默清空，现在完整保留（连同 task_type / 参考图 / 尺寸 / 质量 / 格式一并恢复）
+
+### Technical
+
+- **图片执行路由适配边界（Rust）**：`task_runner.rs` 新增 `ImageExecutionRoute`（Generations / Edits / RemoveBackground / FrontendDriven）+ `resolve_execution_route(task_type)` + `endpoint_url()` —— endpoint 决策唯一入口，图片任务结构上不可能路由到 chat / responses 文本会话通道；`is_frontend_driven_task` 改由路由派生；create/retry 的 task_type 最终决策抽出 `resolve_final_task_type`（重试绝不改变图生图语义，唯一例外保留「参考绑定详情图 generate → edit 升级」启发式）
+- **模型职责隔离守卫测试**：源码级断言 ImageStudio 不引用 BYOK 模型解析（chat / planner / prompt_optimizer / vision 模型绝不成为图片执行模型）、Rust 执行层无文本会话 endpoint、图片任务参数不含任何 model 字段、Agent image_edit intent 映射 edit task_type
+- **拖拽统一封装**：`hooks/useImageDrop.ts`（Tauri `onDragDropEvent` 窗口级监听唯一封装，dragActive 状态 + 路径分流）+ `utils/imageDropFiles.ts`（扩展名校验 / canonical 去重 / 合并）；视觉理解页既有拖拽处理迁移到同一工具
+- 测试：Vitest 410 → 452（新增 42：imageDropFiles 11 / carryApply 7 / imageModelCapability 8 / imageTaskIsolation 5 / chatDropAttachments 3 / chatImageReadiness 3 / workspace generationMode 3，另扩展 subtaskError 分层文案 2）；cargo 146 全过（新增 8：ImageExecutionRoute 路由与 endpoint 5 + resolve_final_task_type 3）
+
+## v4.0.7（2026-08-21）
+
+### Fixed
+
+- 删除历史记录详情底部的「对话历史图片」区块：该列表展示的是与所选任务无关的对话图片，对任务详情没有价值且干扰信息结构（渲染 / 数据查询 / state / CSS 一并移除，非 CSS 隐藏）
+- 修复视觉理解页模型下拉出现不可用模型的问题：下拉列表现在只显示「未删除 + 已启用 + Provider 已启用 + 测试通过 + 支持图片视觉」的模型；已删除 / 已禁用 / 测试失败（含 429 限流暂时异常）/ 待测试 / 无视觉能力 / 纯文本模型一律不出现（统一准入 selector `modelUsability.ts`，模型中心是唯一事实源，禁止按名称猜能力）
+- 修复模型能力不可见的问题：视觉模型选择器每个选项以纯文本后缀标注能力（如「（图片·视频·思考）」），选中模型旁渲染能力徽章（`ModelCapabilityBadges`，带「支持图片理解 / 支持视频理解 / 支持思考模式」提示）；GLM-5V-Turbo / GLM-4.6V 按 capability 数据标记视频输入（`video_vision`），GLM-4V-Flash 等仅图片模型不虚标
+- 修复视觉理解页切换页面后工作区全部丢失的问题：新增 Vision Workspace 持久化（`useVisionWorkspaceStore` + localStorage `vision_workspace_v1`），参考图标识 / 模型 / 模式 / 分析结果 / 复刻方案 / 三个 Prompt / 调整要求 / 生成参数 / 任务关联在页面切换、组件卸载、应用重启后完整恢复；恢复只读取持久化数据与本地缩略图，绝不自动重新调用视觉 API（瞬时进行中状态落盘前归一化，分析中被打断恢复为可重新执行的初始态）；文本输入防抖 500ms 落盘，卸载时冲刷
+
+### Added
+
+- **模型测试状态失效机制**：API Key / Base URL / Provider 类型 / custom 模型 Model ID 任一变更后，旧的「测试通过」状态复位为「待测试」，重新测试成功前不再进入业务页面（429 等暂时异常保留模型配置，重测通过即恢复）
+- **重新优化**：已有分析结果时可基于当前图片 + 分析结果 + 调整要求强制再执行一次 AI 优化（按钮提示会再次消耗 Token）；失败时旧结果原样保留，成功后才替换
+- **重新开始**：确认弹窗后清空当前工作区（图片 / 分析 / 修改要求 / 最终 Prompt / 推荐参数与持久化数据），回到初始上传状态；历史任务、会话记录、已生成图片与素材库不受影响
+- 无可用视觉模型时页面显示明确指引（「当前没有可用的视觉模型，请先到模型管理中启用并测试一个支持图片理解的模型」）并提供「前往模型管理」入口，「提取复刻方案」按钮禁用；已保存的模型选择失效时自动回落到可用列表第一个，无可用则置空（绝不恢复失效模型 ID、绝不硬编码兜底）
+
+### Technical
+
+- capability 体系新增 `video_vision`（视频输入理解，与 `vision` 图片输入独立声明，仅官方文档确认支持的模型标记）；`resolveByokVisionConfig` 新增 `model_not_tested` 错误原因（测试状态准入）；视觉页状态全部迁入 Zustand store（分析异步任务在页面卸载后仍可完成并落盘）
+- 测试：Vitest 373 → 410（新增 37：modelUsability 21 / useVisionWorkspaceStore 9 / 重新优化状态机 3 / 文案守卫 4；另更新 2 个旧守卫测试以匹配删除与新命名）；model-registry smoke 补充「未测试不放行 / Key 与 Base URL 变更失效」断言，26 个 smoke 全过
+
+## v4.0.6（2026-08-21）
+
+### Fixed
+
+- 修复批量任务「编辑重发」错误打开单任务表单的问题：批量任务的 6 条 Prompt 是 6 个独立子任务，不再被表示成「1 个 Prompt × 数量 6」；批量任务操作区改为「重做 / 重试失败项 / 删除」（单任务保留原「编辑重发」）
+
+### Added
+
+- **批量任务重做（Batch Redo）**：新 `BatchRedoModal` 支持按子方案勾选（全选 / 清空 / 仅失败项 / 仅成功项）、统一修改尺寸 / 质量 / 格式 / 输出目录 / Prompt 前后缀、以及单方案级标题 / Prompt / 负面词编辑；重做创建全新批量任务（Rust `create_batch_redo_task`，源任务结果与重试历史完全不可变），计费按选中数正常授权结算——retry（原地重置失败槽位）与 redo（新任务）语义彻底分离
+- **视觉模型独立类别**：模型服务新增 `vision` 类别（档案级 `category` 字段，旧数据默认 agent，完全向后兼容）；设置页新增「视觉模型」分区（AI 智能体之后），与 Agent 服务卡片共用同一套管理组件；新增真实 Provider：OpenAI 官方、Google Gemini 官方（OpenAI 兼容端点）、阿里云百炼 / Qwen（compatible-mode）、智谱 Vision、第三方 OpenAI Compatible；独立「默认视觉模型」（`defaultVisionProfileId`，与 Agent 默认互不干扰）；能力守卫 `allowsVisionUse`（capabilities 明确声明不含 vision 的纯文本模型一律拦截，unknown 放行），禁止按模型名猜能力
+- **视图理解页（侧边栏「视图理解」）**：参考图输入（本地选择 / 拖拽 / 图片库 / 图片库右键「视图理解 / 提取 Prompt」）；三档模式——快速理解、专业反向 Prompt、高复刻；结构化分析结果（主体 / 场景 / 构图 / 镜头 / 光线 / 色彩 / 风格 / 文字 / 风险）可折叠展示
+- **确定性 Reverse Prompt 编译器**：Rust `vision_analyze_image` 返回严格 JSON 结构化分析（markdown 围栏剥离 + 包裹键解包 + serde default 容错），TS 侧 `compileReversePrompt` 按固定顺序（主体 → 动作 → 场景 → 构图 → 镜头 → 光线 → 色彩 → 材质 → 风格 → 细节）本地编译，支持 generic / gpt_image 两种 Prompt 方言；输出推荐比例 / 尺寸 / 质量；「带入图片生成」经一次性草稿填入文生图单张表单（绝不自动提交）
+- **高复刻验证闭环**：双图交叉评审（Rust `vision_compare_images`，分维度 0~1 相似度 + 缺失 / 多余 / 布局 / 风格 / 光线 / 色彩差异 + 可执行修正指令；评分 clamp 且 >1.5 按百分制换算）+ 本地色彩相似度（Rust `compute_color_similarity`，HSV 饱和度加权色相直方图 18 bins 交集 + 亮度 / 饱和 / 对比度，无 AI 调用）+ 本地构图相似度（两次结构化分析的归一化区域匹配，标签优先 + 不匹配惩罚）+ OCR 编辑距离（源图无文字 → 该维度退出加权并重新归一，绝不当 0 分）；默认权重 30/20/15/10/10/10/5；`RecreationOptimizer` 只按真实差异增量追加修正块（不整段重写，防 Prompt drift）；停止条件：目标分（默认 0.90）/ 最大轮数（默认 2，可选 1~3）/ 改善 < 0.015 / 手动停止；候选图生成走正常任务管线与两阶段计费（每轮 authorize 1 张）
+- **成本保护**：普通「提取提示词」绝不生成图片；只有确认弹窗展示生成模型 / 视觉模型 / 最大轮数 / 停止条件并点击「开始（可能产生费用）」后才进入生成-比较循环；UI 明示「复刻相似度为系统估算值，不代表像素级一致率」
+- VisionSession 历史记录（localStorage，上限 50 条）：保存分析 / Prompt / 每轮迭代评分摘要，不存 base64
+
+### Technical
+
+- Rust 命令数 56 → 60（`create_batch_redo_task` / `vision_analyze_image` / `vision_compare_images` / `compute_color_similarity`）；`send_with_transient_retry` 升级 pub(crate) 供视觉模块复用（全项目仍只有一份 retry 实现）；视觉请求统一 OpenAI 兼容 chat completions（图片本地降采样至最长边 1536 后以 data URL inline 直传，绝不上传图床；25MB 上限本地拦截）；API Key / base64 不入日志
+- 测试：Vitest 229 → 276（新增 redo store 6 / reversePrompt 8 / similarity 15 / optimizer 12 / session 6）；Cargo 111 → 131（新增 batch_redo 8 / vision JSON 解析·clamp·色彩·HSV 12）
+- 未实现（如实声明）：本地 CLIP / OpenCLIP 语义嵌入后端（接口位预留，V4.0.6 默认 backend = Vision Judge + 本地色彩；如需更客观的整体语义分，后续版本以 ONNX 可插拔后端补齐，权重不打包安装包）；OCR 无独立本地引擎（文字由视觉模型 text_elements 结构化输出 + 编辑距离比较）
+
 ## v4.0.5（2026-08-20）
 
 ### Fixed

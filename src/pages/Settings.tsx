@@ -43,18 +43,20 @@ type SettingsSection =
   | 'general'
   | 'server'
   | 'agents'
+  | 'vision'
   | 'imagegen'
   | 'files'
   | 'postprocess'
   | 'diagnostics'
   | 'update';
 
-type EditableSection = Exclude<SettingsSection, 'agents' | 'diagnostics' | 'update'>;
+type EditableSection = Exclude<SettingsSection, 'agents' | 'vision' | 'diagnostics' | 'update'>;
 
 const SETTINGS_NAV: { key: SettingsSection; label: string; desc: string }[] = [
   { key: 'general', label: '常规', desc: '主题外观与智能体模板入口。' },
   { key: 'server', label: '服务连接', desc: 'CyImagePro Server 地址与心跳。' },
   { key: 'agents', label: 'AI 智能体', desc: '管理 AI 模型服务（对话 / 任务规划 / 提示词优化）。' },
+  { key: 'vision', label: '视觉模型', desc: '管理图片理解模型服务（视觉理解 / 反向 Prompt / 高复刻评审）。' },
   { key: 'imagegen', label: '图片生成', desc: '默认尺寸、质量与输出格式。' },
   { key: 'files', label: '图片与文件', desc: '生成目录与图片库素材目录。' },
   { key: 'postprocess', label: '后处理工具', desc: 'remove.bg 与 Topaz API Key。' },
@@ -1048,7 +1050,8 @@ export default function Settings() {
     switch (activeSection) {
       case 'general': return renderGeneral();
       case 'server': return renderServer();
-      case 'agents': return <AgentProviderSettings />;
+      case 'agents': return <AgentProviderSettings category="agent" />;
+      case 'vision': return <AgentProviderSettings category="vision" />;
       case 'imagegen': return renderImageGen();
       case 'files': return renderFiles();
       case 'postprocess': return renderPostprocess();

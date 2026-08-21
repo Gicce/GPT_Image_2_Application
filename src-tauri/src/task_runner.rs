@@ -71,7 +71,7 @@ fn extract_error_parts(text: &str) -> (Option<String>, Option<String>) {
     }
 }
 
-fn format_upstream_image_error(status: reqwest::StatusCode, text: &str) -> String {
+fn format_upstream_image_error(status: reqwest::StatusCode, text: &str, url: &str) -> String {
     let (detail, code) = extract_error_parts(text);
     let primary = detail
         .clone()
@@ -89,7 +89,9 @@ fn format_upstream_image_error(status: reqwest::StatusCode, text: &str) -> Strin
             message.push_str(&format!(" [code: {code_value}]"));
         }
     }
-    message.push_str(&format!(" (HTTP {})", status.as_u16()));
+    // V4.0.8：带上 endpoint（与 format_send_error 一致），前端据此区分
+    // 「文生图接口失败」与「图生图接口失败」，不再泛化成同一句能力不匹配。
+    message.push_str(&format!(" [endpoint: {url}] (HTTP {})", status.as_u16()));
     message
 }
 
@@ -131,7 +133,9 @@ fn jitter_millis() -> u64 {
 /// 发送 + 瞬时错误有限自动重试（最多补 2 次，500ms / 1500ms + 抖动退避）。
 /// build_request 每次重试重建请求（RequestBuilder 一次性消费；client 由闭包捕获复用）；
 /// 最终失败返回分类后的错误文案。
-async fn send_with_transient_retry(
+/// V4.0.6 起公开（pub(crate)）：视觉理解模块复用同一瞬时重试策略
+/// （全项目仅此一份实现，禁止出现第二套 retry）。
+pub(crate) async fn send_with_transient_retry(
     url: &str,
     build_request: impl Fn() -> reqwest::RequestBuilder,
 ) -> Result<reqwest::Response, String> {
@@ -271,10 +275,66 @@ fn effective_source_images(task: &Task, index: usize) -> Vec<String> {
     task.source_images.clone()
 }
 
+/// 前端驱动型任务（视觉理解）：由页面直接调用模型并推进状态，
+/// 后台执行器绝不认领，否则会把分析描述当图片 Prompt 送进生成接口。
+pub fn is_frontend_driven_task(task: &Task) -> bool {
+    !resolve_execution_route(&task.task_type).is_runner_executed()
+}
+
+// ===== V4.0.8 图片执行路由适配边界 =====
+// endpoint 决策唯一入口：task_type → 路由 → endpoint。业务层（前端 / 任务模型）
+// 不关心 Provider 用 /images/generations 还是 /images/edits；图片任务绝无可能
+// 被路由到 chat / responses 文本会话通道。新增图片能力时在此处声明，禁止散落判断。
+
+/// 图片任务执行路由（协议差异边界）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageExecutionRoute {
+    /// 文生图：JSON POST {base}/v1/images/generations
+    Generations,
+    /// 图生图（编辑）：multipart POST {base}/v1/images/edits，参考图作为 image[] 部件
+    Edits,
+    /// 去背景：remove.bg 专用接口
+    RemoveBackground,
+    /// 前端驱动（视觉理解）：runner 不认领、无 endpoint
+    FrontendDriven,
+}
+
+/// task_type → 执行路由（唯一判定点；空 task_type 按历史约定回落文生图）。
+pub fn resolve_execution_route(task_type: &str) -> ImageExecutionRoute {
+    match task_type {
+        "edit" => ImageExecutionRoute::Edits,
+        "remove_background" => ImageExecutionRoute::RemoveBackground,
+        "vision_understanding" => ImageExecutionRoute::FrontendDriven,
+        _ => ImageExecutionRoute::Generations,
+    }
+}
+
+impl ImageExecutionRoute {
+    /// 路由 → 请求 endpoint（FrontendDriven 无 endpoint，返回空串）。
+    pub fn endpoint_url(self, base_url: &str) -> String {
+        match self {
+            ImageExecutionRoute::Generations => format!("{}/v1/images/generations", base_url),
+            ImageExecutionRoute::Edits => format!("{}/v1/images/edits", base_url),
+            ImageExecutionRoute::RemoveBackground => {
+                "https://api.remove.bg/v1.0/removebg".to_string()
+            }
+            ImageExecutionRoute::FrontendDriven => String::new(),
+        }
+    }
+
+    /// 是否由后台 runner 执行（前端驱动型任务不进队列执行）。
+    pub fn is_runner_executed(self) -> bool {
+        !matches!(self, ImageExecutionRoute::FrontendDriven)
+    }
+}
+
 pub async fn process_next_task(app: &AppHandle) {
     // Find a pending task
     let task_opt = storage::with_tasks(app, |tasks| {
-        tasks.iter().find(|t| t.status == "pending").cloned()
+        tasks
+            .iter()
+            .find(|t| t.status == "pending" && !is_frontend_driven_task(t))
+            .cloned()
     });
 
     let task = match task_opt {
@@ -388,12 +448,18 @@ pub async fn process_next_task(app: &AppHandle) {
         });
         let _ = app.emit("task-updated", &task.id);
 
-        let result = if task.task_type == "remove_background" {
-            remove_background_single_image(&settings, &task, i).await
-        } else if task.task_type == "edit" {
-            edit_single_image(&client, &token, &image_base_url, &task, i).await
-        } else {
-            generate_single_image(&client, &token, &image_base_url, &task, i).await
+        // V4.0.8：执行路由唯一决策点（ImageExecutionRoute），禁止再按字符串散落分发
+        let result = match resolve_execution_route(&task.task_type) {
+            ImageExecutionRoute::RemoveBackground => {
+                remove_background_single_image(&settings, &task, i).await
+            }
+            ImageExecutionRoute::Edits => {
+                edit_single_image(&client, &token, &image_base_url, &task, i).await
+            }
+            ImageExecutionRoute::FrontendDriven => continue, // 理论不可达（认领时已过滤）
+            ImageExecutionRoute::Generations => {
+                generate_single_image(&client, &token, &image_base_url, &task, i).await
+            }
         };
 
         match result {
@@ -465,7 +531,7 @@ async fn generate_single_image(
         "n": 1
     });
 
-    let url = format!("{}/v1/images/generations", base_url);
+    let url = ImageExecutionRoute::Generations.endpoint_url(base_url);
 
     let response = send_with_transient_retry(&url, || {
         client
@@ -479,7 +545,7 @@ async fn generate_single_image(
     if !response.status().is_success() {
         let status = response.status();
         let text = response.text().await.unwrap_or_default();
-        return Err(format_upstream_image_error(status, &text));
+        return Err(format_upstream_image_error(status, &text, &url));
     }
 
     let api_response: ApiResponse = response
@@ -676,7 +742,7 @@ async fn edit_single_image(
         form
     };
 
-    let url = format!("{}/v1/images/edits", base_url);
+    let url = ImageExecutionRoute::Edits.endpoint_url(base_url);
 
     let response = send_with_transient_retry(&url, || {
         client
@@ -689,7 +755,7 @@ async fn edit_single_image(
     if !response.status().is_success() {
         let status = response.status();
         let text = response.text().await.unwrap_or_default();
-        return Err(format_upstream_image_error(status, &text));
+        return Err(format_upstream_image_error(status, &text, &url));
     }
 
     let api_response: ApiResponse = response
@@ -736,4 +802,124 @@ async fn edit_single_image(
         tags: Vec::new(),
         indexed_at: None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        format_upstream_image_error, is_frontend_driven_task, resolve_execution_route,
+        ImageExecutionRoute,
+    };
+    use crate::models::{SubTask, Task};
+
+    fn task_of_type(task_type: &str) -> Task {
+        Task {
+            id: "t".to_string(),
+            prompt: "p".to_string(),
+            negative_prompt: String::new(),
+            user_prompt_raw: "p".to_string(),
+            final_prompt: "p".to_string(),
+            final_negative_prompt: String::new(),
+            prompt_optimized: false,
+            prompt_optimization: None,
+            agent_intent: String::new(),
+            task_source: "manual".to_string(),
+            size: "1024x1024".to_string(),
+            quality: "auto".to_string(),
+            output_format: "png".to_string(),
+            count: 1,
+            status: "pending".to_string(),
+            created_at: "2026-01-01T00:00:00".to_string(),
+            started_at: None,
+            completed_at: None,
+            output_dir: "/tmp".to_string(),
+            success_count: 0,
+            failed_count: 0,
+            sub_tasks: vec![SubTask {
+                index: 0,
+                status: "pending".to_string(),
+                image_id: None,
+                error: None,
+                label: None,
+                retry_count: 0,
+                attempt_errors: Vec::new(),
+            }],
+            task_type: task_type.to_string(),
+            source_images: Vec::new(),
+            execution_mode: "single".to_string(),
+            batch_strategy: String::new(),
+            task_plan_summary: String::new(),
+            batch_items: Vec::new(),
+            composite_layout: None,
+            subject_entities: Vec::new(),
+            source_task_id: None,
+            source_task_kind: String::new(),
+            stage_note: String::new(),
+        }
+    }
+
+    #[test]
+    fn vision_understanding_tasks_are_never_claimed_by_runner() {
+        assert!(is_frontend_driven_task(&task_of_type("vision_understanding")));
+        assert!(!is_frontend_driven_task(&task_of_type("generate")));
+        assert!(!is_frontend_driven_task(&task_of_type("edit")));
+        assert!(!is_frontend_driven_task(&task_of_type("remove_background")));
+    }
+
+    // ===== V4.0.8 路由适配：task_type → 路由 → endpoint（业务语义路由，禁止 edit 走文本通道）=====
+
+    #[test]
+    fn edit_tasks_route_to_images_edits_endpoint() {
+        let route = resolve_execution_route("edit");
+        assert_eq!(route, ImageExecutionRoute::Edits);
+        assert_eq!(
+            route.endpoint_url("https://www.packyapi.com"),
+            "https://www.packyapi.com/v1/images/edits"
+        );
+        assert!(route.is_runner_executed());
+    }
+
+    #[test]
+    fn generate_tasks_route_to_images_generations_endpoint() {
+        let route = resolve_execution_route("generate");
+        assert_eq!(route, ImageExecutionRoute::Generations);
+        assert_eq!(
+            route.endpoint_url("https://www.packyapi.com"),
+            "https://www.packyapi.com/v1/images/generations"
+        );
+        // 空 task_type 历史约定回落文生图
+        assert_eq!(resolve_execution_route(""), ImageExecutionRoute::Generations);
+    }
+
+    #[test]
+    fn remove_background_routes_to_removebg() {
+        let route = resolve_execution_route("remove_background");
+        assert_eq!(route, ImageExecutionRoute::RemoveBackground);
+        assert_eq!(
+            route.endpoint_url("https://ignored.example.com"),
+            "https://api.remove.bg/v1.0/removebg"
+        );
+    }
+
+    #[test]
+    fn vision_tasks_are_frontend_driven_without_endpoint() {
+        let route = resolve_execution_route("vision_understanding");
+        assert_eq!(route, ImageExecutionRoute::FrontendDriven);
+        assert_eq!(route.endpoint_url("https://www.packyapi.com"), "");
+        assert!(!route.is_runner_executed());
+    }
+
+    #[test]
+    fn upstream_error_message_carries_endpoint_tag() {
+        let status = reqwest::StatusCode::BAD_REQUEST;
+        let body = r#"{"code":"text_conversation_not_supported","message":"model does not support image conversation"}"#;
+        let message = format_upstream_image_error(
+            status,
+            body,
+            "https://www.packyapi.com/v1/images/edits",
+        );
+        assert!(message.contains("[code: text_conversation_not_supported]"));
+        assert!(message.contains("[endpoint: https://www.packyapi.com/v1/images/edits]"));
+        assert!(message.contains("(HTTP 400)"));
+    }
 }

@@ -182,6 +182,28 @@ class DeepSeekProviderAdapter extends OpenAICompatibleAdapterBase {
   }
 }
 
+/** V4.0.6 视觉 Provider（全部 OpenAI 兼容协议：OpenAI 官方 / Gemini 官方兼容端点 / 百炼兼容模式） */
+class OpenAIOfficialAdapter extends OpenAICompatibleAdapterBase {
+  readonly providerType = 'openai_official' as const;
+  fixedBaseUrl(): string | null {
+    return resolveProviderBaseUrl('openai_official');
+  }
+}
+
+class GeminiOfficialAdapter extends OpenAICompatibleAdapterBase {
+  readonly providerType = 'gemini_official' as const;
+  fixedBaseUrl(): string | null {
+    return resolveProviderBaseUrl('gemini_official');
+  }
+}
+
+class QwenOfficialAdapter extends OpenAICompatibleAdapterBase {
+  readonly providerType = 'qwen_official' as const;
+  fixedBaseUrl(): string | null {
+    return resolveProviderBaseUrl('qwen_official');
+  }
+}
+
 class OpenAICompatibleProviderAdapter extends OpenAICompatibleAdapterBase {
   readonly providerType = 'openai_compatible' as const;
 }
@@ -189,6 +211,9 @@ class OpenAICompatibleProviderAdapter extends OpenAICompatibleAdapterBase {
 const ADAPTERS: Record<AIProviderType, ProviderAdapter> = {
   glm_official: new ZhipuProviderAdapter(),
   deepseek_official: new DeepSeekProviderAdapter(),
+  openai_official: new OpenAIOfficialAdapter(),
+  gemini_official: new GeminiOfficialAdapter(),
+  qwen_official: new QwenOfficialAdapter(),
   openai_compatible: new OpenAICompatibleProviderAdapter(),
 };
 

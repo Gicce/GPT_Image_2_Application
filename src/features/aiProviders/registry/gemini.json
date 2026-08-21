@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "provider_type": "gemini_official",
+  "display_name": "Google Gemini 官方 API",
+  "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+  "updated_at": "2026-08-20",
+  "notes": [
+    "Gemini 官方提供 OpenAI 兼容端点（/v1beta/openai），CyImagePro 视觉理解经该端点调用，无需原生协议适配。",
+    "API Key 在 Google AI Studio 创建。"
+  ],
+  "models": [
+    { "model_id": "gemini-2.5-flash", "display_name": "Gemini 2.5 Flash（视觉）", "capabilities": ["text", "vision", "reasoning", "structured_output"], "lifecycle": "active", "recommended": true },
+    { "model_id": "gemini-2.5-pro", "display_name": "Gemini 2.5 Pro（视觉）", "capabilities": ["text", "vision", "reasoning", "structured_output"], "lifecycle": "active" },
+    { "model_id": "gemini-2.0-flash", "display_name": "Gemini 2.0 Flash（视觉）", "capabilities": ["text", "vision"], "lifecycle": "active" }
+  ]
+}

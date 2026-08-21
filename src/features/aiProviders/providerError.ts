@@ -34,6 +34,9 @@ export interface ProviderError {
 const PROVIDER_FAILURE_LABELS: Record<AIProviderType, string> = {
   glm_official: '智谱 GLM',
   deepseek_official: 'DeepSeek',
+  openai_official: 'OpenAI',
+  gemini_official: 'Google Gemini',
+  qwen_official: '阿里云百炼 / Qwen',
   openai_compatible: '第三方 API',
 };
 

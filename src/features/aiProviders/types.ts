@@ -1,7 +1,19 @@
 export type AIProviderType =
   | 'deepseek_official'
   | 'glm_official'
+  | 'openai_official'
+  | 'gemini_official'
+  | 'qwen_official'
   | 'openai_compatible';
+
+/**
+ * V4.0.6 模型服务类别（档案级）：
+ * - agent: AI 对话 / 任务规划 / 提示词优化（文本模型）
+ * - vision: 视觉理解 / 反向 Prompt / 高复刻评审（图片输入模型）
+ * 三类模型能力互不混用：视觉模型不进 agent 解析链路，Agent 模型不当视觉模型用。
+ * 旧档案无此字段 → 读取侧按 'agent' 处理（向后兼容）。
+ */
+export type ProviderCategory = 'agent' | 'vision';
 
 /**
  * AI 功能使用范围。Provider 与模型两层各自声明，功能入口按两层交集判定：
@@ -54,6 +66,8 @@ export type ModelCapability =
   | 'text'
   | 'reasoning'
   | 'vision'
+  /** 视频输入理解（图片视觉 = vision；两者独立声明，仅官方文档确认支持的模型标记） */
+  | 'video_vision'
   | 'image_generation'
   | 'image_edit'
   | 'video_generation'
@@ -111,6 +125,8 @@ export interface AIProviderProfile {
   id: string;
   name: string;
   provider_type: AIProviderType;
+  /** 服务类别（缺省 = 'agent'，旧数据兼容）。决定档案归属 AI 智能体还是视觉模型设置页。 */
+  category?: ProviderCategory;
   /** @deprecated V3.0.6 起不再参与任何运行时判定（仅旧数据读取兼容）。 */
   agent_type?: LegacyAgentType;
   base_url: string;
@@ -201,8 +217,16 @@ export const BILLING_MODE_LABELS: Record<BillingMode, string> = {
 export const PROVIDER_TYPE_LABELS: Record<AIProviderType, string> = {
   deepseek_official: 'DeepSeek 官方',
   glm_official: '智谱 GLM 官方',
+  openai_official: 'OpenAI 官方',
+  gemini_official: 'Google Gemini 官方',
+  qwen_official: '阿里云百炼 / Qwen 官方',
   openai_compatible: '第三方 API（OpenAI Compatible）',
 };
+
+/** 读取档案类别（旧数据无字段 → agent）。全项目判定统一走这里，禁止散落 ?? 判断。 */
+export function profileCategory(profile: Pick<AIProviderProfile, 'category'>): ProviderCategory {
+  return profile.category ?? 'agent';
+}
 
 export const PROVIDER_PROTOCOL = 'openai-compatible' as const;
 
@@ -210,6 +234,7 @@ export const CAPABILITY_LABELS: Record<ModelCapability, string> = {
   text: '聊天',
   reasoning: '推理',
   vision: '视觉理解',
+  video_vision: '视频理解',
   image_generation: '图片生成',
   image_edit: '图片编辑',
   video_generation: '视频生成',

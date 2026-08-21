@@ -2,15 +2,26 @@ import { useEffect, useState } from 'react';
 import { useTaskStore } from '../store/useTaskStore';
 import type { Task } from '../types';
 import EditTaskModal from '../components/EditTaskModal';
+import BatchRedoModal from '../components/BatchRedoModal';
 import DeleteTaskDialog from '../components/DeleteTaskDialog';
+import TaskFilterBar from '../components/TaskFilterBar';
 import { formatDuration } from '../utils/taskDuration';
 import { executionModeLabel, promptOptimizationState } from '../utils/taskDisplay';
+import {
+  filterTasksByCategory,
+  filterTasksByStatus,
+  getTaskCategoryCounts,
+  getTaskCategoryLabel,
+  getTaskTypeExtraLabel,
+  type TaskCategoryFilter,
+  type TaskStatusFilter,
+} from '../utils/taskCategory';
 import { classifySubTaskError } from '../utils/subtaskError';
 import './TaskQueue.css';
 import './ImageEdit.css';
 
 const STATUS_MAP: Record<string, { label: string; cls: string }> = {
-  pending: { label: '排队中', cls: 'status-pending' },
+  pending: { label: '等待中', cls: 'status-pending' },
   running: { label: '执行中', cls: 'status-running' },
   completed: { label: '已完成', cls: 'status-completed' },
   failed: { label: '失败', cls: 'status-failed' },
@@ -24,10 +35,9 @@ function isPartialSuccess(task: Task): boolean {
 
 const FOCUS_KEY = 'cy_taskqueue_focus_id';
 
-function getTaskTypeLabel(task: Task): string {
-  if (task.task_type === 'edit') return '图生图';
-  if (task.task_type === 'remove_background') return '透明背景';
-  return '文生图';
+/** 前端驱动型任务（视觉理解）：不产出图片、不走生成接口 */
+function isVisionTask(task: Task): boolean {
+  return task.task_type === 'vision_understanding';
 }
 
 function getSourceLabel(task: Task): string {
@@ -35,6 +45,7 @@ function getSourceLabel(task: Task): string {
 }
 
 function getApiEndpoint(task: Task): string {
+  if (isVisionTask(task)) return 'BYOK 视觉模型（用户自配，非服务端计费）';
   if (task.task_type === 'edit') return 'POST https://www.packyapi.com/v1/images/edits';
   if (task.task_type === 'remove_background') return 'POST https://api.remove.bg/v1.0/removebg';
   return 'POST https://www.packyapi.com/v1/images/generations';
@@ -45,14 +56,22 @@ function getSubTaskStatusLabel(status: string): string {
   return meta?.label || status;
 }
 
+/** 批量任务判定：batch 执行模式或携带 batch_items（重做走 BatchRedoModal，不再用单任务编辑弹窗） */
+function isBatchTask(task: Task): boolean {
+  return task.execution_mode === 'batch' || (task.batch_items?.length ?? 0) > 0;
+}
+
 export default function TaskQueue() {
-  const { tasks, loadTasks, cancelTask, deleteTask, retryTask, retryTaskFailed } = useTaskStore();
+  const { tasks, loadTasks, cancelTask, deleteTask, retryTaskFailed } = useTaskStore();
   const [editingTask, setEditingTask] = useState<Task | null>(null);
+  const [redoingTask, setRedoingTask] = useState<Task | null>(null);
   const [deletingTask, setDeletingTask] = useState<Task | null>(null);
   const [expandedPrompts, setExpandedPrompts] = useState<Set<string>>(new Set());
   const [focusTaskId, setFocusTaskId] = useState<string | null>(null);
   const [expandedDetails, setExpandedDetails] = useState<Set<string>>(new Set());
   const [retryingKey, setRetryingKey] = useState<string | null>(null);
+  const [activeCategory, setActiveCategory] = useState<TaskCategoryFilter>('all');
+  const [activeStatus, setActiveStatus] = useState<TaskStatusFilter>('all');
   // 执行中任务的实时耗时刷新（250ms，低频）。TaskQueue 没有单任务的
   // executionStartedAt（那在 Chat 任务卡上），这里只显示已完成的固定 duration
   // 和进行中的粗略状态 —— 所以用一个轻量 tick 驱动重渲染即可。
@@ -105,17 +124,6 @@ export default function TaskQueue() {
     });
   };
 
-  /** 整批重新提交（克隆新任务，全部子任务重跑）—— 走 store 计费链路 */
-  const handleRetry = async (taskId: string) => {
-    try {
-      await retryTask(taskId);
-      await loadTasks();
-      alert('任务已重新提交，请查看队列进度。');
-    } catch (err: any) {
-      alert(err?.message || err?.toString() || '重新提交失败');
-    }
-  };
-
   /** V4.0.5 只重试失败子任务：indexes 缺省 = 全部失败项；单下标 = 单个子任务 */
   const handleRetryFailed = async (task: Task, indexes?: number[]) => {
     const key = indexes ? `${task.id}:${indexes.join(',')}` : `${task.id}:all`;
@@ -144,6 +152,13 @@ export default function TaskQueue() {
     new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
   );
 
+  // 类型数量基于全部任务计算（不随状态筛选变化）；类型 + 状态组合过滤任务列表
+  const categoryCounts = getTaskCategoryCounts(sorted);
+  const visibleTasks = filterTasksByStatus(
+    filterTasksByCategory(sorted, activeCategory),
+    activeStatus,
+  );
+
   return (
     <div className="page">
       <div className="page-header">
@@ -151,14 +166,29 @@ export default function TaskQueue() {
         <p>统一查看 Agent 和手动创建的图片任务、执行状态、批量子任务和最终提示词。</p>
       </div>
 
+      {sorted.length > 0 && (
+        <TaskFilterBar
+          typeCounts={categoryCounts}
+          activeType={activeCategory}
+          onTypeChange={setActiveCategory}
+          activeStatus={activeStatus}
+          onStatusChange={setActiveStatus}
+        />
+      )}
+
       {sorted.length === 0 ? (
         <div className="empty-state">
           <p>暂无任务</p>
           <p className="empty-hint">创建文生图、图生图、透明背景或批量任务后会显示在这里。</p>
         </div>
+      ) : visibleTasks.length === 0 ? (
+        <div className="empty-state">
+          <p>没有符合筛选条件的任务</p>
+          <p className="empty-hint">调整上方的任务类型或任务状态筛选。</p>
+        </div>
       ) : (
         <div className="task-list">
-          {sorted.map(task => {
+          {visibleTasks.map(task => {
             const partial = isPartialSuccess(task);
             const statusMeta = partial
               ? { label: '部分完成', cls: 'status-failed' }
@@ -182,13 +212,23 @@ export default function TaskQueue() {
                 <div className="task-card-header">
                   <div>
                     <span className={`status-badge ${statusMeta.cls}`}>{statusMeta.label}</span>
-                    <span className="type-badge edit-badge">{getTaskTypeLabel(task)}</span>
+                    <span className="type-badge edit-badge">{getTaskCategoryLabel(task)}</span>
+                    {getTaskTypeExtraLabel(task) && (
+                      <span className="type-badge">{getTaskTypeExtraLabel(task)}</span>
+                    )}
                     <span className="type-badge">{getSourceLabel(task)}</span>
                     <span className="type-badge">{executionModeLabel(task)}</span>
+                    {task.source_task_kind === 'vision_understanding' && (
+                      <span className="type-badge">来源：视觉理解任务{task.source_task_id ? ` #${task.source_task_id.slice(0, 8)}` : ''}</span>
+                    )}
                     <span className="task-id">#{task.id.slice(0, 8)}</span>
                   </div>
                   <span className="task-time">{new Date(task.created_at).toLocaleString('zh-CN')}</span>
                 </div>
+
+                {isVisionTask(task) && (task.status === 'pending' || task.status === 'running') && task.stage_note && (
+                  <p className="task-dir">阶段：{task.stage_note}</p>
+                )}
 
                 {(() => {
                   // 执行耗时：优先用 started_at（正式执行起点），旧任务回落 created_at
@@ -200,7 +240,7 @@ export default function TaskQueue() {
                   if (!text) return null;
                   return (
                     <p className="task-dir task-queue-elapsed">
-                      {task.status === 'running' ? '生成中' : '排队中'} · {text}
+                      {task.status === 'running' ? '生成中' : '等待中'} · {text}
                     </p>
                   );
                 })()}
@@ -218,7 +258,7 @@ export default function TaskQueue() {
                     <span>{task.size}</span>
                     <span>{task.quality}</span>
                     <span>{task.output_format.toUpperCase()}</span>
-                    <span>{task.count} 张</span>
+                    {!isVisionTask(task) && <span>{task.count} 张</span>}
                     <span>{optimized ? '已优化提示词' : '原始提示词'}</span>
                   </div>
 
@@ -239,18 +279,20 @@ export default function TaskQueue() {
                     </div>
                   )}
 
-                  {task.status === 'running' && (
+                  {task.status === 'running' && !isVisionTask(task) && (
                     <div className="progress-bar-wrap">
                       <div className="progress-bar" style={{ width: `${pct}%` }} />
                       <span className="progress-text">{done} / {task.count} ({pct}%)</span>
                     </div>
                   )}
 
-                  <div className="task-stats">
-                    <span className="stat-ok">成功: {task.success_count}</span>
-                    <span className="stat-fail">失败: {task.failed_count}</span>
-                    <span>结果图: {imageCount}</span>
-                  </div>
+                  {!isVisionTask(task) && (
+                    <div className="task-stats">
+                      <span className="stat-ok">成功: {task.success_count}</span>
+                      <span className="stat-fail">失败: {task.failed_count}</span>
+                      <span>结果图: {imageCount}</span>
+                    </div>
+                  )}
 
                   {task.source_images.length > 0 && (
                     <p className="task-dir">源图数量: {task.source_images.length}</p>
@@ -274,7 +316,7 @@ export default function TaskQueue() {
                             </p>
                             <p className="task-error-hint">{classified.hint}</p>
                             <div className="task-subtask-error-actions">
-                              {task.status === 'failed' && (
+                              {task.status === 'failed' && !isVisionTask(task) && (
                                 <button
                                   className="subtask-retry-btn"
                                   disabled={retryingKey !== null}
@@ -337,7 +379,7 @@ export default function TaskQueue() {
                       取消任务
                     </button>
                   )}
-                  {task.status === 'failed' && task.failed_count > 0 && (
+                  {task.status === 'failed' && task.failed_count > 0 && !isVisionTask(task) && (
                     <button
                       className="retry-btn"
                       disabled={retryingKey !== null}
@@ -346,12 +388,12 @@ export default function TaskQueue() {
                       {retryingKey === `${task.id}:all` ? '提交中…' : `重试全部失败项（${task.failed_count}）`}
                     </button>
                   )}
-                  {task.status === 'failed' && (
-                    <button className="edit-resend-btn" onClick={() => handleRetry(task.id)}>
-                      整批重新提交
+                  {isFinished && isBatchTask(task) && (
+                    <button className="edit-resend-btn" onClick={() => setRedoingTask(task)}>
+                      重做
                     </button>
                   )}
-                  {isFinished && (
+                  {isFinished && !isBatchTask(task) && !isVisionTask(task) && (
                     <button className="edit-resend-btn" onClick={() => setEditingTask(task)}>
                       编辑重发
                     </button>
@@ -370,6 +412,10 @@ export default function TaskQueue() {
 
       {editingTask && (
         <EditTaskModal task={editingTask} onClose={() => setEditingTask(null)} />
+      )}
+
+      {redoingTask && (
+        <BatchRedoModal task={redoingTask} onClose={() => setRedoingTask(null)} />
       )}
 
       {deletingTask && (
