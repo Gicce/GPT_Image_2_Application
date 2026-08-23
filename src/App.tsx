@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useState } from 'react';
 import Sidebar from './components/Sidebar';
 import UpdateNotification from './components/UpdateNotification';
 import MarqueeNotice from './components/MarqueeNotice';
+import ImageViewer from './components/ImageViewer';
 import { ToastHost } from './components/Toast';
 import { useSettingsStore } from './store/useSettingsStore';
 import { useUpdateStore } from './store/useUpdateStore';
@@ -9,6 +10,8 @@ import { useAuthStore } from './store/useAuthStore';
 import { useAccountStore } from './store/useAccountStore';
 import { useServerStatusStore, startHealthCheckLoop, startHeartbeatLoop, stopHeartbeatLoop } from './store/useServerStatusStore';
 import { ensureTaskEventBridge } from './store/useTaskStore';
+import { useEvaluationStore } from './store/useEvaluationStore';
+import { ensureEvaluationWatcher } from './features/evaluation/evaluationService';
 import { loadRuntimeConfig } from './services/runtimeTokenService';
 import { ensureServerModelSync } from './store/useServerModelStore';
 import { useRuntimeStore } from './store/useRuntimeStore';
@@ -81,6 +84,9 @@ export default function App() {
     useRuntimeStore.getState().markAuthRestored();
     // 全局单点 task-updated 订阅：各页面（ImageStudio / TaskQueue / Chat）不再重复注册
     ensureTaskEventBridge();
+    // 统一图片评价：加载持久化评分缓存 + 挂任务完成后的异步自动评价（不阻塞生成）
+    void useEvaluationStore.getState().loadAll();
+    ensureEvaluationWatcher();
     // 服务器模型同步单例：runtimeReady / 登录 / Server 切换 / 断网恢复 统一由 store 内部调度
     ensureServerModelSync();
     // 账号切换时同步各自头像（登出清空、登录恢复缓存）
@@ -207,6 +213,7 @@ export default function App() {
           />
         </Suspense>
       )}
+      <ImageViewer />
       <ToastHost />
     </div>
   );

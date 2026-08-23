@@ -143,14 +143,61 @@ fn open_db(path: &PathBuf) -> Option<Connection> {
         CREATE INDEX IF NOT EXISTS idx_agent_template_logs_conversation_id
             ON agent_template_logs(conversation_id);
         CREATE INDEX IF NOT EXISTS idx_agent_template_logs_created_at
-            ON agent_template_logs(created_at DESC);",
+            ON agent_template_logs(created_at DESC);
+        CREATE TABLE IF NOT EXISTS image_evaluations (
+            asset_id TEXT PRIMARY KEY,
+            asset_path TEXT NOT NULL DEFAULT '',
+            task_id TEXT NOT NULL DEFAULT '',
+            task_kind TEXT NOT NULL DEFAULT '',
+            evaluation_version TEXT NOT NULL DEFAULT '',
+            overall_score INTEGER,
+            instruction_adherence INTEGER,
+            subject_consistency INTEGER,
+            reference_preservation INTEGER,
+            style_consistency INTEGER,
+            composition_quality INTEGER,
+            technical_quality INTEGER,
+            strengths_json TEXT NOT NULL DEFAULT '[]',
+            issues_json TEXT NOT NULL DEFAULT '[]',
+            suggestion TEXT NOT NULL DEFAULT '',
+            preserve_json TEXT NOT NULL DEFAULT '[]',
+            change_json TEXT NOT NULL DEFAULT '[]',
+            edit_instruction TEXT NOT NULL DEFAULT '',
+            evaluated_by TEXT NOT NULL DEFAULT '',
+            evaluated_at TEXT NOT NULL DEFAULT '',
+            user_rating TEXT,
+            user_issue_tags_json TEXT NOT NULL DEFAULT '[]',
+            user_comment TEXT NOT NULL DEFAULT '',
+            user_feedback_at TEXT NOT NULL DEFAULT '',
+            favorite INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_image_evaluations_task_id
+            ON image_evaluations(task_id);",
     )
     .ok()?;
+    // 旧库升级：CREATE TABLE IF NOT EXISTS 不会给已有表补列，按需幂等 ALTER
+    ensure_column(&conn, "image_evaluations", "favorite", "INTEGER NOT NULL DEFAULT 0");
     Some(conn)
 }
 
-fn open_app_db(app: &AppHandle) -> Result<Connection, String> {
-    open_db(&settings_path(app)).ok_or_else(|| "无法打开模板数据库".to_string())
+/// 幂等补列（列已存在 / ALTER 失败均静默返回；favorite 类展示标记不值得阻断启动）。
+fn ensure_column(conn: &Connection, table: &str, column: &str, decl: &str) {
+    if let Ok(mut stmt) = conn.prepare(&format!("PRAGMA table_info({table})")) {
+        if let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(1)) {
+            for row in rows.flatten() {
+                if row == column {
+                    return;
+                }
+            }
+        }
+    }
+    let _ = conn.execute(&format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"), []);
+}
+
+pub fn open_app_db(app: &AppHandle) -> Result<Connection, String> {
+    open_db(&settings_path(app)).ok_or_else(|| "无法打开应用数据库".to_string())
 }
 
 fn parse_json_array(text: &str) -> Vec<String> {

@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useTaskStore } from '../store/useTaskStore';
+import { evaluationsOfTask, useEvaluationStore } from '../store/useEvaluationStore';
+import { aggregateTaskEvaluations, taskEvaluationSummary } from '../features/evaluation/evaluationModel';
 import type { Task } from '../types';
 import EditTaskModal from '../components/EditTaskModal';
 import BatchRedoModal from '../components/BatchRedoModal';
@@ -17,6 +19,7 @@ import {
   type TaskStatusFilter,
 } from '../utils/taskCategory';
 import { classifySubTaskError } from '../utils/subtaskError';
+import { poseBatchTaskSourceLabel } from '../utils/poseBatch';
 import './TaskQueue.css';
 import './ImageEdit.css';
 
@@ -41,6 +44,8 @@ function isVisionTask(task: Task): boolean {
 }
 
 function getSourceLabel(task: Task): string {
+  // cy-video-studio 细分：动作白膜批（pose_batch）与视频复刻单任务
+  if (task.task_source === 'cy-video-studio') return poseBatchTaskSourceLabel(task);
   return task.task_source === 'agent' ? 'Agent' : '手动';
 }
 
@@ -63,6 +68,7 @@ function isBatchTask(task: Task): boolean {
 
 export default function TaskQueue() {
   const { tasks, loadTasks, cancelTask, deleteTask, retryTaskFailed } = useTaskStore();
+  const evaluations = useEvaluationStore(s => s.evaluations);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [redoingTask, setRedoingTask] = useState<Task | null>(null);
   const [deletingTask, setDeletingTask] = useState<Task | null>(null);
@@ -202,6 +208,11 @@ export default function TaskQueue() {
             const labels = task.sub_tasks.map(item => item.label).filter(Boolean) as string[];
             const subTaskErrors = task.sub_tasks.filter(subTask => subTask.error);
             const optimized = promptOptimizationState(task).applied;
+            // 任务行轻量评分（Phase 22）：只显示 best 摘要，每张图明细进任务详情 / 图库
+            const evaluationSummary = taskEvaluationSummary(
+              aggregateTaskEvaluations(evaluationsOfTask({ evaluations }, task.id)),
+              imageCount,
+            );
 
             return (
               <div
@@ -260,6 +271,7 @@ export default function TaskQueue() {
                     <span>{task.output_format.toUpperCase()}</span>
                     {!isVisionTask(task) && <span>{task.count} 张</span>}
                     <span>{optimized ? '已优化提示词' : '原始提示词'}</span>
+                    {evaluationSummary && <span className="task-eval-summary">{evaluationSummary}</span>}
                   </div>
 
                   {task.task_plan_summary && (

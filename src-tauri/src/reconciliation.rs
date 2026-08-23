@@ -224,6 +224,10 @@ mod tests {
             source_task_id: None,
             source_task_kind: String::new(),
             stage_note: String::new(),
+            source_app: String::new(),
+            source_request_id: String::new(),
+            source_context: None,
+            pose_batch: None,
             sub_tasks: sub
                 .iter()
                 .enumerate()

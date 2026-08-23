@@ -1,0 +1,86 @@
+/* 图片库拖拽导入 Overlay（V4.1）：只覆盖 Gallery 主内容区（渲染于 .gallery-page 内）。
+   颜色全部来自语义 Token（Brand Indigo 系），Light / Dark 双主题可切换。 */
+
+.gallery-drop-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 48px;
+  background: color-mix(in srgb, var(--accent-primary) 7%, transparent);
+  pointer-events: none;
+  animation: gallery-drop-fade 0.12s ease;
+}
+
+.gallery-drop-frame {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  max-width: min(560px, 90%);
+  padding: 32px 48px;
+  border: 2px dashed var(--accent-primary);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--accent-primary-light) 60%, transparent);
+  animation: gallery-drop-scale 0.12s ease;
+  text-align: center;
+}
+
+.gallery-drop-icon {
+  color: var(--accent-primary);
+  margin-bottom: 4px;
+}
+
+.gallery-drop-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.gallery-drop-warning {
+  margin: 0;
+  font-size: 12px;
+  color: var(--badge-warn-text);
+}
+
+.gallery-drop-hint {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.gallery-drop-formats {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--text-faint);
+  letter-spacing: 0.02em;
+}
+
+/* 全部非法：警示形态（边框 / 图标转 warn，标题已在 copy 层固定文字） */
+.gallery-drop-overlay.all-invalid .gallery-drop-frame {
+  border-color: var(--badge-warn-text);
+}
+
+.gallery-drop-overlay.all-invalid .gallery-drop-icon {
+  color: var(--badge-warn-text);
+}
+
+@keyframes gallery-drop-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes gallery-drop-scale {
+  from { opacity: 0; transform: scale(0.985); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gallery-drop-overlay,
+  .gallery-drop-frame {
+    animation: none;
+  }
+}

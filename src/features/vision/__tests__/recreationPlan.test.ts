@@ -10,9 +10,14 @@ import {
   initialRecreationState,
   markOptimizationFailed,
   markOptimizing,
+  markRecreationDirty,
+  needsOptimization,
   needsReoptimization,
+  normalizeRecreationState,
+  revertToLastSuccessfulPrompt,
   togglePlanFieldLock,
   PLAN_FIELD_LABELS,
+  type RecreationState,
 } from '../recreationPlan';
 
 function fixtureAnalysis(): VisionAnalysis {
@@ -70,15 +75,19 @@ function fixtureAnalysis(): VisionAnalysis {
 }
 
 describe('buildRecreationPlan（结构化复刻方案）', () => {
-  it('从 VisionAnalysis 派生八类字段并默认锁定主体以外的维度', () => {
+  it('从 VisionAnalysis 派生九类字段（含服装 / 造型独立维度）并默认锁定主体以外的维度', () => {
     const plan = buildRecreationPlan(fixtureAnalysis());
     const keys = plan.fields.map(f => f.key);
-    expect(keys).toEqual(['subject', 'pose', 'composition', 'camera', 'scene', 'lighting', 'style', 'color']);
+    expect(keys).toEqual(['subject', 'clothing', 'pose', 'composition', 'camera', 'scene', 'lighting', 'style', 'color']);
 
     const subject = plan.fields.find(f => f.key === 'subject')!;
     expect(subject.value).toContain('成年男性篮球运动员');
-    expect(subject.value).toContain('红色 23 号球衣');
     expect(subject.locked).toBe(false);
+
+    const clothing = plan.fields.find(f => f.key === 'clothing')!;
+    expect(clothing.value).toBe('红色 23 号球衣');
+    expect(clothing.label).toBe(PLAN_FIELD_LABELS.clothing);
+    expect(clothing.locked).toBe(true);
 
     const pose = plan.fields.find(f => f.key === 'pose')!;
     expect(pose.value).toContain('腾空上篮');
@@ -90,6 +99,125 @@ describe('buildRecreationPlan（结构化复刻方案）', () => {
   });
 });
 
+describe('语义修订模型（semanticRevision / optimizedRevision / needsOptimization）', () => {
+  const base = () =>
+    initialRecreationState(
+      buildRecreationPlan(fixtureAnalysis()),
+      '一名男性篮球运动员在室内球馆上篮，低角度仰拍……',
+      '低画质，模糊',
+    );
+
+  it('分析完成即 ready：双修订归零，无需优化，允许直接生成', () => {
+    const state = base();
+    expect(state.editState).toBe('ready');
+    expect(state.semanticRevision).toBe(0);
+    expect(state.optimizedRevision).toBe(0);
+    expect(needsOptimization(state)).toBe(false);
+    expect(state.adjustInstruction).toBe('');
+    expect(state.optimizedPrompt).toBe(state.originalPrompt);
+    expect(canGenerateFromRecreation(state).allowed).toBe(true);
+    expect(needsReoptimization(state)).toBe(false);
+  });
+
+  it('真实语义修改（调整要求）→ revision +1，needsOptimization，生成被拦截', () => {
+    const next = applyAdjustmentInput(base(), '把主体换成一个年轻女性，保持背景和构图不变');
+    expect(next.semanticRevision).toBe(1);
+    expect(next.optimizedRevision).toBe(0);
+    expect(needsOptimization(next)).toBe(true);
+    expect(next.editState).toBe('dirty');
+    expect(next.adjustInstruction).toBe('把主体换成一个年轻女性，保持背景和构图不变');
+    expect(canGenerateFromRecreation(next).allowed).toBe(false);
+    expect(needsReoptimization(next)).toBe(true);
+  });
+
+  it('优化成功 → optimizedRevision 对齐 semanticRevision（needsOptimization 归 false）', () => {
+    const dirty = applyAdjustmentInput(base(), '更亮');
+    const optimizing = markOptimizing(dirty);
+    const optimized = applyOptimizationResult(optimizing, {
+      optimizedPrompt: '最终 Prompt',
+      optimizedNegativePrompt: '',
+      summary: '已微调',
+    });
+    expect(optimized.semanticRevision).toBe(1);
+    expect(optimized.optimizedRevision).toBe(1);
+    expect(needsOptimization(optimized)).toBe(false);
+    expect(canGenerateFromRecreation(optimized).allowed).toBe(true);
+  });
+
+  it('优化失败 → revision 不变（待消化修改仍在），needsOptimization 保持 true', () => {
+    const dirty = applyAdjustmentInput(base(), '更亮');
+    const failed = markOptimizationFailed(markOptimizing(dirty), '网络超时');
+    expect(failed.semanticRevision).toBe(1);
+    expect(failed.optimizedRevision).toBe(0);
+    expect(needsOptimization(failed)).toBe(true);
+    expect(failed.optimizeError).toBe('网络超时');
+    expect(canGenerateFromRecreation(failed).allowed).toBe(false);
+  });
+
+  it('优化完成后清空修改要求 → 维持 optimized（空意图绝不卡死在 dirty）', () => {
+    const optimized = applyOptimizationResult(applyAdjustmentInput(base(), '更亮'), {
+      optimizedPrompt: '最终 Prompt',
+      optimizedNegativePrompt: '',
+      summary: '已微调',
+    });
+    const cleared = applyAdjustmentInput(optimized, '');
+    expect(cleared.editState).toBe('optimized');
+    expect(cleared.adjustInstruction).toBe('');
+    expect(needsOptimization(cleared)).toBe(false);
+    expect(canGenerateFromRecreation(cleared).allowed).toBe(true);
+  });
+
+  it('待优化状态下清空全部修改意图 → 对齐 revision（放弃未优化修改，保留当前 Prompt）', () => {
+    const dirty = applyAdjustmentInput(base(), '更亮');
+    const cleared = applyAdjustmentInput(dirty, '');
+    expect(cleared.editState).toBe('ready');
+    expect(cleared.semanticRevision).toBe(cleared.optimizedRevision);
+    expect(needsOptimization(cleared)).toBe(false);
+    expect(canGenerateFromRecreation(cleared).allowed).toBe(true);
+  });
+
+  it('markRecreationDirty / 锁定项修改同样增加 revision（真实语义修改统一入口）', () => {
+    const state = base();
+    expect(markRecreationDirty(state).semanticRevision).toBe(1);
+    const toggled = togglePlanFieldLock(state, 'scene');
+    expect(toggled.semanticRevision).toBe(1);
+    expect(toggled.plan.fields.find(f => f.key === 'scene')!.locked).toBe(false);
+    expect(needsOptimization(toggled)).toBe(true);
+  });
+
+  it('「使用上一次 Prompt」→ revision 对齐，回到 optimized / ready', () => {
+    const optimized = applyOptimizationResult(applyAdjustmentInput(base(), '更亮'), {
+      optimizedPrompt: '上一轮成功 Prompt',
+      optimizedNegativePrompt: '',
+      summary: '已微调',
+    });
+    const pending = applyAdjustmentInput(optimized, '再改一版');
+    const reverted = revertToLastSuccessfulPrompt(pending);
+    expect(reverted.semanticRevision).toBe(reverted.optimizedRevision);
+    expect(needsOptimization(reverted)).toBe(false);
+    expect(reverted.optimizedPrompt).toBe('上一轮成功 Prompt');
+    expect(canGenerateFromRecreation(reverted).allowed).toBe(true);
+  });
+
+  it('旧持久化数据（modified 标记）迁移：modified=true → 修订领先 1，否则归零', () => {
+    const legacyDirty = { ...base() } as Partial<RecreationState> & { modified?: boolean };
+    delete legacyDirty.semanticRevision;
+    delete legacyDirty.optimizedRevision;
+    legacyDirty.modified = true;
+    const migrated = normalizeRecreationState(legacyDirty as RecreationState);
+    expect(migrated.semanticRevision).toBe(1);
+    expect(migrated.optimizedRevision).toBe(0);
+    expect(needsOptimization(migrated)).toBe(true);
+    const legacyClean = { ...base() } as Partial<RecreationState> & { modified?: boolean };
+    delete legacyClean.semanticRevision;
+    delete legacyClean.optimizedRevision;
+    legacyClean.modified = false;
+    const migratedClean = normalizeRecreationState(legacyClean as RecreationState);
+    expect(migratedClean.semanticRevision).toBe(0);
+    expect(needsOptimization(migratedClean)).toBe(false);
+  });
+});
+
 describe('复刻方案状态机（ready → dirty → optimizing → optimized，统一调整要求输入）', () => {
   const base = () =>
     initialRecreationState(
@@ -98,45 +226,12 @@ describe('复刻方案状态机（ready → dirty → optimizing → optimized�
       '低画质，模糊',
     );
 
-  it('分析完成即 ready：原始 Prompt 即最终生图 Prompt（不空跑优化），允许直接生成', () => {
-    const state = base();
-    expect(state.editState).toBe('ready');
-    expect(state.modified).toBe(false);
-    expect(state.adjustInstruction).toBe('');
-    expect(state.optimizedPrompt).toBe(state.originalPrompt);
-    expect(canGenerateFromRecreation(state).allowed).toBe(true);
-    expect(needsReoptimization(state)).toBe(false);
-  });
-
   it('调整要求输入变化 → dirty（记录大白话指令，清空历史失败原因）', () => {
     const state = base();
     const next = applyAdjustmentInput(state, '把主体换成一个年轻女性，保持背景和构图不变');
     expect(next.editState).toBe('dirty');
-    expect(next.modified).toBe(true);
     expect(next.adjustInstruction).toBe('把主体换成一个年轻女性，保持背景和构图不变');
-    // 生成被拦截：必须先优化
     expect(canGenerateFromRecreation(next).allowed).toBe(false);
-    expect(needsReoptimization(next)).toBe(true);
-  });
-
-  it('调整要求清空且从未优化过 → 回 ready（不空转卡死在 dirty）', () => {
-    const dirty = applyAdjustmentInput(base(), '更亮一些');
-    const reverted = applyAdjustmentInput(dirty, '');
-    expect(reverted.editState).toBe('ready');
-    expect(reverted.modified).toBe(false);
-    expect(reverted.adjustInstruction).toBe('');
-    expect(canGenerateFromRecreation(reverted).allowed).toBe(true);
-  });
-
-  it('调整要求清空但已有优化产物 → 保持 dirty（内容变化即 dirty）', () => {
-    const optimized = applyOptimizationResult(applyAdjustmentInput(base(), '更亮'), {
-      optimizedPrompt: '最终 Prompt',
-      optimizedNegativePrompt: '',
-      summary: '已微调',
-    });
-    const cleared = applyAdjustmentInput(optimized, '');
-    expect(cleared.editState).toBe('dirty');
-    expect(cleared.adjustInstruction).toBe('');
   });
 
   it('锁定项变化 → dirty 且锁定状态立即翻转', () => {
@@ -170,7 +265,6 @@ describe('复刻方案状态机（ready → dirty → optimizing → optimized�
       modelName: 'GLM-5.2',
     });
     expect(optimized.editState).toBe('optimized');
-    expect(optimized.modified).toBe(false);
     expect(optimized.optimizedBy).toBe('optimizer');
     expect(optimized.optimizedPrompt).toContain('白色球衣');
     expect(optimized.summary).toContain('保留锁定');
@@ -179,7 +273,6 @@ describe('复刻方案状态机（ready → dirty → optimizing → optimized�
 
     const failed = markOptimizationFailed(markOptimizing(applyAdjustmentInput(base(), '换背景')), '模型未返回可用结果');
     expect(failed.editState).toBe('dirty');
-    expect(failed.modified).toBe(true);
     expect(failed.optimizeError).toBe('模型未返回可用结果');
     expect(canGenerateFromRecreation(failed).allowed).toBe(false);
     // 重新输入调整要求 → 失败原因清空，回到普通「待优化」
@@ -245,7 +338,7 @@ describe('canGenerateFromRecreation（生图守卫与中文错误文案）', () 
     });
   });
 
-  it('已修改未优化（dirty）→ 拦截：必须先点击优化复刻 Prompt', () => {
+  it('已修改未优化（修订未对齐）→ 拦截：必须先点击优化复刻 Prompt', () => {
     const state = applyAdjustmentInput(initialRecreationState(buildRecreationPlan(fixtureAnalysis()), 'p', 'n'), '换背景');
     expect(canGenerateFromRecreation(state)).toEqual({
       allowed: false,
@@ -276,7 +369,7 @@ describe('canGenerateFromRecreation（生图守卫与中文错误文案）', () 
   });
 });
 
-describe('buildGenerationCarry（生成参数带入 + 来源联动 + 禁止重复优化）', () => {
+describe('buildGenerationCarry（生成参数带入 + 来源联动 + 禁止重复优化 + 人物参考）', () => {
   it('携带用户选择的生成参数（尺寸 / 质量 / 数量）与来源任务 id', () => {
     const state = applyOptimizationResult(
       applyAdjustmentInput(initialRecreationState(buildRecreationPlan(fixtureAnalysis()), '原始 Prompt', '负面'), '把主体换成蓝色小龙'),
@@ -307,6 +400,14 @@ describe('buildGenerationCarry（生成参数带入 + 来源联动 + 禁止重�
     expect(carry.taskPlanSummary).toContain('蓝色小龙');
   });
 
+  it('人物替换参考图随 carry 带出（i2i 第二参考）', () => {
+    const state = initialRecreationState(buildRecreationPlan(fixtureAnalysis()), 'p', 'n');
+    const carry = buildGenerationCarry(state, { personReferencePath: 'D:/refs/person.png' });
+    expect(carry.personReferencePath).toBe('D:/refs/person.png');
+    const without = buildGenerationCarry(state, {});
+    expect(without.personReferencePath).toBeUndefined();
+  });
+
   it('未修改直接生成时摘要为直接复刻（不触发优化）', () => {
     const state = initialRecreationState(buildRecreationPlan(fixtureAnalysis()), 'p', 'n');
     const carry = buildGenerationCarry(state, {});
@@ -326,7 +427,7 @@ describe('重新优化（force 再执行一次，旧结果失败保留 / 成功�
 
   it('从 optimized 强制重新优化失败：旧优化产物原样保留，状态回 dirty 并记录原因', () => {
     const optimized = applyOptimizationResult(
-      { ...base(), editState: 'dirty', modified: true, adjustInstruction: '把球衣换成蓝色' },
+      applyAdjustmentInput(base(), '把球衣换成蓝色'),
       {
         optimizedPrompt: '按调整要求重建后的新 Prompt',
         optimizedNegativePrompt: '低画质',
@@ -352,12 +453,12 @@ describe('重新优化（force 再执行一次，旧结果失败保留 / 成功�
     );
     expect(reoptimized.editState).toBe('optimized');
     expect(reoptimized.optimizedPrompt).toBe('更梦幻的重建 Prompt');
-    expect(reoptimized.modified).toBe(false);
+    expect(needsOptimization(reoptimized)).toBe(false);
   });
 
   it('失败后处于 dirty：生图守卫拦截，直至重新优化成功', () => {
     const optimized = applyOptimizationResult(
-      { ...base(), editState: 'dirty', modified: true, adjustInstruction: '换背景' },
+      applyAdjustmentInput(base(), '换背景'),
       { optimizedPrompt: '新版 Prompt', optimizedNegativePrompt: '低画质', summary: '完成' },
     );
     const failed = markOptimizationFailed(markOptimizing(optimized), '超时');

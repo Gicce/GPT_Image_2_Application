@@ -93,7 +93,7 @@ export interface Task {
   /** 结构化优化快照；旧任务可能缺失（由 UI 兼容映射）。 */
   prompt_optimization?: PromptOptimizationSnapshot | null;
   agent_intent?: string;
-  task_source?: 'manual' | 'agent';
+  task_source?: 'manual' | 'agent' | 'cy-video-studio';
   size: string;
   quality: string;
   output_format: string;
@@ -118,8 +118,51 @@ export interface Task {
   source_task_id?: string;
   /** 来源任务类型快照（如 vision_understanding），任务列表免查源即可显示来源。 */
   source_task_kind?: string;
-  /** 执行中的阶段性中文提示（前端驱动的视觉理解任务用）。 */
+
+  /** 来源应用（cy-video-studio = CY Video Studio 反向 Bridge 任务） */
+  source_app?: string;
+  /** 来源请求号（幂等键，仅服务端使用） */
+  source_request_id?: string;
+  /** 来源上下文（视频复刻项目 / 轨道 / 用途） */
+  source_context?: {
+    feature?: string;
+    projectName?: string;
+    trackType?: string;
+    trackId?: string;
+    purpose?: string;
+  };  /** 执行中的阶段性中文提示（前端驱动的视觉理解任务用）。 */
   stage_note?: string;
+  /** 动作白膜批元数据（cy-video-studio Pose Batch；普通任务 / 旧数据缺失）。 */
+  pose_batch?: PoseBatchMeta;
+}
+
+/** 动作白膜批槽位语义（与 sub_tasks / batch_items 按 sub_index 对齐）。 */
+export interface PoseSlotMeta {
+  slot_id: string;
+  /** front_3q | front | side | back */
+  view: string;
+  /** none | start | middle | end */
+  keyframe: string;
+  pose_description?: string;
+  key_pose_points?: string[];
+  sub_index: number;
+}
+
+/** 动作白膜批共享上下文（Pose Batch Contract V1，一个批 = 一个 Task）。 */
+export interface PoseBatchMeta {
+  batch_id: string;
+  contract_version: number;
+  /** Prompt Preset 版本快照（ACTION_MANNEQUIN_V1）。 */
+  preset_version: string;
+  action_id: string;
+  action_name: string;
+  normalized_pose?: string;
+  /** prompt_only | master_reference */
+  consistency_strategy: string;
+  aspect_ratio: string;
+  master_image_id?: string | null;
+  master_slot_index?: number | null;
+  slots: PoseSlotMeta[];
 }
 
 export interface ImageRecord {
@@ -134,6 +177,7 @@ export interface ImageRecord {
   last_seen_at?: string | null;
   width?: number | null;
   height?: number | null;
+  file_size?: number | null;
   description?: string | null;
   tags?: string[];
   indexed_at?: string | null;
@@ -143,6 +187,26 @@ export interface ImageMeta {
   width: number;
   height: number;
   file_size: number;
+}
+
+/** 图片库拖拽导入（V4.1）：成功复制进管理目录的文件 */
+export interface LibraryImportedItem {
+  file_name: string;
+  local_path: string;
+}
+
+/** 图片库拖拽导入：跳过（已在管理目录 / 同内容已存在）或失败（含原因） */
+export interface LibraryImportIssue {
+  path: string;
+  reason: string;
+}
+
+/** import_images_to_library 返回结构；images = 触发重扫时的全量图库记录 */
+export interface ImportImagesToLibraryResult {
+  imported: LibraryImportedItem[];
+  skipped: LibraryImportIssue[];
+  failed: LibraryImportIssue[];
+  images: ImageRecord[];
 }
 
 /** 图库图片同步到 CY Video Studio（CY_VIDEO_BRIDGE_V1）的结果 */
@@ -161,7 +225,7 @@ export interface CreateTaskParams {
   prompt_optimized?: boolean;
   prompt_optimization?: PromptOptimizationSnapshot | null;
   agent_intent?: string;
-  task_source?: 'manual' | 'agent';
+  task_source?: 'manual' | 'agent' | 'cy-video-studio';
   size: string;
   quality: string;
   output_format: string;
@@ -804,6 +868,15 @@ export interface ChatConversation {
    * （图生图源图漂移的根因修复）。
    */
   active_image_set_at?: string;
+  /**
+   * 任务图片绑定四态（V4.0.8）：区分「尚未初始化」与「用户明确解绑」。
+   * uninitialized = 从未做过任务图片决策（允许一次自动绑定）；
+   * auto = 系统自动绑定（恢复 / 任务成功推进）；
+   * manual = 用户主动提供图片（选择 / 拖入 / 图库 / 显式绑定）；
+   * none = 用户明确解绑全部任务图片，持久化拒绝任何自动补图。
+   * 缺省（旧数据）时由 resolveStoredTaskImageBinding 按 active_image_* 归一。
+   */
+  active_image_binding?: 'uninitialized' | 'auto' | 'manual' | 'none';
   chat_mode?: ChatMode;
   /** 会话级 AI 智能体选择（profile_id + model_id，双 key 区分同 model_id 的不同 Provider） */
   selected_agent_profile_id?: string;

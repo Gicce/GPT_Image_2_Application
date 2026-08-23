@@ -177,6 +177,49 @@ pub struct PromptOptimizationSnapshot {
     pub source: String,
 }
 
+/// CY Video Studio 动作白膜批任务槽位语义（与 sub_tasks/batch_items 按 sub_index 对齐）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PoseSlotMeta {
+    pub slot_id: String,
+    /// front_3q | front | side | back
+    pub view: String,
+    /// none | start | middle | end
+    pub keyframe: String,
+    #[serde(default)]
+    pub pose_description: String,
+    #[serde(default)]
+    pub key_pose_points: Vec<String>,
+    /// 对应 sub_tasks / batch_items 下标
+    pub sub_index: usize,
+}
+
+/// 动作白膜批任务元数据（Pose Batch Contract V1）。
+/// 一个 PoseBatch = 一个 Task：sub_tasks[i] = 槽位执行状态，batch_items[i] = 槽位 Prompt；
+/// 本结构承载批级共享上下文（Preset 版本 / 一致性策略 / 画幅）与槽位语义。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PoseBatchMeta {
+    /// Video 侧批 ID（status / retry / cancel 查询键）
+    pub batch_id: String,
+    /// 契约版本（V1 = 1）
+    pub contract_version: u32,
+    /// Prompt Preset 版本快照（ACTION_MANNEQUIN_V1）
+    pub preset_version: String,
+    pub action_id: String,
+    pub action_name: String,
+    #[serde(default)]
+    pub normalized_pose: String,
+    /// prompt_only | master_reference
+    pub consistency_strategy: String,
+    /// 同批共享画幅（= task.size 的冗余快照，供状态查询直读）
+    pub aspect_ratio: String,
+    /// master_reference 策略：首张成功白膜的资产 id 与槽位（未产生前为 None）
+    #[serde(default)]
+    pub master_image_id: Option<String>,
+    #[serde(default)]
+    pub master_slot_index: Option<usize>,
+    pub slots: Vec<PoseSlotMeta>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Task {
     pub id: String,
@@ -235,6 +278,18 @@ pub struct Task {
     /// 执行中的阶段性中文提示（视觉理解任务等前端驱动任务用；终态后保留最后一条）
     #[serde(default)]
     pub stage_note: String,
+    /// 来源应用（"cy-video-studio" = CY Video Bridge 反向任务；普通任务为空）
+    #[serde(default)]
+    pub source_app: String,
+    /// 来源请求号（幂等键：重复请求返回既有任务，绝不重复创建付费任务）
+    #[serde(default)]
+    pub source_request_id: String,
+    /// 来源上下文（feature/projectName/trackType/trackId/purpose；任务详情展示）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_context: Option<serde_json::Value>,
+    /// 动作白膜批元数据（cy-video-studio Pose Batch；普通任务为 None，旧数据缺省兼容）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pose_batch: Option<PoseBatchMeta>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -255,6 +310,8 @@ pub struct ImageRecord {
     pub width: Option<u32>,
     #[serde(default)]
     pub height: Option<u32>,
+    #[serde(default)]
+    pub file_size: Option<u64>,
     #[serde(default)]
     pub description: Option<String>,
     #[serde(default)]

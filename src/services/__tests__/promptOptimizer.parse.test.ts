@@ -12,7 +12,14 @@ vi.mock('../../features/aiProviders/providerError', () => ({
   providerErrorCompact: vi.fn(() => ''),
 }));
 
-import { parseOptimizerItems, parseOptimizerJson, parseOptimizerReply } from '../promptOptimizer';
+import {
+  buildVisionRecreationUserContent,
+  parseOptimizerItems,
+  parseOptimizerJson,
+  parseOptimizerReply,
+  parseVisionOptimizerJson,
+  parseVisionOptimizerReply,
+} from '../promptOptimizer';
 
 
 describe('parseOptimizerItems（多 Prompt 批量结构化输出解析）', () => {
@@ -177,5 +184,60 @@ describe('parseOptimizerJson（结构化 JSON 输出解析）', () => {
     const reply = '<think>用户想要夜景，我要输出 JSON</think>\n{"positive_prompt":"雨夜街道","negative_prompt":"白天的画面"}';
     const parsed = parseOptimizerJson(reply);
     expect(parsed).toEqual({ prompt: '雨夜街道', negative: '白天的画面' });
+  });
+});
+
+describe('parseVisionOptimizerJson（结构化维度意图协议）', () => {
+  it('完整协议：positive / negative / summary / changed_dimensions / dimension_values', () => {
+    const reply = '{"positive_prompt":"……比心……","negative_prompt":"低画质","summary":"已把动作改为比心","changed_dimensions":["pose"],"dimension_values":{"pose":"双手在胸前组成比心手势"}}';
+    const parsed = parseVisionOptimizerJson(reply)!;
+    expect(parsed.prompt).toContain('比心');
+    expect(parsed.changedDimensions).toEqual(['pose']);
+    expect(parsed.dimensionValues.pose).toBe('双手在胸前组成比心手势');
+  });
+
+  it('多维修改（背景 + 动作 + 色调）按序保留', () => {
+    const reply = '{"positive_prompt":"p","changed_dimensions":["pose","scene","color"],"dimension_values":{"pose":"比心","scene":"海边夕阳","color":"暖色调"}}';
+    const parsed = parseVisionOptimizerJson(reply)!;
+    expect(parsed.changedDimensions).toEqual(['pose', 'scene', 'color']);
+  });
+
+  it('未知维度 key 与非字符串值被过滤（不产生幽灵维度）', () => {
+    const reply = '{"positive_prompt":"p","changed_dimensions":["pose","mood",42],"dimension_values":{"pose":"比心","mood":"忽略我","camera":123}}';
+    const parsed = parseVisionOptimizerJson(reply)!;
+    expect(parsed.changedDimensions).toEqual(['pose']);
+    expect(parsed.dimensionValues).toEqual({ pose: '比心' });
+  });
+
+  it('旧协议（无 changed_dimensions）→ 空数组 / 空 values（向后兼容）', () => {
+    const parsed = parseVisionOptimizerJson('{"positive_prompt":"p","summary":"s"}')!;
+    expect(parsed.changedDimensions).toEqual([]);
+    expect(parsed.dimensionValues).toEqual({});
+  });
+
+  it('文本标签协议（非 JSON 回退）→ 意图字段为空但不失败', () => {
+    const parsed = parseVisionOptimizerReply('OPTIMIZED:\n重建后的 Prompt\n\nSUMMARY: 一句话摘要')!;
+    expect(parsed.prompt).toContain('重建后的 Prompt');
+    expect(parsed.changedDimensions).toEqual([]);
+  });
+
+  it('用户手动锁定维度必须进入优化器提示词（buildVisionRecreationUserContent）', () => {
+    const content = buildVisionRecreationUserContent({
+      originalRecreationPrompt: '原始 Prompt',
+      structuredRecreationPlan: {
+        summary: '概述',
+        fields: [
+          { key: 'pose', label: '动作', value: '腾空上篮', locked: true, lockSource: 'user_override' },
+          { key: 'scene', label: '背景 / 场景', value: '室内球馆', locked: false, lockSource: 'user_override' },
+          { key: 'style', label: '风格', value: '写实', locked: true, lockSource: 'default' },
+        ],
+      },
+      userAdjustmentInstruction: '让人物做一个比心动作',
+    });
+    expect(content).toContain('用户手动锁定（最高优先级：必须保持不变）');
+    expect(content).toContain('用户手动开放（允许按调整要求修改）');
+    expect(content).toContain('自动（由你按调整要求判断');
+    expect(content).toContain('让人物做一个比心动作');
+    expect(content).toContain('changed_dimensions');
   });
 });

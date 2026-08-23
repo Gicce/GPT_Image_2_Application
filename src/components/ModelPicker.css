@@ -1,0 +1,266 @@
+/* ===== 胶囊式模型选择器（V4.0.9 自 Chat.css 公共化）=====
+   布局契约：
+   - .model-picker-name-text 单行 ellipsis（唯一允许截断的元素）
+   - .billing-badge / .model-option-tag / chevron 一律 flex-shrink:0 + nowrap
+   - .model-picker-panel 最大高度 + 内部滚动，禁止无限增长 */
+
+.model-picker {
+  position: relative;
+  display: inline-flex;
+}
+
+.model-picker-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  background: var(--bg-chat-hover);
+  color: var(--text-chat);
+  border: 1px solid var(--border-default);
+  border-radius: 14px;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+  max-width: 320px;
+  min-width: 0;
+}
+
+.model-picker-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-subtle);
+}
+
+.model-picker-btn.open {
+  background: var(--bg-hover);
+  border-color: var(--accent-primary);
+}
+
+.model-picker-chevron {
+  flex-shrink: 0;
+  opacity: 0.6;
+  transition: transform 0.15s;
+}
+
+.model-picker-btn.open .model-picker-chevron {
+  transform: rotate(180deg);
+}
+
+.model-picker-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.model-picker-name-text {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.model-picker-panel {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  width: 300px;
+  max-width: calc(100vw - 48px);
+  background: var(--bg-chat-hover);
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  padding: 4px;
+  z-index: 50;
+  max-height: 380px;
+  overflow-y: auto;
+}
+
+.model-picker-search {
+  padding: 4px 6px 6px;
+}
+
+.model-picker-search input {
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--border-input);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: inherit;
+  outline: none;
+}
+
+.model-picker-search input:focus {
+  border-color: var(--accent-primary);
+}
+
+.model-picker-no-match {
+  padding: 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.model-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--text-chat);
+  cursor: pointer;
+  border-radius: 6px;
+  transition: background 0.1s;
+}
+
+.model-option:hover {
+  background: var(--bg-hover);
+}
+
+.model-option.selected {
+  background: var(--bg-hover);
+}
+
+.model-option.empty {
+  color: var(--text-chat-muted);
+  font-style: italic;
+  cursor: default;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 10px 14px;
+}
+
+.model-option.empty:hover {
+  background: transparent;
+}
+
+.model-option-empty-hint {
+  font-style: normal;
+  font-size: 12px;
+  opacity: 0.8;
+}
+
+.model-option-goto {
+  border: 1px solid var(--border-light);
+  background: transparent;
+  color: var(--accent-primary-text);
+  border-radius: 6px;
+  padding: 4px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.model-option-goto:hover {
+  background: var(--bg-hover);
+}
+
+.model-option-name {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.model-option-tag {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--badge-warn-text);
+  background: var(--badge-warn-bg);
+  padding: 2px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.model-option-tag.ok {
+  background: rgba(34, 197, 94, 0.12);
+  color: #22c55e;
+}
+
+.model-option-tag.warn {
+  background: rgba(245, 158, 11, 0.12);
+  color: #f59e0b;
+}
+
+.model-option-tag.new {
+  color: #a855f7;
+}
+
+.model-option-tag.vision {
+  background: var(--badge-info-bg);
+  color: var(--badge-info-text);
+}
+
+.model-option-tag.lifecycle {
+  background: var(--badge-muted-bg);
+  color: var(--badge-muted-text);
+}
+
+.model-option-check {
+  color: var(--accent-success);
+  flex-shrink: 0;
+}
+
+/* Provider 分组 */
+.model-picker-group {
+  padding: 2px 0;
+}
+
+.model-picker-group + .model-picker-group {
+  border-top: 1px solid var(--border-light);
+  margin-top: 4px;
+  padding-top: 6px;
+}
+
+.model-option-group-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  padding: 4px 12px 2px;
+}
+
+.model-option-group-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 更多模型折叠入口 */
+.model-picker-more {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 12px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.model-picker-more:hover {
+  background: var(--bg-hover);
+  color: var(--text-chat);
+}
+
+.model-picker-more svg {
+  flex-shrink: 0;
+  opacity: 0.6;
+  transition: transform 0.15s;
+}
+
+.model-picker-more.expanded svg {
+  transform: rotate(90deg);
+}

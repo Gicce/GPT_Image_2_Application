@@ -275,6 +275,62 @@ fn effective_source_images(task: &Task, index: usize) -> Vec<String> {
     task.source_images.clone()
 }
 
+/// Pose Batch 一致性（master_reference）：当前槽位若应以批内 master 白膜为参考图，
+/// 把 master 本地路径写入 live 任务与本地克隆的 batch_items[i].source_images
+/// （编辑路由的 effective_source_images 读这里），返回 true → 该槽走 Edits 路由。
+/// master 缺失（未产生 / 资产被删 / 文件移动）自动回落 Generations，绝不阻塞批执行。
+fn prepare_pose_slot_reference(app: &AppHandle, task: &mut Task, index: usize) -> bool {
+    // 读 live 任务的批元数据（首槽成功后本地克隆即过期）
+    let Some(pb) = storage::with_tasks(app, |tasks| {
+        tasks.iter().find(|t| t.id == task.id).and_then(|t| t.pose_batch.clone())
+    }) else {
+        return false;
+    };
+    if !crate::pose_batch::slot_should_use_master_reference(&pb, index) {
+        return false;
+    }
+    let Some(master_id) = pb.master_image_id.clone() else {
+        return false;
+    };
+    let Some(master_path) = storage::with_images(app, |imgs| {
+        imgs.iter().find(|r| r.id == master_id).map(|r| r.local_path.clone())
+    }) else {
+        return false;
+    };
+    if !Path::new(&master_path).exists() {
+        return false;
+    }
+    storage::with_tasks(app, |tasks| {
+        if let Some(t) = tasks.iter_mut().find(|t| t.id == task.id) {
+            if let Some(item) = t.batch_items.get_mut(index) {
+                item.source_images = vec![master_path.clone()];
+            }
+        }
+    });
+    if let Some(item) = task.batch_items.get_mut(index) {
+        item.source_images = vec![master_path];
+    }
+    true
+}
+
+/// master_reference 策略：首张成功白膜登记为 master（后续 / 重试槽位以其为参考图）。
+fn record_pose_master_if_needed(app: &AppHandle, task: &Task, index: usize, image_id: &str) {
+    let Some(pb) = task.pose_batch.as_ref() else { return; };
+    if pb.consistency_strategy != "master_reference" || pb.master_image_id.is_some() {
+        return;
+    }
+    storage::with_tasks(app, |tasks| {
+        if let Some(t) = tasks.iter_mut().find(|t| t.id == task.id) {
+            if let Some(pb) = t.pose_batch.as_mut() {
+                if pb.master_image_id.is_none() {
+                    pb.master_image_id = Some(image_id.to_string());
+                    pb.master_slot_index = Some(index);
+                }
+            }
+        }
+    });
+}
+
 /// 前端驱动型任务（视觉理解）：由页面直接调用模型并推进状态，
 /// 后台执行器绝不认领，否则会把分析描述当图片 Prompt 送进生成接口。
 pub fn is_frontend_driven_task(task: &Task) -> bool {
@@ -337,7 +393,7 @@ pub async fn process_next_task(app: &AppHandle) {
             .cloned()
     });
 
-    let task = match task_opt {
+    let mut task = match task_opt {
         Some(t) => t,
         None => return,
     };
@@ -448,8 +504,14 @@ pub async fn process_next_task(app: &AppHandle) {
         });
         let _ = app.emit("task-updated", &task.id);
 
-        // V4.0.8：执行路由唯一决策点（ImageExecutionRoute），禁止再按字符串散落分发
-        let result = match resolve_execution_route(&task.task_type) {
+        // V4.0.8：执行路由唯一决策点（ImageExecutionRoute），禁止再按字符串散落分发。
+        // Pose Batch master_reference：该槽以批内 master 白膜为参考图 → Edits 路由。
+        let pose_master_reference = prepare_pose_slot_reference(app, &mut task, i);
+        let result = match if pose_master_reference {
+            ImageExecutionRoute::Edits
+        } else {
+            resolve_execution_route(&task.task_type)
+        } {
             ImageExecutionRoute::RemoveBackground => {
                 remove_background_single_image(&settings, &task, i).await
             }
@@ -475,6 +537,7 @@ pub async fn process_next_task(app: &AppHandle) {
                         t.success_count = success_count;
                     }
                 });
+                record_pose_master_if_needed(app, &task, i, &image_record.id);
                 storage::with_images(app, |images| {
                     images.push(image_record);
                 });
@@ -588,6 +651,7 @@ async fn generate_single_image(
         last_seen_at: Some(now.to_rfc3339()),
         width: None,
         height: None,
+        file_size: Some(image_bytes.len() as u64),
         description: batch_item_description(task, index),
         tags: Vec::new(),
         indexed_at: None,
@@ -675,6 +739,7 @@ async fn remove_background_single_image(
         last_seen_at: Some(now.to_rfc3339()),
         width: None,
         height: None,
+        file_size: Some(image_bytes.len() as u64),
         description: None,
         tags: Vec::new(),
         indexed_at: None,
@@ -798,6 +863,7 @@ async fn edit_single_image(
         last_seen_at: Some(now.to_rfc3339()),
         width: None,
         height: None,
+        file_size: Some(image_bytes.len() as u64),
         description: batch_item_description(task, index),
         tags: Vec::new(),
         indexed_at: None,
@@ -855,6 +921,10 @@ mod tests {
             source_task_id: None,
             source_task_kind: String::new(),
             stage_note: String::new(),
+            source_app: String::new(),
+            source_request_id: String::new(),
+            source_context: None,
+            pose_batch: None,
         }
     }
 

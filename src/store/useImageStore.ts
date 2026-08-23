@@ -7,12 +7,16 @@ interface ImageState {
   loading: boolean;
   loadImages: () => Promise<void>;
   rescanImages: () => Promise<void>;
+  /** 用 Rust 命令返回的全量记录直接刷新（导入等已拿到最新列表的场景，避免二次扫描） */
+  applyImages: (images: ImageRecord[]) => void;
   deleteImage: (imageId: string) => Promise<void>;
 }
 
 export const useImageStore = create<ImageState>((set, get) => ({
   images: [],
   loading: false,
+
+  applyImages: images => set({ images }),
 
   loadImages: async () => {
     set({ loading: true });

@@ -45,14 +45,23 @@ export function resolveCarryGenerationMode(
 export function resolveVisionCarryPatch(carry: VisionCarryDraft): StudioCarryPatch {
   const generationType = resolveCarryGenerationMode(carry);
   const sourcePath = carry.sourceImagePath?.trim() || '';
+  const personPath = carry.personReferencePath?.trim() || '';
   const prompt = carry.prompt.trim();
   const negative = carry.negativePrompt?.trim() || '';
+  const toSource = (path: string): StudioSourceImage => ({
+    path,
+    name: path.split(/[\\/]/).pop() || path,
+  });
+  // i2i：视觉理解原图 + 人物替换参考图（第二张参考，仅身份/脸部/发型/体型语义经 Prompt 约束）
+  const i2iSources: StudioSourceImage[] = [];
+  if (generationType === 'i2i') {
+    if (sourcePath) i2iSources.push(toSource(sourcePath));
+    if (personPath && personPath !== sourcePath) i2iSources.push(toSource(personPath));
+  }
   return {
     generationType,
     generationMode: 'single',
-    i2iSources: generationType === 'i2i' && sourcePath
-      ? [{ path: sourcePath, name: sourcePath.split(/[\\/]/).pop() || sourcePath }]
-      : [],
+    i2iSources,
     i2iPrompt: generationType === 'i2i' ? prompt : '',
     t2iPrompt: generationType === 't2i' ? prompt : '',
     t2iNegative: generationType === 't2i' ? negative : '',

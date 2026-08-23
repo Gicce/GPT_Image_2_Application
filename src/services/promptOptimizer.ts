@@ -13,7 +13,6 @@ import { api } from './api';
 import { resolveByokConfigForUse } from '../features/aiProviders/store';
 import { buildProviderError, providerErrorCompact } from '../features/aiProviders/providerError';
 import type { RecreationFieldKey, VisualRecreationPlan } from '../features/vision/recreationPlan';
-import { PLAN_FIELD_LABELS } from '../features/vision/recreationPlan';
 
 export interface PromptOptimizeInput {
   /** 原始 Prompt（用户当前输入，不会被修改） */
@@ -348,21 +347,29 @@ export function resolvePromptOptimizerModelLabel(): string | null {
 const VISION_RECREATION_SYSTEM_PROMPT = `你是 CyImagePro 的视觉复刻 Prompt 重建专家。用户已对参考图完成视觉理解，得到一份结构化复刻方案和原始复刻 Prompt；现在用户在「调整要求」中用大白话提出修改意愿（例如"把主体换成蓝色小龙，整体更梦幻"），你负责基于原始方案重建最终生图 Prompt。
 
 规则：
-1. 锁定项规则（最高优先级）：标注为「锁定」的维度在最终 Prompt 中必须保持与结构化方案一致，显式强化保持约束（例如"保持原始上篮动作不变""保持原始镜头角度与构图关系"）；即使用户的调整要求与锁定项冲突，也优先保留锁定内容，并在 summary 中说明存在冲突、已优先保留锁定项。
-2. 未锁定的维度允许根据用户调整要求修改；用户没有提到的未锁定维度保持原始语义，不得漂移。
+1. 用户手动锁定的维度（最高优先级）：必须保持与结构化方案一致，显式强化保持约束（例如"保持原始上篮动作不变"）；即使用户的调整要求与手动锁定项冲突，也优先保留锁定内容，并在 summary 中说明存在冲突、已优先保留锁定项，且绝不能把它列入 changed_dimensions。
+2. 其余维度由你根据用户的调整要求判断：只有用户意图明确涉及的维度才允许修改；用户没有提到的维度保持原始语义，不得漂移，也不要为了"优化"擅自解锁。模糊意图（如"整体更梦幻一点"）只开放最贴切的少量维度（通常为 style / lighting / color 中的一到三项），禁止大面积放开。
 3. 修改要整体自洽：例如替换主体后需要重建与新人选自洽的整体描述（性别、年龄、外观、服装与场景/动作/风格的衔接），不是简单字符串替换。
 4. 原始复刻 Prompt 中与修改无关的视觉结构必须原样保留语义，不得漂移。
-5. positive_prompt 一律使用简体中文，输出为适合 gpt-image-2（GPT Image 系）执行的自然语言长句描述；禁止 Markdown 列表堆砌关键词，禁止中英双份。
-6. negative_prompt 用简体中文列出要避免的元素（含典型负面项：低画质、模糊、错误人体结构、多余手指、水印、文字等），并结合修改后的内容重新整理；无可避免项时输出空字符串。
-7. summary 是一句话中文摘要，说明做了什么修改、保留了什么（例如"已根据调整要求将主体替换为蓝色小龙并增强梦幻氛围，保留锁定的背景、构图与光线"），用于任务提示与历史记录。
+5. 「人物 / 主体」（subject）与「服装 / 造型」（clothing）是两个独立维度，必须区分判定：用户只换人（如"换成一个黑发男性"）而未提及服装 → subject 修改、clothing 保持原服装；用户只描述服装（如"人物不变，换成红色晚礼服"）→ clothing 修改、subject 保持；人物描述中同时包含服装（如"黑发男性，穿白色西装"）→ subject 与 clothing 都修改。
+6. 人物替换参考图仅用于身份、脸部、发型、体型等人物特征；是否采用参考图服装必须遵循调整要求中的「服装处理」指令（严格保留原图服装 / 使用参考人物服装 / 自定义服装），并在最终 Prompt 中显式写出服装保留或替换的约束（禁止只写"换这个人"式的模糊表达）。
+7. positive_prompt 一律使用简体中文，输出为适合 gpt-image-2（GPT Image 系）执行的自然语言长句描述；禁止 Markdown 列表堆砌关键词，禁止中英双份。
+8. negative_prompt 用简体中文列出要避免的元素（含典型负面项：低画质、模糊、错误人体结构、多余手指、水印、文字等），并结合修改后的内容重新整理；无可避免项时输出空字符串。
+9. summary 是一句话中文摘要，说明做了什么修改、保留了什么（例如"已根据调整要求将主体替换为蓝色小龙并增强梦幻氛围，保留手动锁定的背景、构图与光线"），用于任务提示与历史记录。
+10. changed_dimensions 必须如实列出你本轮实际修改的维度 key（只能是 subject / clothing / pose / composition / camera / scene / lighting / style / color 中的若干个；没有修改就输出空数组）。
+11. dimension_values 给出本轮修改后各维度的简短中文值（只包含 changed_dimensions 里的维度，每项一句话以内；例如 {"pose": "双手在胸前组成比心手势"}），供前端做修改对比展示。
 
 输出格式（严格遵守）：只输出一个 JSON 对象，不要输出解释、前言或 Markdown 代码块。
-{"positive_prompt": "最终生图 Prompt", "negative_prompt": "负面提示词", "summary": "一句话修改摘要"}`;
+{"positive_prompt": "最终生图 Prompt", "negative_prompt": "负面提示词", "summary": "一句话修改摘要", "changed_dimensions": ["pose"], "dimension_values": {"pose": "双手在胸前组成比心手势"}}`;
 
 export interface VisionRecreationOptimizeResult {
   optimizedPrompt: string;
   optimizedNegativePrompt: string;
   summary: string;
+  /** 本轮 AI 判定实际修改的维度（结构化修改意图；空数组 = 未修改任何维度）。 */
+  changedDimensions: RecreationFieldKey[];
+  /** 本轮修改后各维度值（维度 Diff 的「新」侧）。 */
+  dimensionValues: Partial<Record<RecreationFieldKey, string>>;
   providerName: string;
   modelName: string;
 }
@@ -371,16 +378,35 @@ export interface VisionRecreationOptimizeResult {
 export interface VisionRecreationOptimizeInput {
   /** 视觉理解编译出的原始复刻 Prompt。 */
   originalRecreationPrompt: string;
-  /** 结构化复刻方案（含各维度锁定状态）。 */
+  /** 结构化复刻方案（含各维度锁定状态与锁定来源 lockSource）。 */
   structuredRecreationPlan: VisualRecreationPlan;
-  /** 锁定维度（与 structuredRecreationPlan.fields[].locked 一致）。 */
-  lockedFields: RecreationFieldKey[];
   /** 用户在统一输入框写的大白话调整要求。 */
   userAdjustmentInstruction: string;
   /** 目标图片模型信息（默认 gpt-image-2）。 */
   targetImageModelInfo?: string;
   /** 原始负面提示词（供优化器重新整理）。 */
   originalNegativePrompt?: string;
+}
+
+/** 已知维度 key 集合（与 recreationPlan.RECREATION_FIELD_KEYS 同源；模块内字面量避免循环依赖）。 */
+const KNOWN_DIMENSION_KEYS = new Set<string>(['subject', 'clothing', 'pose', 'composition', 'camera', 'scene', 'lighting', 'style', 'color']);
+
+/** 解析 changed_dimensions（只接受已知维度 key；缺失 / 非数组 → 空数组）。 */
+function parseChangedDimensions(raw: unknown): RecreationFieldKey[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((item): item is RecreationFieldKey => typeof item === 'string' && KNOWN_DIMENSION_KEYS.has(item));
+}
+
+/** 解析 dimension_values（只保留已知维度 key 的字符串值）。 */
+function parseDimensionValues(raw: unknown): Partial<Record<RecreationFieldKey, string>> {
+  if (typeof raw !== 'object' || raw === null) return {};
+  const values: Partial<Record<RecreationFieldKey, string>> = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof value === 'string' && value.trim() && KNOWN_DIMENSION_KEYS.has(key)) {
+      values[key as RecreationFieldKey] = value.trim();
+    }
+  }
+  return values;
 }
 
 /** 失败归因（决定用户态中文文案；技术细节只进开发态日志）。 */
@@ -408,14 +434,26 @@ const DEFAULT_OPTIMIZE_SUMMARY = '已根据调整要求重新优化最终生图 
  */
 export function parseVisionOptimizerJson(
   reply: string,
-): { prompt: string; negative?: string; summary?: string } | null {
+): {
+  prompt: string;
+  negative?: string;
+  summary?: string;
+  changedDimensions: RecreationFieldKey[];
+  dimensionValues: Partial<Record<RecreationFieldKey, string>>;
+} | null {
   const record = extractBalancedJsonRecord(reply);
   if (!record) return null;
   const positive = typeof record.positive_prompt === 'string' ? record.positive_prompt.trim() : '';
   if (!positive) return null;
   const negative = typeof record.negative_prompt === 'string' ? record.negative_prompt.trim() : '';
   const summary = typeof record.summary === 'string' ? record.summary.trim() : '';
-  return { prompt: positive, negative: normalizeNegative(negative), summary: summary || undefined };
+  return {
+    prompt: positive,
+    negative: normalizeNegative(negative),
+    summary: summary || undefined,
+    changedDimensions: parseChangedDimensions(record.changed_dimensions),
+    dimensionValues: parseDimensionValues(record.dimension_values),
+  };
 }
 
 /** 摘要段标签：SUMMARY / 修改摘要 / 摘要（行首锚定） */
@@ -427,7 +465,13 @@ const SUMMARY_LABEL = /(?:^|\n)\s*(?:SUMMARY|修改摘要|摘要)\s*[:：]\s*/i;
  */
 export function parseVisionOptimizerReply(
   reply: string,
-): { prompt: string; negative?: string; summary?: string } | null {
+): {
+  prompt: string;
+  negative?: string;
+  summary?: string;
+  changedDimensions: RecreationFieldKey[];
+  dimensionValues: Partial<Record<RecreationFieldKey, string>>;
+} | null {
   const json = parseVisionOptimizerJson(reply);
   if (json) return json;
 
@@ -449,28 +493,33 @@ export function parseVisionOptimizerReply(
     ? withoutNegative.slice(0, labelMatch.index) + withoutNegative.slice(labelMatch.index + labelMatch[0].length)
     : withoutNegative
   ).trim();
-  if (prompt) return { prompt, negative, summary: summary || undefined };
+  if (prompt) {
+    return { prompt, negative, summary: summary || undefined, changedDimensions: [], dimensionValues: {} };
+  }
   return null;
 }
 
-/** 构建复刻优化 user 内容（纯函数，供测试锁定「锁定项真正进入提示词」）。 */
+/** 构建复刻优化 user 内容（纯函数，供测试锁定「用户手动锁定真正进入提示词」）。 */
 export function buildVisionRecreationUserContent(input: VisionRecreationOptimizeInput): string {
   const planLines = input.structuredRecreationPlan.fields
     .map(field => {
-      const flag = field.locked ? '锁定（必须保持不变）' : '可修改（允许按调整要求修改）';
+      const flag = field.lockSource === 'user_override'
+        ? (field.locked ? '用户手动锁定（最高优先级：必须保持不变）' : '用户手动开放（允许按调整要求修改）')
+        : '自动（由你按调整要求判断：意图明确涉及才修改，未提及则保持原语义）';
       return `- ${field.label}［${flag}］：${field.value || '（未识别）'}`;
     })
     .join('\n');
-  const lockedLines = input.lockedFields.length
-    ? input.lockedFields.map(key => PLAN_FIELD_LABELS[key] ?? key).join('、')
-    : '（无）';
+  const userLocked = input.structuredRecreationPlan.fields
+    .filter(field => field.lockSource === 'user_override' && field.locked)
+    .map(field => field.label);
+  const lockedLines = userLocked.length ? userLocked.join('、') : '（无）';
 
   return [
     '【结构化复刻方案】',
     `参考图概述：${input.structuredRecreationPlan.summary}`,
     planLines,
     '',
-    '【锁定项（最高优先级：必须保持不变，与调整要求冲突时优先保留锁定项）】',
+    '【用户手动锁定项（最高优先级：必须保持不变；与调整要求冲突时优先保留，且不得列入 changed_dimensions）】',
     lockedLines,
     '',
     '【用户调整要求（大白话）】',
@@ -484,7 +533,7 @@ export function buildVisionRecreationUserContent(input: VisionRecreationOptimize
     '',
     `目标图片模型：${input.targetImageModelInfo || 'gpt-image-2（GPT Image 系，自然语言长句偏好）'}`,
     '',
-    '请基于以上信息重建最终生图 Prompt：按调整要求修改未锁定维度，锁定维度显式强化保持约束，其余视觉结构保持原语义。',
+    '请基于以上信息重建最终生图 Prompt：只修改用户意图明确涉及的非手动锁定维度，手动锁定维度显式强化保持约束，其余视觉结构保持原语义；并如实输出 changed_dimensions 与 dimension_values。',
   ].join('\n');
 }
 
@@ -573,6 +622,8 @@ export async function optimizeVisionRecreation(
         optimizedPrompt: parsed.prompt,
         optimizedNegativePrompt: parsed.negative ?? '',
         summary: parsed.summary || DEFAULT_OPTIMIZE_SUMMARY,
+        changedDimensions: parsed.changedDimensions,
+        dimensionValues: parsed.dimensionValues,
         providerName: byok.profileName,
         modelName: byok.modelEntity.display_name || byok.model,
       },

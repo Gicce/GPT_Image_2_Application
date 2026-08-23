@@ -208,7 +208,12 @@ pub fn build_batch_redo_task(
         subject_entities: source.subject_entities.clone(),
         source_task_id: source.source_task_id.clone(),
         source_task_kind: source.source_task_kind.clone(),
+        source_app: source.source_app.clone(),
+        source_request_id: String::new(),
+        source_context: source.source_context.clone(),
         stage_note: String::new(),
+        // 动作白膜批：批量重做克隆保留批元数据（来源继承；batchId 查找仍命中原任务）
+        pose_batch: source.pose_batch.clone(),
     })
 }
 
@@ -260,6 +265,10 @@ mod tests {
             source_task_id: None,
             source_task_kind: String::new(),
             stage_note: String::new(),
+            source_app: String::new(),
+            source_request_id: String::new(),
+            source_context: None,
+            pose_batch: None,
         };
         base
     }

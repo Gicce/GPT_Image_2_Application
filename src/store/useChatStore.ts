@@ -48,6 +48,14 @@ import {
   resolveConversationSourceImage,
   type SourceImageSelection,
 } from '../utils/agent/taskSourceImage';
+import {
+  canAutoBindTaskImage,
+  deriveTaskImageBindingAfterUserChange,
+  resolveStoredTaskImageBinding,
+  shouldAdvanceActiveImageOnTaskSuccess,
+  type TaskImageBindingMode,
+} from '../utils/agent/taskImageBinding';
+import { useConversationDraftStore, ANONYMOUS_DRAFT_KEY } from './useConversationDraftStore';
 import { extractDistinctObjects } from '../utils/generationIntent';
 import { resolveByokAgentConfig, resolveByokConfigForUse } from '../features/aiProviders/store';
 import { buildProviderError, providerErrorCompact } from '../features/aiProviders/providerError';
@@ -246,6 +254,12 @@ interface ChatState {
     localPath?: string | null,
     source?: 'explicit' | 'auto',
   ) => void;
+  /**
+   * 任务图片绑定四态重算（V4.0.8）：Composer 的 task 附件（本地/拖入/图库）
+   * 增删后由 UI 调用，把「用户明确为空」收敛为 none 并持久化。
+   * 只对真实会话生效（匿名草稿无会话可写）。
+   */
+  syncTaskImageBinding: (conversationId: string) => void;
   /**
    * 「切换图片」：把当前任务卡（waiting_confirm / planning_failed / needs_clarification）
    * 的源图快照切换为用户手动选择的图片。只覆盖当前任务，不污染会话默认规则。
@@ -506,6 +520,7 @@ function buildPersistedConversation(conversation: ChatConversation): ChatConvers
     active_task_id: conversation.active_task_id,
     active_image_id: conversation.active_image_id,
     active_image_path: conversation.active_image_path,
+    active_image_binding: conversation.active_image_binding,
     chat_mode: conversation.chat_mode,
     selected_agent_profile_id: conversation.selected_agent_profile_id,
     selected_agent_model_id: conversation.selected_agent_model_id,
@@ -1183,6 +1198,8 @@ function rehydrateConversation(conversation: ChatConversation): ChatConversation
   const proposalMessage = [...conversation.messages]
     .reverse()
     .find(message => message.agent_proposal && ['draft', 'submitting'].includes(message.agent_proposal.status));
+  // 绑定四态归一（含旧数据迁移）：none 持久标记优先于「空 = 未初始化」的旧推断
+  const activeImageBinding = resolveStoredTaskImageBinding(conversation);
 
   if (!activeDraft && proposalMessage?.agent_proposal) {
     const proposal = proposalMessage.agent_proposal;
@@ -1231,6 +1248,7 @@ function rehydrateConversation(conversation: ChatConversation): ChatConversation
       ...conversation,
       conversation_mode: conversation.conversation_mode || 'free_chat',
       active_task_draft: null,
+      active_image_binding: activeImageBinding,
     };
   }
 
@@ -1245,6 +1263,7 @@ function rehydrateConversation(conversation: ChatConversation): ChatConversation
     ...conversation,
     conversation_mode: conversation.conversation_mode || 'task_flow',
     active_task_draft: normalizedDraft,
+    active_image_binding: activeImageBinding,
     messages,
   };
 }
@@ -2453,17 +2472,33 @@ async function hydrateTaskMessageImageUrls(convId?: string | null) {
   }
 }
 
+/** 会话任务图片绑定四态的唯一解析入口（含旧数据迁移）。 */
+export function resolveConversationTaskImageBinding(conversation: ChatConversation | undefined): TaskImageBindingMode {
+  if (!conversation) return 'uninitialized';
+  return resolveStoredTaskImageBinding({
+    active_image_binding: conversation.active_image_binding ?? null,
+    active_image_id: conversation.active_image_id ?? null,
+    active_image_source: conversation.active_image_source ?? null,
+  });
+}
+
 /**
- * 扫描会话，对于没有 active_image_id 但存在成功任务卡的会话，
+ * 扫描会话，对处于 uninitialized 且存在成功任务卡的会话，
  * 把最近一张成功图片作为该会话的 active image。
  * 这是从历史会话或应用重启中恢复"连续编辑上下文"的关键。
+ *
+ * ====== V4.0.8 复活 Bug 根因修复 ======
+ * 旧实现只看「active_image_id 为空」就自动补绑 —— 用户点 X 解绑后，
+ * 切页面回来（loadConversations → 本函数）图片立即复活。
+ * 现在只有 uninitialized（从未做过任务图片决策）才允许首次自动绑定；
+ * none / auto / manual 都是用户的明确状态，恢复时只还原已保存的数据。
  */
-function restoreActiveImageIds(convId?: string | null) {
+export function restoreActiveImageIds(convId?: string | null) {
   const conversations = useChatStore.getState().conversations
     .filter(conv => !convId || conv.id === convId);
   let anyChanged = false;
   for (const conv of conversations) {
-    if (conv.active_image_id && conv.active_image_path) continue;
+    if (!canAutoBindTaskImage(resolveConversationTaskImageBinding(conv))) continue;
     let foundImageId: string | null = null;
     let foundImagePath: string | null = null;
     let foundSetAt: string | null = null;
@@ -2489,6 +2524,7 @@ function restoreActiveImageIds(convId?: string | null) {
                 active_image_id: foundImageId,
                 active_image_path: foundImagePath,
                 active_image_source: 'auto',
+                active_image_binding: 'auto',
                 ...(foundSetAt ? { active_image_set_at: foundSetAt } : {}),
               }
             : c,
@@ -3293,6 +3329,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       error: null,
       runtimeById: { ...state.runtimeById, [id]: { isSending: false } },
     }));
+    // 匿名草稿迁移：无会话状态下输入的文本 / 拖入的图片跟着进入新会话，不丢失。
+    useConversationDraftStore.getState().adoptDraft(ANONYMOUS_DRAFT_KEY, id);
     void get().saveConversation(id);
     return id;
   },
@@ -3310,6 +3348,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const controller = get().abortCtrls[id];
     if (controller) controller.abort();
     clearScheduledConversationSave(id);
+    // 会话删除 = 唯一允许清理 Composer 草稿的场景（输入 / chat / task 图片附件）。
+    // 页面切换与会话切换绝不清理。
+    useConversationDraftStore.getState().deleteDraft(id);
     set(state => {
       const conversations = state.conversations.filter(item => item.id !== id);
       const runtimeById = { ...state.runtimeById };
@@ -4183,22 +4224,59 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   setActiveImageId: (conversationId, imageId, localPath, source = 'auto') => {
+    // 解绑（imageId=null）全部来自用户显式操作（X / 清除全部）：
+    // 绑定态收敛为 none（若仍有手动任务图片则 manual），并随会话持久化 ——
+    // "用户明确为空"是有效状态，loadConversations / restoreActiveImageIds 不得再自动补图。
+    const manualImageCount = (useConversationDraftStore.getState().drafts[conversationId]?.task || [])
+      .filter(att => att.type === 'image').length;
     set(state => ({
-      conversations: state.conversations.map(c =>
-        c.id === conversationId
-          ? {
-              ...c,
-              active_image_id: imageId,
-              active_image_path: localPath !== undefined ? localPath : (imageId ? c.active_image_path : null),
-              // 'explicit' = 用户点"编辑此图"手动绑定；'auto' = 系统推进到最新图。
-              active_image_source: imageId ? source : undefined,
-              active_image_set_at: imageId ? new Date().toISOString() : undefined,
-            }
-          : c,
-      ),
+      conversations: state.conversations.map(c => {
+        if (c.id !== conversationId) return c;
+        const previousBinding = resolveConversationTaskImageBinding(c);
+        const nextBinding: TaskImageBindingMode = imageId
+          ? (source === 'explicit' ? 'manual' : 'auto')
+          : deriveTaskImageBindingAfterUserChange({
+              previousBinding,
+              hasActiveImage: false,
+              activeImageSource: null,
+              manualImageCount,
+            });
+        return {
+          ...c,
+          active_image_id: imageId,
+          active_image_path: localPath !== undefined ? localPath : (imageId ? c.active_image_path : null),
+          // 'explicit' = 用户点"编辑此图"手动绑定；'auto' = 系统推进到最新图。
+          active_image_source: imageId ? source : undefined,
+          active_image_set_at: imageId ? new Date().toISOString() : undefined,
+          active_image_binding: nextBinding,
+        };
+      }),
     }));
     try {
       void get().saveConversation(conversationId);
+    } catch {}
+  },
+
+  syncTaskImageBinding: (conversationId) => {
+    const conversation = get().conversations.find(c => c.id === conversationId);
+    if (!conversation) return;
+    const previousBinding = resolveConversationTaskImageBinding(conversation);
+    const manualImageCount = (useConversationDraftStore.getState().drafts[conversationId]?.task || [])
+      .filter(att => att.type === 'image').length;
+    const nextBinding = deriveTaskImageBindingAfterUserChange({
+      previousBinding,
+      hasActiveImage: !!(conversation.active_image_id && conversation.active_image_path),
+      activeImageSource: conversation.active_image_source ?? null,
+      manualImageCount,
+    });
+    if (nextBinding === previousBinding && conversation.active_image_binding !== undefined) return;
+    set(state => ({
+      conversations: state.conversations.map(c =>
+        c.id === conversationId ? { ...c, active_image_binding: nextBinding } : c,
+      ),
+    }));
+    try {
+      void get().scheduleSaveConversation(conversationId);
     } catch {}
   },
 
@@ -5395,18 +5473,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
         if (imageId && imagePath) {
           const currentConv = get().conversations.find(c => c.id === conv.id);
           if (!currentConv) continue;
+          const currentBinding = resolveConversationTaskImageBinding(currentConv);
           const alreadyCurrent = currentConv.active_image_id === imageId
             && currentConv.active_image_path === imagePath;
           const candidateAt = Date.parse(task.completed_at || task.created_at || '');
           const currentAt = currentConv.active_image_set_at
             ? Date.parse(currentConv.active_image_set_at)
             : NaN;
-          // 时间不可比时（旧数据无 set_at / 时间缺失）保守允许推进 ——
-          // 与旧行为一致，避免历史会话卡死在旧图上。
-          const isForward = !Number.isFinite(candidateAt)
-            || !Number.isFinite(currentAt)
-            || candidateAt >= currentAt;
-          if (!alreadyCurrent && isForward) {
+          // none = 用户已明确拒绝绑定，新结果图也绝不自动绑定；
+          // 其余状态沿用「只前进不回退」守卫（时间不可比时保守放行，避免旧数据卡死在旧图）。
+          const canAdvance = !alreadyCurrent
+            && shouldAdvanceActiveImageOnTaskSuccess({ binding: currentBinding, candidateAtMs: candidateAt, currentAtMs: currentAt });
+          if (canAdvance) {
             console.log('[Conversation] activeImageId advanced:', imageId, {
               taskId,
               candidateAt: task.completed_at || task.created_at,
@@ -5421,6 +5499,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
                       active_image_path: imagePath,
                       active_task_id: taskId,
                       active_image_source: 'auto',
+                      active_image_binding: 'auto',
                       active_image_set_at: task.completed_at
                         || task.created_at
                         || new Date().toISOString(),
@@ -5428,9 +5507,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
                   : c,
               ),
             }));
-          } else if (!alreadyCurrent && !isForward) {
-            console.log('[Conversation] activeImageId advance blocked (stale task event)', {
+          } else if (!alreadyCurrent) {
+            console.log('[Conversation] activeImageId advance blocked', {
               taskId,
+              binding: currentBinding,
               candidateAt: task.completed_at || task.created_at,
               currentSetAt: currentConv.active_image_set_at,
             });

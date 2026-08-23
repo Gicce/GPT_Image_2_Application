@@ -395,7 +395,7 @@ const MAX_SOURCE_IMAGE_BYTES: u64 = 25 * 1024 * 1024;
 /// 直传给视觉模型的最长边（更大的图本地降采样重编码 JPEG，控制请求体）。
 const MAX_TRANSMIT_EDGE: u32 = 1536;
 
-fn encode_image_data_url(path: &str) -> Result<String, String> {
+pub(crate) fn encode_image_data_url(path: &str) -> Result<String, String> {
     let p = std::path::Path::new(path);
     if !p.exists() {
         return Err(format!("图片不存在：{}", path));
@@ -440,10 +440,10 @@ fn encode_image_data_url(path: &str) -> Result<String, String> {
 
 // ======================= 视觉模型调用（OpenAI 兼容 chat completions） =======================
 
-struct VisionCallError {
-    kind: String,
-    message: String,
-    status: Option<u16>,
+pub(crate) struct VisionCallError {
+    pub(crate) kind: String,
+    pub(crate) message: String,
+    pub(crate) status: Option<u16>,
 }
 
 fn classify_vision_http_error(status: u16, body_text: &str) -> VisionCallError {
@@ -514,7 +514,7 @@ fn extract_chat_content(body: &serde_json::Value) -> Option<String> {
     None
 }
 
-async fn call_vision_model(
+pub(crate) async fn call_vision_model(
     base_url: &str,
     token: &str,
     model: &str,

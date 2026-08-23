@@ -1,0 +1,251 @@
+/* 内置图片查看器（全局单例）：全 Token 取色，禁止新 hex。
+   结构：overlay（遮罩，点击空白关闭）→ viewport（图片视口，滚轮缩放作用域）。 */
+
+.image-viewer-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 4000;
+  background: var(--bg-overlay);
+  display: flex;
+}
+
+/* 图片视口：不铺满整屏（四周留出真正可点击的遮罩），滚轮缩放只在本区域生效 */
+.image-viewer-viewport {
+  position: absolute;
+  top: 52px;
+  bottom: 76px;
+  left: 20px;
+  right: 20px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* 详情面板展开时视口右移，不与面板重叠 */
+.image-viewer-viewport.has-detail {
+  right: 316px;
+}
+
+.image-viewer-viewport.is-pannable {
+  cursor: grab;
+}
+
+.image-viewer-viewport.is-pannable:active {
+  cursor: grabbing;
+}
+
+.image-viewer-img {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  max-width: none;
+  max-height: none;
+  transform-origin: center center;
+  user-select: none;
+  pointer-events: none;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+}
+
+.image-viewer-loading,
+.image-viewer-error {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 14px;
+  color: var(--text-secondary);
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  padding: 16px 24px;
+}
+
+/* 顶栏：标题 + 尺寸 + 位置指示 + 详情 + 关闭 */
+.image-viewer-topbar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  background: var(--bg-dialog);
+  border-bottom: 1px solid var(--border-default);
+  z-index: 2;
+}
+
+.image-viewer-title {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+
+.image-viewer-title strong {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.image-viewer-title span {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* 右侧信息面板（Prompt / 业务 metadata） */
+.image-viewer-detail {
+  position: absolute;
+  top: 45px;
+  right: 0;
+  bottom: 56px;
+  width: 300px;
+  background: var(--bg-dialog);
+  border-left: 1px solid var(--border-default);
+  overflow-y: auto;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  z-index: 2;
+}
+
+.image-viewer-prompt {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.image-viewer-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.image-viewer-detail-head span {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.image-viewer-link {
+  border: none;
+  background: none;
+  color: var(--text-link);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 0;
+}
+
+.image-viewer-link:hover {
+  color: var(--text-link-hover);
+}
+
+.image-viewer-prompt p {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  word-break: break-all;
+  white-space: pre-wrap;
+  max-height: 40vh;
+  overflow-y: auto;
+  background: var(--bg-section);
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+.image-viewer-meta-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.image-viewer-meta-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  min-width: 0;
+}
+
+.image-viewer-meta-label {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.image-viewer-meta-value {
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 底部工具栏：导航 / 缩放 / 复制 / 另存为 */
+.image-viewer-toolbar {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--bg-dialog);
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  box-shadow: var(--card-shadow);
+  z-index: 2;
+}
+
+.image-viewer-btn {
+  min-width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  background: var(--bg-card);
+  color: var(--text-primary);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 0 6px;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.image-viewer-btn:hover {
+  border-color: var(--accent-primary);
+  background: var(--accent-primary-light);
+}
+
+.image-viewer-btn-text {
+  font-size: 12px;
+  padding: 0 10px;
+}
+
+.image-viewer-close {
+  font-size: 18px;
+}
+
+.image-viewer-zoom {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+  min-width: 44px;
+  text-align: center;
+}
+
+.image-viewer-toolbar-divider {
+  width: 1px;
+  height: 18px;
+  background: var(--border-default);
+  margin: 0 4px;
+}

@@ -1,5 +1,13 @@
 .gallery-page {
   min-width: 0;
+  /* 拖拽导入 Overlay 的定位上下文：铺满主内容区视口（不遮左侧主导航） */
+  position: relative;
+  min-height: 100%;
+}
+
+/* 详情 Modal 大图点击进入全局 ImageViewer（V4.1 渐进迁移） */
+.gallery-detail-modal .preview-body img {
+  cursor: zoom-in;
 }
 
 /* ===== 工具栏：搜索 / 筛选 / 排序 / 总数 ===== */

@@ -54,7 +54,8 @@ function makeRecreation(prompt: string): RecreationState {
     originalPrompt: prompt,
     originalNegativePrompt: '低画质',
     editState: 'ready' as const,
-    modified: false,
+    semanticRevision: 0,
+    optimizedRevision: 0,
     adjustInstruction: '',
     optimizedPrompt: prompt,
     optimizedNegativePrompt: '低画质',
@@ -124,7 +125,14 @@ describe('Workspace 保存与恢复（页面切换 / 组件卸载 / 应用重启
       visionTaskId: 'task-7',
       sessionId: 'session-9',
     });
-    store.getState().setAdjustmentInput('把球衣换成蓝色');
+    store.getState().setModificationDraft({
+      freeText: '把球衣换成蓝色',
+      activeDimensions: ['clothing'],
+      person: null,
+      clothingPolicy: 'preserve_original',
+      customClothing: '',
+      replicationBoost: false,
+    });
     store.getState().flushPendingPersist(); // 文本输入为防抖落盘（组件卸载时同样冲刷）
 
     const reloaded = await freshStore();
@@ -136,8 +144,39 @@ describe('Workspace 保存与恢复（页面切换 / 组件卸载 / 应用重启
     expect(state.visionTaskId).toBe('task-7');
     expect(state.sessionId).toBe('session-9');
     expect(state.stage).toBe('ready');
-    // 用户修改要求同样恢复
-    expect(state.adjustmentInput).toBe('把球衣换成蓝色');
+    // 用户结构化修改意图同样恢复
+    expect(state.modificationDraft.freeText).toBe('把球衣换成蓝色');
+    expect(state.modificationDraft.activeDimensions).toEqual(['clothing']);
+  });
+
+  it('旧快照（V4.1 前 adjustmentInput 纯文本）迁移为 modificationDraft.freeText，维度 / 服装为默认', async () => {
+    store.getState().setSource('D:/imgs/ref.png');
+    // 手工写入旧格式快照（无 modificationDraft，有 adjustmentInput）
+    const raw = JSON.parse(localStorage.getItem('vision_workspace_v1')!);
+    delete raw.modificationDraft;
+    raw.adjustmentInput = '背景换成夜景';
+    localStorage.setItem('vision_workspace_v1', JSON.stringify(raw));
+
+    const reloaded = await freshStore();
+    const draft = reloaded.getState().modificationDraft;
+    expect(draft.freeText).toBe('背景换成夜景');
+    expect(draft.activeDimensions).toEqual([]);
+    expect(draft.clothingPolicy).toBe('preserve_original');
+    expect(draft.person).toBeNull();
+  });
+
+  it('旧快照 recreation（modified 标记）恢复为修订语义（needsOptimization 保持）', async () => {
+    store.getState().setSource('D:/imgs/ref.png');
+    const legacy = { ...makeRecreation('P'), editState: 'dirty' as const, modified: true, adjustInstruction: '换背景' };
+    delete (legacy as Partial<typeof legacy>).semanticRevision;
+    delete (legacy as Partial<typeof legacy>).optimizedRevision;
+    store.getState().setRecreation(legacy as RecreationState);
+
+    const reloaded = await freshStore();
+    const recreation = reloaded.getState().recreation!;
+    expect(recreation.semanticRevision).toBe(1);
+    expect(recreation.optimizedRevision).toBe(0);
+    expect(recreation.adjustInstruction).toBe('换背景');
   });
 
   it('用户编辑的最终 Prompt / 负面词防抖落盘（500ms 内不逐字符写盘）', async () => {

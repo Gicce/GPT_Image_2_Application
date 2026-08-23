@@ -1,10 +1,13 @@
 mod batch_redo;
 mod commands;
+mod evaluation;
 mod models;
+mod pose_batch;
 mod reconciliation;
 mod storage;
 mod task_runner;
 mod video_bridge;
+mod video_task_bridge;
 mod vision;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -58,6 +61,13 @@ pub fn run() {
                 }
             }
 
+            // CY Image Task Bridge V1 接收端：CY Video Studio → CyImagePro 真实图片任务
+            // （127.0.0.1 随机端口 + 发现文件 + Bearer Token；失败不阻塞主应用）
+            match video_task_bridge::start_with_discovery(app.handle().clone()) {
+                Ok((port, _token)) => println!("[video-task-bridge] listening on 127.0.0.1:{port}"),
+                Err(e) => eprintln!("[video-task-bridge] start failed: {e}"),
+            }
+
             std::thread::spawn(move || {
                 let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
                 rt.block_on(async {
@@ -77,6 +87,7 @@ pub fn run() {
         })
         .on_window_event(move |_window, event| {
             if let tauri::WindowEvent::Destroyed = event {
+                video_task_bridge::cleanup_discovery();
                 shutdown2.store(true, Ordering::Relaxed);
             }
         })
@@ -110,8 +121,14 @@ pub fn run() {
             vision::vision_analyze_image,
             vision::vision_compare_images,
             vision::compute_color_similarity,
+            evaluation::evaluate_image,
+            evaluation::get_image_evaluations,
+            evaluation::update_image_evaluation_feedback,
+            evaluation::delete_image_evaluation,
+            evaluation::set_image_favorite,
             commands::get_images,
             commands::rescan_image_library,
+            commands::import_images_to_library,
             commands::get_image_meta,
             commands::update_image_index,
             commands::delete_image,

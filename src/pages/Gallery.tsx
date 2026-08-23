@@ -3,51 +3,40 @@ import { useImageStore } from '../store/useImageStore';
 import { useTaskStore } from '../store/useTaskStore';
 import { useAuthStore } from '../store/useAuthStore';
 import { useImageEditStore } from '../store/useImageEditStore';
+import { useEvaluationStore } from '../store/useEvaluationStore';
+import {
+  matchesFeedbackFilter,
+  matchesScoreBucket,
+  type EvaluationSort,
+  type FeedbackFilter,
+  type ScoreBucket,
+} from '../features/evaluation/evaluationModel';
+import EvaluationBadge from '../features/evaluation/EvaluationBadge';
+import EvaluationPanel from '../features/evaluation/EvaluationPanel';
 import { api } from '../services/api';
 import { authorizeImageTask, settleImageTask, createRequestId, registerTaskAuthorization } from '../services/billingService';
 import { setAsAvatarFromDataUrl } from '../services/avatarService';
 import type { ImageRecord, Task } from '../types';
 import { dedupeGalleryItems } from '../utils/galleryIdentity';
 import { copyText } from '../utils/clipboard';
+import { resolveImageSource, IMAGE_SOURCE_FILTER_TABS, type GallerySourceFilter } from '../utils/imageSource';
+import { resolveImageDetailMetadata, IMAGE_EXECUTION_MODEL } from '../features/gallery/imageDetailMetadata';
 import { toastError, toastInfo, toastLoading, toastSuccess, toastDismiss, toastUpdate } from '../components/Toast';
 import PromptTextBlock from '../components/PromptTextBlock';
+import GalleryDropOverlay from '../components/GalleryDropOverlay';
+import { useGalleryFileDrop } from '../hooks/useGalleryFileDrop';
+import { useImageViewerStore } from '../store/useImageViewerStore';
 import './Gallery.css';
 
 const PAGE_SIZE = 24;
-/** 图片执行模型（Rust task_runner 固定使用 CyImagePro 图片服务） */
-const IMAGE_EXECUTION_MODEL = 'GPT Image 2';
 /** 启动 CY Video Studio 后轮询 Bridge 的间隔 / 最长等待 */
 const VIDEO_BRIDGE_POLL_INTERVAL_MS = 500;
 const VIDEO_BRIDGE_WAIT_TIMEOUT_MS = 15000;
 const VIDEO_NOT_FOUND_PREFIX = 'CY_VIDEO_NOT_FOUND:';
 const VIDEO_OFFLINE_PREFIX = 'CY_VIDEO_OFFLINE:';
 
-type GalleryFilter = 'all' | 't2i' | 'i2i' | 'edit_result' | 'batch';
-type GallerySort = 'newest' | 'oldest' | 'name';
-
-const FILTER_TABS: { key: GalleryFilter; label: string }[] = [
-  { key: 'all', label: '全部' },
-  { key: 't2i', label: '文生图' },
-  { key: 'i2i', label: '图生图' },
-  { key: 'edit_result', label: '编辑结果' },
-  { key: 'batch', label: '批量结果' },
-];
-
-/** 图片卡片 / 详情共用的任务归类 */
-function classifyImage(image: ImageRecord, task?: Task): { typeLabel: string; filterKey: GalleryFilter; isLocal: boolean } {
-  if (image.source_kind === 'library_input') {
-    return { typeLabel: '本地导入', filterKey: 'all', isLocal: true };
-  }
-  if (!task) return { typeLabel: '生成结果', filterKey: 'all', isLocal: false };
-  const isBatch = task.execution_mode === 'batch' || task.count > 1;
-  if (task.task_type === 'edit') {
-    return { typeLabel: isBatch ? `图生图 · 批量` : '图生图', filterKey: isBatch ? 'batch' : 'i2i', isLocal: false };
-  }
-  if (task.task_type === 'remove_background') {
-    return { typeLabel: '编辑结果（抠图）', filterKey: 'edit_result', isLocal: false };
-  }
-  return { typeLabel: isBatch ? `文生图 · 批量` : '文生图', filterKey: isBatch ? 'batch' : 't2i', isLocal: false };
-}
+type GalleryFilter = GallerySourceFilter;
+type GallerySort = EvaluationSort;
 
 /** 图片标题：优先方案标题（批量方案任务的 per-image description），回落任务 Prompt 摘要 / 文件名 */
 function imageTitle(image: ImageRecord, task?: Task): string {
@@ -84,16 +73,27 @@ function openImageEditor(image: ImageRecord, task?: Task): void {
 export default function Gallery() {
   const { images, loadImages, deleteImage } = useImageStore();
   const { tasks, loadTasks, createAndExecuteTask } = useTaskStore();
+  const evaluations = useEvaluationStore(s => s.evaluations);
+  const loadEvaluations = useEvaluationStore(s => s.loadAll);
   const [preview, setPreview] = useState<ImageRecord | null>(null);
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const [thumbUrls, setThumbUrls] = useState<Record<string, string>>({});
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<GalleryFilter>('all');
   const [sort, setSort] = useState<GallerySort>('newest');
+  const [scoreBucket, setScoreBucket] = useState<ScoreBucket>('all');
+  const [feedback, setFeedback] = useState<FeedbackFilter>('all');
   const loadingRef = useRef<Set<string>>(new Set());
+
+  // OS 文件拖入导入：仅 Gallery 页挂载时生效；详情 Modal / 全局 ImageViewer 打开时
+  // 停用（Active Modal > Gallery File Drop），当前筛选 / 排序不受导入影响
+  const viewerOpen = useImageViewerStore(s => s.open);
+  const { state: dropState } = useGalleryFileDrop({ enabled: !preview && !viewerOpen });
 
   useEffect(() => { void loadImages(); }, [loadImages]);
   useEffect(() => { void loadTasks(); }, [loadTasks]);
+  // 评价只读持久化缓存（筛选 / 排序绝不现场重新评价）
+  useEffect(() => { void loadEvaluations(); }, [loadEvaluations]);
 
   const taskById = useMemo(() => {
     const map = new Map<string, Task>();
@@ -105,17 +105,28 @@ export default function Gallery() {
     const base = [...images];
     base.sort((a, b) => {
       if (sort === 'name') return a.file_name.localeCompare(b.file_name, 'zh-CN');
+      if (sort === 'score_desc' || sort === 'score_asc') {
+        const sa = evaluations[a.id]?.overall_score ?? null;
+        const sb = evaluations[b.id]?.overall_score ?? null;
+        // 未评价排最后（两种方向一致；0 是合法分数，绝不与未评价混排）
+        if (sa == null && sb == null) return 0;
+        if (sa == null) return 1;
+        if (sb == null) return -1;
+        return sort === 'score_desc' ? sb - sa : sa - sb;
+      }
       const diff = new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
       return sort === 'oldest' ? diff : -diff;
     });
     return dedupeGalleryItems(base);
-  }, [images, sort]);
+  }, [images, sort, evaluations]);
 
   const filtered = useMemo(() => {
     const keyword = search.trim().toLowerCase();
     return sorted.filter(image => {
       const task = taskById.get(image.task_id);
-      if (filter !== 'all' && classifyImage(image, task).filterKey !== filter) return false;
+      if (filter !== 'all' && resolveImageSource(image, task, taskById).filterKey !== filter) return false;
+      if (!matchesScoreBucket(evaluations[image.id], scoreBucket)) return false;
+      if (!matchesFeedbackFilter(evaluations[image.id], feedback)) return false;
       if (!keyword) return true;
       const haystack = [
         image.file_name,
@@ -126,13 +137,13 @@ export default function Gallery() {
       ].filter(Boolean).join(' ').toLowerCase();
       return haystack.includes(keyword);
     });
-  }, [sorted, search, filter, taskById]);
+  }, [sorted, search, filter, taskById, evaluations, scoreBucket, feedback]);
 
   const visibleImages = filtered.slice(0, visibleCount);
   const hasMore = visibleCount < filtered.length;
 
   // 筛选 / 搜索变化时重置分页
-  useEffect(() => { setVisibleCount(PAGE_SIZE); }, [search, filter, sort]);
+  useEffect(() => { setVisibleCount(PAGE_SIZE); }, [search, filter, sort, scoreBucket, feedback]);
 
   const loadThumb = useCallback(async (img: ImageRecord) => {
     if (img.missing) return;
@@ -175,8 +186,9 @@ export default function Gallery() {
     <div className="page gallery-page">
       <div className="page-header">
         <h2>图片库</h2>
-        <p>查看、预览和管理全部生成结果（共 {sorted.length} 张）。</p>
+        <p>查看、预览和管理全部图片（共 {sorted.length} 张）。支持从系统文件管理器拖入图片导入。</p>
       </div>
+      <GalleryDropOverlay state={dropState} />
 
       {sorted.length === 0 ? (
         <div className="empty-state">
@@ -193,7 +205,7 @@ export default function Gallery() {
               placeholder="搜索文件名、需求或任务 ID…"
             />
             <div className="gallery-filter-tabs">
-              {FILTER_TABS.map(tab => (
+              {IMAGE_SOURCE_FILTER_TABS.map(tab => (
                 <button
                   key={tab.key}
                   className={`gallery-filter-tab ${filter === tab.key ? 'active' : ''}`}
@@ -203,10 +215,26 @@ export default function Gallery() {
                 </button>
               ))}
             </div>
+            <select className="gallery-sort" value={scoreBucket} onChange={e => setScoreBucket(e.target.value as ScoreBucket)} title="按 AI 评价综合完成度筛选">
+              <option value="all">全部评分</option>
+              <option value="gte90">≥ 90 分</option>
+              <option value="80_89">80–89 分</option>
+              <option value="70_79">70–79 分</option>
+              <option value="lt70">&lt; 70 分</option>
+              <option value="unscored">未评价</option>
+            </select>
+            <select className="gallery-sort" value={feedback} onChange={e => setFeedback(e.target.value as FeedbackFilter)} title="按我的反馈筛选">
+              <option value="all">全部反馈</option>
+              <option value="liked">我满意的</option>
+              <option value="disliked">需要调整</option>
+              <option value="unrated">未反馈</option>
+            </select>
             <select className="gallery-sort" value={sort} onChange={e => setSort(e.target.value as GallerySort)}>
               <option value="newest">最新优先</option>
               <option value="oldest">最旧优先</option>
               <option value="name">按名称</option>
+              <option value="score_desc">综合评分：高 → 低</option>
+              <option value="score_asc">综合评分：低 → 高</option>
             </select>
             <span className="gallery-count">{filtered.length} 张</span>
           </div>
@@ -217,7 +245,7 @@ export default function Gallery() {
             <div className="gallery-grid">
               {visibleImages.map(img => {
                 const task = taskById.get(img.task_id);
-                const cls = classifyImage(img, task);
+                const cls = resolveImageSource(img, task, taskById);
                 return (
                   <div key={img.id} className={`gallery-item ${img.missing ? 'missing' : ''}`}>
                     <div className="gallery-thumb" onClick={() => !img.missing && setPreview(img)}>
@@ -236,11 +264,13 @@ export default function Gallery() {
                         </div>
                       )}
                       {cls.isLocal && <span className="gallery-kind-badge">本地</span>}
+                      {cls.sourceApp && <span className="gallery-kind-badge">{cls.sourceApp}</span>}
+                      <EvaluationBadge evaluation={evaluations[img.id]} />
                     </div>
                     <div className="gallery-info">
                       <p className="gallery-name" title={imageTitle(img, task)}>{imageTitle(img, task)}</p>
                       <p className="gallery-time">
-                        {cls.typeLabel}
+                        {cls.label}
                         {!cls.isLocal && task ? ` · ${IMAGE_EXECUTION_MODEL}` : ''}
                         {` · ${new Date(img.created_at).toLocaleDateString('zh-CN')}`}
                       </p>
@@ -264,9 +294,13 @@ export default function Gallery() {
         <PreviewModal
           image={preview}
           task={taskById.get(preview.task_id)}
+          taskById={taskById}
           onClose={() => setPreview(null)}
           onDeleted={async () => {
             await deleteImage(preview.id);
+            // 资产删除 → 评价联动清理（评分附属资产，资产不在即无意义）
+            try { await api.deleteImageEvaluation(preview.id); } catch { /* 评价缺失不影响删除 */ }
+            useEvaluationStore.getState().removeEvaluation(preview.id);
             setPreview(null);
             void loadImages();
           }}
@@ -316,6 +350,7 @@ export default function Gallery() {
 function PreviewModal(props: {
   image: ImageRecord;
   task?: Task;
+  taskById: Map<string, Task>;
   onClose: () => void;
   onDeleted: () => void;
   onRegenerate: (task: Task) => Promise<void>;
@@ -374,7 +409,9 @@ function PreviewModal(props: {
     });
   }, []);
 
-  const cls = classifyImage(image, task);
+  // 详情唯一来源解释：来源 / 用途 / 基础信息行全部来自统一 view-model resolver
+  //（内部复用 resolveImageSource，Modal 不再自读原始来源字段拼来源）。
+  const detail = resolveImageDetailMetadata(image, task, props.taskById);
   const originalRequirement = task?.user_prompt_raw || '';
   // 批量方案任务：优先展示该图实际使用的方案级提示词快照（batch_items[i]），而非任务级首条
   const subIndex = task?.sub_tasks.findIndex(st => st.image_id === image.id) ?? -1;
@@ -506,14 +543,8 @@ function PreviewModal(props: {
     }
   }
 
-  const basicRows: { label: string; value: string; copyValue?: string }[] = [
-    { label: '文件名', value: image.file_name },
-    { label: cls.isLocal ? '来源' : '类型', value: cls.isLocal ? '本地导入' : cls.typeLabel },
-    ...(task ? [{ label: '执行模型', value: IMAGE_EXECUTION_MODEL }] : []),
-    ...(image.width && image.height ? [{ label: '尺寸', value: `${image.width} × ${image.height}` }] : []),
-    { label: '创建时间', value: new Date(image.created_at).toLocaleString('zh-CN') },
-    ...(task ? [{ label: '任务 ID', value: task.id, copyValue: task.id }] : []),
-  ];
+  const basicRows = detail.basicRows;
+  const poseRows = detail.poseRows;
 
   return (
     <div className="preview-overlay" onClick={props.onClose}>
@@ -527,7 +558,26 @@ function PreviewModal(props: {
             {error ? (
               <div className="gallery-loading">{error}</div>
             ) : url ? (
-              <img src={url} alt={image.file_name} />
+              <img
+                src={url}
+                alt={image.file_name}
+                title="点击查看大图"
+                onClick={() => {
+                  // 全局内置 ImageViewer（缩放 / 平移 / 复制 / 另存为）；详情 Modal 保留在底层
+                  useImageViewerStore.getState().openViewer([
+                    {
+                      id: image.id,
+                      path: image.local_path,
+                      title: imageTitle(image, task),
+                      fileName: image.file_name,
+                      width: image.width ?? undefined,
+                      height: image.height ?? undefined,
+                      prompt: fullPrompt || undefined,
+                      metadata: detail.viewerMetadata,
+                    },
+                  ]);
+                }}
+              />
             ) : (
               <div className="gallery-loading">加载原图中...</div>
             )}
@@ -546,6 +596,22 @@ function PreviewModal(props: {
                   </div>
                 ))}
               </div>
+              {poseRows.length > 0 && (
+                <>
+                  <div className="gallery-detail-section-title">动作白膜</div>
+                  <div className="gallery-detail-rows">
+                    {poseRows.map(row => (
+                      <div className="gallery-detail-row" key={row.label}>
+                        <span className="gallery-detail-label">{row.label}</span>
+                        <span className="gallery-detail-value" title={row.value}>{row.value}</span>
+                        {row.copyValue && (
+                          <button className="gallery-detail-copy" onClick={() => void copyText(row.copyValue!)}>复制</button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
               {(originalRequirement.trim() || fullPrompt.trim() || fullNegative.trim()) && (
                 <div className="gallery-detail-section-title">生成参数</div>
               )}
@@ -553,6 +619,12 @@ function PreviewModal(props: {
               <PromptTextBlock title="方案" content={image.description || ''} copyToastLabel="方案已复制" />
               <PromptTextBlock title="生成提示词" content={fullPrompt} copyToastLabel="提示词已复制" />
               <PromptTextBlock title="负面提示词" content={fullNegative} copyToastLabel="负面提示词已复制" />
+              {(task?.task_type === 'generate' || task?.task_type === 'edit') && (
+                <>
+                  <div className="gallery-detail-section-title">AI 评价</div>
+                  <EvaluationPanel assetId={image.id} task={task} />
+                </>
+              )}
             </div>
             <div className="gallery-detail-actions">
               <button

@@ -2481,23 +2481,44 @@ fn normalize_image_path_key(path: &str) -> String {
 
 fn classify_source_kind(path: &Path, settings: &Settings) -> String {
     let normalized = path.to_string_lossy().replace('\\', "/");
-    if !settings.library_input_dir.trim().is_empty() {
-        let input_dir = settings.library_input_dir.replace('\\', "/");
-        if normalized.starts_with(&input_dir) {
-            return "library_input".to_string();
+    let under_dir = |raw: &str| -> Option<usize> {
+        let dir = raw.replace('\\', "/");
+        let dir = dir.trim().trim_end_matches('/');
+        if dir.is_empty() {
+            return None;
+        }
+        if normalized == dir || normalized.starts_with(&format!("{}/", dir)) {
+            Some(dir.len())
+        } else {
+            None
+        }
+    };
+    // 输出目录专属子目录（chat 会话保存 / transparent 去背景）最具体，先于根归属判定，
+    // 不受本地目录与输出目录嵌套关系影响。
+    let in_input = under_dir(&settings.library_input_dir);
+    let in_output = under_dir(&settings.default_output_dir);
+    if in_output.is_some() {
+        if normalized.contains("/chat/") {
+            return "chat".to_string();
+        }
+        if normalized.contains("/transparent/") {
+            return "postprocess".to_string();
         }
     }
-    if !settings.default_output_dir.trim().is_empty() {
-        let output_dir = settings.default_output_dir.replace('\\', "/");
-        if normalized.starts_with(&output_dir) {
-            if normalized.contains("/chat/") {
-                return "chat".to_string();
-            }
-            if normalized.contains("/transparent/") {
-                return "postprocess".to_string();
-            }
-            return "output".to_string();
-        }
+    // 最长前缀（更具体的目录）优先；两目录配置成同一路径时平局归 library_input：
+    // 该目录下无任务关联的索引行只能来自用户导入 / 手动放入（任务产出由 task_runner /
+    // chat / postprocess 写入自己的 source_kind，不走本函数）。历史上平局判 output，
+    // 导致「本地目录 = 输出目录」配置下拖入图片被标 output、图库显示「生成结果」。
+    let output_wins = match (in_output, in_input) {
+        (Some(out_len), Some(in_len)) => out_len > in_len,
+        (Some(_), None) => true,
+        (None, _) => false,
+    };
+    if output_wins {
+        return "output".to_string();
+    }
+    if in_input.is_some() {
+        return "library_input".to_string();
     }
     "output".to_string()
 }
@@ -2597,16 +2618,25 @@ fn sync_images(app: &tauri::AppHandle) -> Vec<ImageRecord> {
                     .and_then(|n| n.to_str())
                     .unwrap_or(&image.file_name)
                     .to_string();
-                image.source_kind = classify_source_kind(&path, &settings);
+                // 任务关联行的 source_kind 由产出链路写入（task_runner / chat / postprocess），
+                // 目录重扫不得覆写（历史 bug：嵌套目录前缀误判把任务产出改成 library_input，
+                // 图库因此整片显示「本地」）；只有纯索引行（task_id == "library"）按目录重判。
+                if image.task_id == "library" {
+                    image.source_kind = classify_source_kind(&path, &settings);
+                }
+                if let Ok(meta) = fs::metadata(&path) {
+                    image.file_size = Some(meta.len());
+                }
             } else {
                 let file_name = path
                     .file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or("image")
                     .to_string();
-                let created_at = fs::metadata(&path)
-                    .and_then(|m| m.modified())
-                    .ok()
+                let metadata = fs::metadata(&path).ok();
+                let created_at = metadata
+                    .as_ref()
+                    .and_then(|m| m.modified().ok())
                     .map(|t| chrono::DateTime::<chrono::Local>::from(t).to_rfc3339())
                     .unwrap_or_else(|| now.clone());
                 images.push(ImageRecord {
@@ -2621,6 +2651,7 @@ fn sync_images(app: &tauri::AppHandle) -> Vec<ImageRecord> {
                     last_seen_at: Some(now.clone()),
                     width: None,
                     height: None,
+                    file_size: metadata.as_ref().map(|m| m.len()),
                     description: None,
                     tags: Vec::new(),
                     indexed_at: None,
@@ -4708,6 +4739,10 @@ pub fn create_task(app: tauri::AppHandle, params: CreateTaskParams) -> Result<Ta
         source_task_id: params.source_task_id.clone(),
         source_task_kind: params.source_task_kind.clone(),
         stage_note: String::new(),
+        source_app: String::new(),
+        source_request_id: String::new(),
+        source_context: None,
+        pose_batch: None,
         sub_tasks: (0..count)
             .map(|i| SubTask {
                 index: i,
@@ -4898,6 +4933,11 @@ pub fn retry_task(app: tauri::AppHandle, task_id: String) -> Result<Task, String
             subject_entities: original.subject_entities.clone(),
             source_task_id: original.source_task_id.clone(),
             source_task_kind: original.source_task_kind.clone(),
+            source_app: original.source_app.clone(),
+            source_request_id: String::new(),
+            source_context: original.source_context.clone(),
+            // 动作白膜批：整批重提克隆保留批元数据（来源继承；batchId 查找仍命中原任务）
+            pose_batch: original.pose_batch.clone(),
             stage_note: String::new(),
             sub_tasks: (0..original.count)
                 .map(|i| SubTask {
@@ -5042,6 +5082,204 @@ pub fn get_images(app: tauri::AppHandle) -> Vec<ImageRecord> {
 #[tauri::command]
 pub fn rescan_image_library(app: tauri::AppHandle) -> Vec<ImageRecord> {
     sync_images(&app)
+}
+
+// ========== 图片库导入（Gallery Drag Import，V4.1） ==========
+//
+// 唯一入库链路仍是 sync_images（目录扫描索引）；本命令只负责
+// 「外部文件 → 复制进 library_input_dir → 触发同一套扫描」，
+// 不自建索引写入，保证拖拽导入与手动放入目录的记录形态完全一致
+//（task_id = "library"、source_kind 由 classify_source_kind 判定 = library_input）。
+
+#[derive(Debug, Serialize)]
+pub struct ImportedLibraryImage {
+    pub file_name: String,
+    pub local_path: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LibraryImportIssue {
+    pub path: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Serialize, Default)]
+pub struct ImportImagesToLibraryResult {
+    pub imported: Vec<ImportedLibraryImage>,
+    pub skipped: Vec<LibraryImportIssue>,
+    pub failed: Vec<LibraryImportIssue>,
+    /// 导入触发了重扫时返回全量图库记录（前端直接刷新 store，不再二次扫描）。
+    pub images: Vec<ImageRecord>,
+}
+
+/// 路径是否位于管理目录之下（与 classify_source_kind 同一套归一化前缀规则，
+/// Windows 大小写不敏感；「本地导入目录 / 输出目录」内的文件都算已在图片库中）。
+fn path_under_managed_dir(path: &str, dir: &str) -> bool {
+    let key = normalize_image_path_key(path);
+    let dir_key = normalize_image_path_key(dir);
+    if dir_key.is_empty() {
+        return false;
+    }
+    key == dir_key || key.starts_with(&format!("{}/", dir_key))
+}
+
+fn file_md5(path: &Path) -> Option<String> {
+    let bytes = fs::read(path).ok()?;
+    Some(format!("{:x}", md5::compute(&bytes)))
+}
+
+/// 目标名冲突时的重名策略：`girl.png` → `girl (1).png`、`girl (2).png`…
+/// （Windows 资源管理器同形态）。策略只存在于本导入命令内；
+/// 页面 / 前端禁止自行拼接副本后缀。
+fn next_available_dest(input_dir: &Path, file_name: &str) -> PathBuf {
+    let direct = input_dir.join(file_name);
+    if !direct.exists() {
+        return direct;
+    }
+    let stem = Path::new(file_name)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("image")
+        .to_string();
+    let ext = Path::new(file_name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_string();
+    for n in 1..1000u32 {
+        let candidate = if ext.is_empty() {
+            format!("{} ({})", stem, n)
+        } else {
+            format!("{} ({}).{}", stem, n, ext)
+        };
+        let path = input_dir.join(&candidate);
+        if !path.exists() {
+            return path;
+        }
+    }
+    direct
+}
+
+fn import_images_to_library_core(
+    settings: &Settings,
+    paths: &[String],
+) -> Result<ImportImagesToLibraryResult, String> {
+    let input_dir_raw = settings.library_input_dir.trim();
+    if input_dir_raw.is_empty() {
+        return Err("请先在「设置与更新 → 图片与文件」中配置本地导入目录".to_string());
+    }
+    let input_dir = Path::new(input_dir_raw);
+    fs::create_dir_all(input_dir).map_err(|e| format!("无法访问本地导入目录: {}", e))?;
+
+    let mut result = ImportImagesToLibraryResult::default();
+    let mut seen_sources: HashSet<String> = HashSet::new();
+
+    for raw in paths {
+        let path_str = raw.trim().to_string();
+        if path_str.is_empty() {
+            continue;
+        }
+        // 同一次拖入中的重复路径只处理一次
+        if !seen_sources.insert(normalize_image_path_key(&path_str)) {
+            continue;
+        }
+        let path = Path::new(&path_str);
+
+        if !path.exists() {
+            result.failed.push(LibraryImportIssue {
+                path: path_str.clone(),
+                reason: "文件不存在".to_string(),
+            });
+            continue;
+        }
+        if path.is_dir() {
+            result.failed.push(LibraryImportIssue {
+                path: path_str.clone(),
+                reason: "不支持文件夹".to_string(),
+            });
+            continue;
+        }
+        if !is_supported_image(path) {
+            result.failed.push(LibraryImportIssue {
+                path: path_str.clone(),
+                reason: "不支持该文件格式".to_string(),
+            });
+            continue;
+        }
+        // 已在管理目录内：不复制（绝不产生 girl (1).png 副本），
+        // 交由 sync_images 刷新 / 补建索引。
+        if path_under_managed_dir(&path_str, &settings.library_input_dir)
+            || path_under_managed_dir(&path_str, &settings.default_output_dir)
+        {
+            result.skipped.push(LibraryImportIssue {
+                path: path_str.clone(),
+                reason: "已在图片库目录中".to_string(),
+            });
+            continue;
+        }
+
+        let file_name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("image")
+            .to_string();
+        let direct_dest = input_dir.join(&file_name);
+        // 同名且同内容（md5 一致）= 同一张图再次拖入：跳过，不造副本
+        if direct_dest.exists() {
+            let same_content = match (file_md5(path), file_md5(&direct_dest)) {
+                (Some(a), Some(b)) => a == b,
+                _ => false,
+            };
+            if same_content {
+                result.skipped.push(LibraryImportIssue {
+                    path: path_str.clone(),
+                    reason: "已在图片库中".to_string(),
+                });
+                continue;
+            }
+        }
+
+        let dest = next_available_dest(input_dir, &file_name);
+        match fs::copy(path, &dest) {
+            Ok(_) => {
+                // 记录时间 = 导入时间（fs::copy 在 Windows 保留源 mtime，
+                // 这里显式刷新，让新导入在「最新优先」排序下出现在最前）
+                if let Ok(file) = fs::File::options().write(true).open(&dest) {
+                    let _ = file.set_modified(std::time::SystemTime::now());
+                }
+                result.imported.push(ImportedLibraryImage {
+                    file_name: dest
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or(&file_name)
+                        .to_string(),
+                    local_path: dest.to_string_lossy().replace('\\', "/"),
+                });
+            }
+            Err(e) => {
+                result.failed.push(LibraryImportIssue {
+                    path: path_str.clone(),
+                    reason: format!("复制失败: {}", e),
+                });
+            }
+        }
+    }
+    Ok(result)
+}
+
+#[tauri::command]
+pub fn import_images_to_library(
+    app: tauri::AppHandle,
+    paths: Vec<String>,
+) -> Result<ImportImagesToLibraryResult, String> {
+    let settings: Settings = storage::read_json(&storage::settings_path(&app), Settings::default());
+    let mut result = import_images_to_library_core(&settings, &paths)?;
+    // 有新复制 / 有管理目录内文件需要刷新索引时才重扫；
+    // 索引建立完全复用 sync_images（与手动放入目录同一链路）。
+    if !result.imported.is_empty() || !result.skipped.is_empty() {
+        result.images = sync_images(&app);
+    }
+    Ok(result)
 }
 
 #[tauri::command]
@@ -5423,6 +5661,7 @@ pub fn save_chat_image(
         last_seen_at: Some(now.to_rfc3339()),
         width: None,
         height: None,
+        file_size: Some(bytes.len() as u64),
         description: None,
         tags: Vec::new(),
         indexed_at: None,
@@ -5511,6 +5750,7 @@ pub async fn remove_background(
         last_seen_at: Some(now.to_rfc3339()),
         width: None,
         height: None,
+        file_size: Some(image_bytes.len() as u64),
         description: None,
         tags: Vec::new(),
         indexed_at: None,
@@ -6593,6 +6833,332 @@ mod tests {
     #[test]
     fn empty_task_type_falls_back_to_generate() {
         assert_eq!(resolve_final_task_type("", false, 0), "generate");
+    }
+
+    // ===== 图库来源判定：目录嵌套不再误判生成产物为本地导入 =====
+
+    fn settings_with_dirs(input: &str, output: &str) -> Settings {
+        Settings {
+            library_input_dir: input.to_string(),
+            default_output_dir: output.to_string(),
+            ..Settings::default()
+        }
+    }
+
+    #[test]
+    fn classify_source_kind_output_inside_library_parent_is_output() {
+        // 本地目录是输出目录的父级：生成产物必须归 output，绝不因前缀命中变 library_input
+        let settings = settings_with_dirs("D:/Images", "D:/Images/output");
+        assert_eq!(
+            classify_source_kind(Path::new("D:/Images/output/task1/a.png"), &settings),
+            "output"
+        );
+        // 真正放在本地目录根下的文件仍是本地导入
+        assert_eq!(
+            classify_source_kind(Path::new("D:/Images/photo.png"), &settings),
+            "library_input"
+        );
+    }
+
+    #[test]
+    fn classify_source_kind_library_inside_output_parent_is_library_input() {
+        // 反向嵌套：本地目录更具体，优先于输出目录
+        let settings = settings_with_dirs("D:/Images/library", "D:/Images");
+        assert_eq!(
+            classify_source_kind(Path::new("D:/Images/library/photo.png"), &settings),
+            "library_input"
+        );
+        assert_eq!(
+            classify_source_kind(Path::new("D:/Images/task1/a.png"), &settings),
+            "output"
+        );
+    }
+
+    #[test]
+    fn classify_source_kind_sibling_dirs_and_chat_postprocess() {
+        let settings = settings_with_dirs("D:/Library", "D:/Output");
+        assert_eq!(
+            classify_source_kind(Path::new("D:/Library/photo.png"), &settings),
+            "library_input"
+        );
+        assert_eq!(
+            classify_source_kind(Path::new("D:/Output/task1/a.png"), &settings),
+            "output"
+        );
+        assert_eq!(
+            classify_source_kind(Path::new("D:/Output/chat/chat_1.png"), &settings),
+            "chat"
+        );
+        assert_eq!(
+            classify_source_kind(Path::new("D:/Output/transparent/a.png"), &settings),
+            "postprocess"
+        );
+        // 两个目录都未配置 / 命中：默认 output
+        assert_eq!(
+            classify_source_kind(Path::new("E:/Elsewhere/a.png"), &settings),
+            "output"
+        );
+    }
+
+    #[test]
+    fn classify_source_kind_no_prefix_confusion_between_similar_names() {
+        // 前缀必须按目录段匹配：D:/Images2 不吃掉 D:/Images 下的文件
+        let settings = settings_with_dirs("D:/Images", "D:/Other");
+        assert_eq!(
+            classify_source_kind(Path::new("D:/Images2/photo.png"), &settings),
+            "output"
+        );
+    }
+
+    #[test]
+    fn classify_source_kind_same_dir_for_input_and_output_is_library_input() {
+        // 用户把「本地导入目录」与「输出目录」配置成同一路径：无任务关联的索引行
+        // 只能来自用户导入（拖入 / 手动放入），必须归 library_input（图库显示「本地」），
+        // 绝不能因平局判 output 被显示成「生成结果」。
+        let shared = "D:/Image2图片";
+        let settings = settings_with_dirs(shared, shared);
+        assert_eq!(
+            classify_source_kind(Path::new("D:/Image2图片/808c9edfc624ab.png"), &settings),
+            "library_input"
+        );
+        // 输出目录专属子目录仍然最具体，不受平局影响
+        assert_eq!(
+            classify_source_kind(Path::new("D:/Image2图片/chat/chat_1.png"), &settings),
+            "chat"
+        );
+        assert_eq!(
+            classify_source_kind(Path::new("D:/Image2图片/transparent/a.png"), &settings),
+            "postprocess"
+        );
+    }
+
+    // ===== V4.1 图片库拖拽导入：复制 / 跳过 / 失败 / 重名 =====
+
+    fn temp_workspace(label: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("cyimage-import-test-{}-{}", label, uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).expect("create temp workspace");
+        dir
+    }
+
+    fn write_png(path: &Path, payload: &[u8]) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("create parent");
+        }
+        fs::write(path, payload).expect("write png");
+    }
+
+    #[test]
+    fn import_copies_external_files_into_library_dir() {
+        let ws = temp_workspace("copy");
+        let external = ws.join("downloads");
+        write_png(&external.join("girl.png"), b"png-bytes-a");
+        write_png(&external.join("cat.webp"), b"webp-bytes-b");
+
+        let settings = settings_with_dirs(
+            &ws.join("library").to_string_lossy(),
+            &ws.join("output").to_string_lossy(),
+        );
+        let result = import_images_to_library_core(
+            &settings,
+            &[
+                external.join("girl.png").to_string_lossy().to_string(),
+                external.join("cat.webp").to_string_lossy().to_string(),
+            ],
+        )
+        .expect("import should succeed");
+
+        assert_eq!(result.imported.len(), 2);
+        assert!(result.failed.is_empty() && result.skipped.is_empty());
+        // 复制进管理目录，路径归一化为 /
+        let dest_girl = ws.join("library").join("girl.png");
+        assert!(dest_girl.exists());
+        assert!(result
+            .imported
+            .iter()
+            .any(|i| i.local_path == dest_girl.to_string_lossy().replace('\\', "/")));
+        // 复制后的文件 classify 结果 = library_input（本地来源链路不破坏）
+        assert_eq!(classify_source_kind(&dest_girl, &settings), "library_input");
+        let _ = fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn import_from_wechat_temp_dir_with_shared_dirs_resolves_library_input() {
+        // GUI 实机 Bug 回归：微信 / 下载 / 桌面等外部临时目录拖入 +
+        // 「本地导入目录 == 输出目录」配置下，入库后必须是 library_input（本地），
+        // 绝不能被目录平局判成 output → 图库「生成结果」。
+        let ws = temp_workspace("wechat-shared");
+        let wechat_temp = ws.join("AppData").join("Local").join("Temp").join("WeChat Files");
+        write_png(&wechat_temp.join("808c9edfc624ab.png"), b"wechat-image-bytes");
+        write_png(&ws.join("Desktop").join("a.png"), b"desktop-image");
+        write_png(&ws.join("Downloads").join("b.png"), b"download-image");
+
+        let shared = ws.join("Image2");
+        let settings = settings_with_dirs(
+            &shared.to_string_lossy(),
+            &shared.to_string_lossy(),
+        );
+        let result = import_images_to_library_core(
+            &settings,
+            &[
+                wechat_temp.join("808c9edfc624ab.png").to_string_lossy().to_string(),
+                ws.join("Desktop").join("a.png").to_string_lossy().to_string(),
+                ws.join("Downloads").join("b.png").to_string_lossy().to_string(),
+            ],
+        )
+        .expect("import should succeed");
+
+        assert_eq!(result.imported.len(), 3);
+        for imported in &result.imported {
+            let classified = classify_source_kind(Path::new(&imported.local_path), &settings);
+            assert_eq!(
+                classified, "library_input",
+                "外部拖入文件（{}）入库后必须判定为 library_input",
+                imported.file_name
+            );
+        }
+        let _ = fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn import_file_already_in_managed_dirs_is_skipped_without_copy() {
+        let ws = temp_workspace("skip");
+        write_png(&ws.join("library").join("photo.png"), b"existing");
+        write_png(&ws.join("output").join("task1").join("a.png"), b"generated");
+
+        let settings = settings_with_dirs(
+            &ws.join("library").to_string_lossy(),
+            &ws.join("output").to_string_lossy(),
+        );
+        let result = import_images_to_library_core(
+            &settings,
+            &[
+                ws.join("library").join("photo.png").to_string_lossy().to_string(),
+                ws.join("output").join("task1").join("a.png").to_string_lossy().to_string(),
+            ],
+        )
+        .expect("import should succeed");
+
+        assert!(result.imported.is_empty());
+        assert_eq!(result.skipped.len(), 2);
+        // 绝不出现 photo (1).png 之类的副本
+        assert!(!ws.join("library").join("photo (1).png").exists());
+        let _ = fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn import_same_name_same_content_skips_and_different_content_suffixes() {
+        let ws = temp_workspace("collision");
+        write_png(&ws.join("library").join("girl.png"), b"same-content");
+        let external = ws.join("downloads");
+        write_png(&external.join("girl.png"), b"same-content"); // 同内容
+        write_png(&external.join("girl2.png"), b"different"); // 改名后再拖同名不同内容
+
+        let settings = settings_with_dirs(
+            &ws.join("library").to_string_lossy(),
+            &ws.join("output").to_string_lossy(),
+        );
+        // 同内容同名 → 跳过，不造副本
+        let result = import_images_to_library_core(
+            &settings,
+            &[external.join("girl.png").to_string_lossy().to_string()],
+        )
+        .expect("import should succeed");
+        assert!(result.imported.is_empty());
+        assert_eq!(result.skipped.len(), 1);
+        assert!(!ws.join("library").join("girl (1).png").exists());
+
+        // 先放入 girl.png（不同内容）再导入 → 生成 girl (1).png 副本
+        write_png(&ws.join("library").join("same.png"), b"placeholder");
+        let result2 = import_images_to_library_core(
+            &settings,
+            &[external.join("girl2.png").to_string_lossy().to_string()],
+        )
+        .expect("import should succeed");
+        assert_eq!(result2.imported.len(), 1);
+        // 不同名文件直接原名入库
+        assert!(ws.join("library").join("girl2.png").exists());
+        let _ = fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn import_name_collision_different_content_gets_suffix() {
+        let ws = temp_workspace("suffix");
+        write_png(&ws.join("library").join("girl.png"), b"library-version");
+        let external = ws.join("downloads");
+        write_png(&external.join("girl.png"), b"downloads-version");
+
+        let settings = settings_with_dirs(
+            &ws.join("library").to_string_lossy(),
+            &ws.join("other-output").to_string_lossy(),
+        );
+        let result = import_images_to_library_core(
+            &settings,
+            &[external.join("girl.png").to_string_lossy().to_string()],
+        )
+        .expect("import should succeed");
+
+        assert_eq!(result.imported.len(), 1);
+        assert_eq!(result.imported[0].file_name, "girl (1).png");
+        assert!(ws.join("library").join("girl (1).png").exists());
+        // 原文件不被覆盖
+        assert_eq!(fs::read(ws.join("library").join("girl.png")).unwrap(), b"library-version");
+        let _ = fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn import_rejects_missing_directory_and_unsupported_formats() {
+        let ws = temp_workspace("invalid");
+        let external = ws.join("downloads");
+        write_png(&external.join("doc.pdf"), b"pdf");
+        fs::create_dir_all(external.join("folder.png")).expect("create dir");
+
+        let settings = settings_with_dirs(
+            &ws.join("library").to_string_lossy(),
+            &ws.join("output").to_string_lossy(),
+        );
+        let result = import_images_to_library_core(
+            &settings,
+            &[
+                external.join("missing.png").to_string_lossy().to_string(),
+                external.join("folder.png").to_string_lossy().to_string(),
+                external.join("doc.pdf").to_string_lossy().to_string(),
+            ],
+        )
+        .expect("import should succeed");
+
+        assert!(result.imported.is_empty());
+        assert_eq!(result.failed.len(), 3);
+        let reasons: Vec<&str> = result.failed.iter().map(|f| f.reason.as_str()).collect();
+        assert!(reasons.contains(&"文件不存在"));
+        assert!(reasons.contains(&"不支持文件夹"));
+        assert!(reasons.contains(&"不支持该文件格式"));
+        let _ = fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn import_requires_configured_input_dir() {
+        let err = import_images_to_library_core(&Settings::default(), &["D:/a.png".to_string()])
+            .expect_err("empty library_input_dir must fail");
+        assert!(err.contains("本地导入目录"));
+    }
+
+    #[test]
+    fn import_dedupes_repeated_paths_in_one_drop() {
+        let ws = temp_workspace("dedupe");
+        let external = ws.join("downloads");
+        write_png(&external.join("girl.png"), b"png-bytes-a");
+
+        let settings = settings_with_dirs(
+            &ws.join("library").to_string_lossy(),
+            &ws.join("output").to_string_lossy(),
+        );
+        // Windows 反斜杠与正斜杠混写、大小写不同 —— 同一文件只导入一次
+        let p1 = external.join("girl.png").to_string_lossy().to_string();
+        let p2 = p1.replace('/', "\\");
+        let result =
+            import_images_to_library_core(&settings, &[p1, p2]).expect("import should succeed");
+        assert_eq!(result.imported.len(), 1);
+        let _ = fs::remove_dir_all(&ws);
     }
 
     #[test]
@@ -7999,6 +8565,10 @@ mod tests {
             source_task_id: None,
             source_task_kind: String::new(),
             stage_note: String::new(),
+            source_app: String::new(),
+            source_request_id: String::new(),
+            source_context: None,
+            pose_batch: None,
         }
     }
 

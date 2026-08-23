@@ -52,7 +52,7 @@ describe('统一「调整要求」输入框（替代替换人物 / 自由微调�
   test('统一输入框结构存在（标题 + 说明 + textarea + 优化按钮）', () => {
     expect(pageSrc).toContain('ADJUST_INPUT');
     expect(pageSrc).toContain('vision-adjust-textarea');
-    expect(pageSrc).toContain('onAdjustmentChange');
+    expect(pageSrc).toContain('onFreeTextChange');
     expect(pageSrc).toContain('优化复刻 Prompt');
     expect(css).toContain('.vision-adjust-box');
     expect(css).toContain('.vision-adjust-textarea');

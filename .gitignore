@@ -8,5 +8,6 @@ src-tauri/gen/
 *.log
 .DS_Store
 Thumbs.db
-.claude/
+.claude/*
+!.claude/skills
 %USERPROFILE/

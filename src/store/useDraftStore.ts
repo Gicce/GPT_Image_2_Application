@@ -16,6 +16,8 @@ export interface VisionCarryDraft {
   /** V4.0.8 图生图参考图：视觉理解工作区原图路径（复用既有素材，不复制不重复导入）。 */
   sourceImagePath?: string;
   sourceAssetId?: string;
+  /** V4.1 人物替换参考图（i2i 时作为第二张参考图；身份 / 脸部 / 发型 / 体型）。 */
+  personReferencePath?: string;
   sourceVisionSessionId?: string;
   /** V4.0.7 复刻链路：来源视觉理解任务 id（写入生成任务 source_task_id，任务中心显示来源关系） */
   sourceVisionTaskId?: string;

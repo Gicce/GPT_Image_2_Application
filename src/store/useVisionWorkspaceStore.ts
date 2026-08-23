@@ -17,8 +17,13 @@ import { create } from 'zustand';
 import type { VisionAnalysis } from '../types';
 import type { ReversePromptResult } from '../features/vision/reversePrompt';
 import type { SimilarityReport } from '../features/vision/similarity';
-import type { RecreationState } from '../features/vision/recreationPlan';
+import { normalizeRecreationState, type RecreationState } from '../features/vision/recreationPlan';
 import type { RecreationIterationRecord, VisionMode } from '../features/vision/session';
+import {
+  EMPTY_MODIFICATION_DRAFT,
+  migrateModificationDraft,
+  type ModificationDraft,
+} from '../features/vision/modificationIntent';
 
 export type VisionStage =
   | 'idle'
@@ -47,11 +52,11 @@ export interface VisionWorkspaceSnapshot {
   /** 视觉分析原始结果 + 编译产物 */
   analysis: VisionAnalysis | null;
   reverseResult: ReversePromptResult | null;
-  /** 三个 Prompt 编辑区 + 统一调整要求 */
+  /** 三个 Prompt 编辑区 + 结构化修改意图（自由文本 + 快捷维度 + 人物替换 + 服装策略） */
   originalPromptDraft: string;
   promptDraft: string;
   negativeDraft: string;
-  adjustmentInput: string;
+  modificationDraft: ModificationDraft;
   /** 复刻方案状态机（含锁定项 / 优化产物） */
   recreation: RecreationState | null;
   genParams: VisionGenParams;
@@ -89,7 +94,7 @@ const INITIAL: VisionWorkspaceSnapshot = {
   originalPromptDraft: '',
   promptDraft: '',
   negativeDraft: '',
-  adjustmentInput: '',
+  modificationDraft: EMPTY_MODIFICATION_DRAFT,
   recreation: null,
   genParams: { size: '1024x1024', quality: 'auto', count: 1 },
   generationMode: 'i2i',
@@ -119,23 +124,29 @@ function normalizeStage(stage: VisionStage, hasAnalysis: boolean): VisionStage {
 /** recreation.editState='optimizing' 是进程内瞬时态：恢复为 dirty（保留全部内容，允许重新优化）。 */
 function normalizeRecreation(recreation: RecreationState | null): RecreationState | null {
   if (!recreation) return null;
-  if (recreation.editState === 'optimizing') {
-    return { ...recreation, editState: 'dirty', optimizeError: '优化被中断，请重新执行优化。' };
+  const normalized = normalizeRecreationState(recreation);
+  if (normalized.editState === 'optimizing') {
+    return { ...normalized, editState: 'dirty', optimizeError: '优化被中断，请重新执行优化。' };
   }
-  return recreation;
+  return normalized;
 }
 
 function readSnapshot(): VisionWorkspaceSnapshot {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return INITIAL;
-    const parsed = JSON.parse(raw) as Partial<VisionWorkspaceSnapshot>;
+    const parsed = JSON.parse(raw) as Partial<VisionWorkspaceSnapshot> & { adjustmentInput?: string };
     if (!parsed || typeof parsed !== 'object') return INITIAL;
     const merged: VisionWorkspaceSnapshot = {
       ...INITIAL,
       ...parsed,
       genParams: { ...INITIAL.genParams, ...(parsed.genParams ?? {}) },
     };
+    // V4.1 迁移：旧 adjustmentInput（纯文本）→ modificationDraft.freeText；旧 recreation 补 revision 字段
+    merged.modificationDraft = migrateModificationDraft(
+      parsed.modificationDraft,
+      parsed.adjustmentInput,
+    );
     merged.stage = normalizeStage(merged.stage, !!merged.analysis);
     merged.recreation = normalizeRecreation(merged.recreation);
     return merged;
@@ -175,7 +186,8 @@ interface VisionWorkspaceState extends VisionWorkspaceSnapshot {
   setOriginalPromptDraft: (value: string) => void;
   setPromptDraft: (value: string) => void;
   setNegativeDraft: (value: string) => void;
-  setAdjustmentInput: (value: string) => void;
+  /** 结构化修改意图变更（debounce=true 用于 freeText 按键输入；toggle / 人物 / 服装立即）。 */
+  setModificationDraft: (draft: ModificationDraft, opts?: { debounce?: boolean }) => void;
   /** debounce=true 用于按键驱动的逐步更新（调整要求输入 / 手动编辑原始 Prompt） */
   setRecreation: (next: RecreationState | null, opts?: { debounce?: boolean }) => void;
   setGenParams: (partial: Partial<VisionGenParams>) => void;
@@ -235,7 +247,7 @@ export const useVisionWorkspaceStore = create<VisionWorkspaceState>((set, get) =
         originalPromptDraft: '',
         promptDraft: '',
         negativeDraft: '',
-        adjustmentInput: '',
+        modificationDraft: EMPTY_MODIFICATION_DRAFT,
         recreation: null,
         genParams: { size: '1024x1024', quality: 'auto', count: 1 },
         generationMode: 'i2i',
@@ -274,7 +286,7 @@ export const useVisionWorkspaceStore = create<VisionWorkspaceState>((set, get) =
         originalPromptDraft: input.reverseResult.prompt,
         promptDraft: input.reverseResult.prompt,
         negativeDraft: input.reverseResult.negativePrompt,
-        adjustmentInput: '',
+        modificationDraft: EMPTY_MODIFICATION_DRAFT,
         recreation: input.recreation,
         genParams: input.genParams,
         report: null,
@@ -302,8 +314,8 @@ export const useVisionWorkspaceStore = create<VisionWorkspaceState>((set, get) =
     setAndPersist({ negativeDraft: value }, true)(set, get);
   },
 
-  setAdjustmentInput: value => {
-    setAndPersist({ adjustmentInput: value }, true)(set, get);
+  setModificationDraft: (draft, opts) => {
+    setAndPersist({ modificationDraft: draft }, opts?.debounce === true)(set, get);
   },
 
   setRecreation: (next, opts) => {

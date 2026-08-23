@@ -1,0 +1,38 @@
+/* 评分徽章：右上角小胶囊，只显示综合分（媒体优先，禁止堆维度）。 */
+.eval-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 26px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+  background: var(--badge-muted-bg);
+  color: var(--badge-muted-text);
+  border: 1px solid var(--border-light);
+}
+
+.eval-badge-excellent {
+  background: var(--badge-success-bg);
+  color: var(--badge-success-text);
+}
+
+.eval-badge-good {
+  background: var(--badge-info-bg);
+  color: var(--badge-info-text);
+}
+
+.eval-badge-poor {
+  background: var(--badge-warn-bg);
+  color: var(--badge-warn-text);
+}
+
+.eval-badge-like {
+  font-size: 11px;
+}

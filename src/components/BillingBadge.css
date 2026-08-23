@@ -1,0 +1,16 @@
+/* 计费方式 Badge（V4.0.9）—— 自包含样式，不依赖任何页面级 CSS。
+   数值沿用原 Settings.css .model-mode-tag 视觉（10px / 2px 6px / radius 8）。
+   关键布局约束：flex-shrink 0 + nowrap，保证「API 按量计费」整词单行。 */
+.billing-badge {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  white-space: nowrap;
+  font-size: 10px;
+  line-height: 1;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  padding: 2px 6px;
+  color: var(--text-muted);
+  user-select: none;
+}

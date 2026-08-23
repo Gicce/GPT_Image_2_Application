@@ -16,6 +16,7 @@ import type {
   GenerateTestImageResult,
   ImageMeta,
   ImageRecord,
+  ImportImagesToLibraryResult,
   Settings,
   Task,
   VideoSyncResult,
@@ -25,6 +26,7 @@ import type {
   VisionUnderstandResult,
 } from '../types';
 import { invalidateAgentTemplateCache } from '../utils/agent/templateCache';
+import type { EvaluateImageOutcome, EvaluateImageRequestPayload, ImageEvaluation } from '../features/evaluation/types';
 
 export const api = {
   getSettings: (): Promise<Settings> => invoke('get_settings'),
@@ -132,8 +134,25 @@ export const api = {
   /** V4.0.6 本地色彩相似度（无 AI 调用） */
   computeColorSimilarity: (sourcePath: string, candidatePath: string): Promise<ColorSimilarityResult> =>
     invoke('compute_color_similarity', { sourcePath, candidatePath }),
+  /** V4.0.9 统一图片评价：任务感知 AI 评价（BYOK 视觉模型，失败不影响生成任务） */
+  evaluateImage: (request: EvaluateImageRequestPayload): Promise<EvaluateImageOutcome> =>
+    invoke('evaluate_image', { request }),
+  /** V4.0.9 查询持久化评价（缺省全量；图库筛选只读这里，绝不现场重算） */
+  getImageEvaluations: (assetIds?: string[] | null): Promise<ImageEvaluation[]> =>
+    invoke('get_image_evaluations', { assetIds: assetIds ?? null }),
+  /** V4.0.9 用户反馈独立落库（liked / disliked / null + 问题标签 + 补充说明） */
+  updateImageEvaluationFeedback: (assetId: string, rating: 'liked' | 'disliked' | null, issueTags: string[], comment: string): Promise<ImageEvaluation | null> =>
+    invoke('update_image_evaluation_feedback', { assetId, rating, issueTags, comment }),
+  deleteImageEvaluation: (assetId: string): Promise<void> =>
+    invoke('delete_image_evaluation', { assetId }),
+  /** V4.1 收藏 / 取消收藏（♡ 精选标记；未评价资产也允许收藏，Rust 补插最小行） */
+  setImageFavorite: (assetId: string, assetPath: string, favorite: boolean): Promise<ImageEvaluation> =>
+    invoke('set_image_favorite', { assetId, assetPath, favorite }),
   getImages: (): Promise<ImageRecord[]> => invoke('get_images'),
   rescanImageLibrary: (): Promise<ImageRecord[]> => invoke('rescan_image_library'),
+  /** V4.1 图片库拖拽导入：外部文件复制进 library_input_dir，复用 sync_images 建索引 */
+  importImagesToLibrary: (paths: string[]): Promise<ImportImagesToLibraryResult> =>
+    invoke('import_images_to_library', { paths }),
   getImageMeta: (path: string): Promise<ImageMeta> => invoke('get_image_meta', { path }),
   updateImageIndex: (imageId: string, width: number | null, height: number | null, description: string | null, tags: string[]): Promise<ImageRecord> =>
     invoke('update_image_index', { imageId, width, height, description, tags }),

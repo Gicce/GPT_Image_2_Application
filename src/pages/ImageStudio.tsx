@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { useTaskStore } from '../store/useTaskStore';
 import { useImageStore } from '../store/useImageStore';
 import { useAuthStore } from '../store/useAuthStore';
 import { useImageEditStore } from '../store/useImageEditStore';
 import { useDraftStore } from '../store/useDraftStore';
+import { useImageViewerStore } from '../store/useImageViewerStore';
 import type { VisionCarryDraft } from '../store/useDraftStore';
 import { api } from '../services/api';
 import { authorizeImageTask, settleImageTask, createRequestId, registerTaskAuthorization } from '../services/billingService';
@@ -41,8 +43,11 @@ import BatchPlanDetailDrawer, { BpConfirmDialog } from '../components/BatchPlanD
 import { selectRecentImageTasks, recentTaskDisplayTitle, RECENT_TASKS_LIMIT } from '../utils/recentTasks';
 import { formatTaskTime } from '../utils/taskDisplay';
 import { useAIProviderStore } from '../features/aiProviders/store';
+// 本页复用 Settings.css 的共享原语（.settings-card/.settings-btn*/.form-hint/.template-modal*）；
+// 该 CSS 位于 page-settings 懒加载 chunk，必须显式 import，否则冷启动直达本页时样式缺失。
+// ImageStudio.css 需在其后加载，才能覆盖 .settings-card 的页面级定制
+import './Settings.css';
 import './ImageStudio.css';
-import './CreateTask.css';
 import '../components/BatchPlans.css';
 
 /**
@@ -122,12 +127,20 @@ function emptyOptimization(): SingleOptimization {
   };
 }
 
-/** 优化模型说明：未配置时提供设置入口；有配置时展示模型名 */
+/** 优化模型说明（AI Assistance Indicator）：未配置时提供设置入口；有配置时展示模型名（单行 + ellipsis） */
 function OptimizerModelNote({ label }: { label: string | null }) {
-  if (label) return <span className="studio-optimizer-meta">✨ AI 提示词优化 · 使用：{label}</span>;
+  if (label) {
+    return (
+      <span className="studio-ai-chip" title={`AI 提示词优化 · ${label}`}>
+        <span className="studio-ai-chip-icon" aria-hidden>✨</span>
+        <span className="studio-ai-chip-text">AI 提示词优化</span>
+        <span className="studio-ai-chip-model">{label}</span>
+      </span>
+    );
+  }
   return (
-    <span className="studio-optimizer-meta none">
-      尚未配置 AI 提示词优化模型
+    <span className="studio-ai-chip none">
+      <span className="studio-ai-chip-text">尚未配置 AI 提示词优化模型</span>
       <button className="settings-btn settings-btn-link settings-btn-sm" onClick={() => {
         window.dispatchEvent(new CustomEvent('cyimage-navigate', { detail: { page: 'settings', section: 'agents' } }));
       }}>
@@ -144,17 +157,28 @@ function StudioThumb({ path }: { path: string }) {
     api.readThumbnail(path).then(data => { if (alive) setThumb(data); }).catch(() => {});
     return () => { alive = false; };
   }, [path]);
-  if (!thumb) return <span className="studio-source-placeholder">…</span>;
+  if (!thumb) return <span className="studio-media-placeholder">…</span>;
   return <img src={thumb} alt="" />;
 }
 
-function SourceImagePicker(props: {
+/**
+ * ReferenceImageInput —— MediaInput 模式的参考图实例（CyImagePro UI Skill「Media Input Pattern」）。
+ *
+ * Empty / Loaded 是两个互斥 UI State：载入后大型 Dropzone 消失，切换为 Tile 网格 + Add Tile；
+ * 文件名只是 metadata（Tooltip），扩展名徽标代替；移除是 secondary danger（默认 neutral，Hover 才 danger）。
+ * 状态：empty / loaded(单图或多图) / dragOver / disabled(预留) / error(缩略图读取失败占位)。
+ * 业务链路（本地 / 图库 / 拖拽 → mergeSourceImages 去重）保持不变。
+ */
+function ReferenceImageInput(props: {
   images: SourceImage[];
   onChange: (images: SourceImage[]) => void;
   /** V4.0.8 拖拽高亮（Tauri 窗口级事件由页面统一分发到此区域）。 */
   dragActive?: boolean;
+  /** 预留：整体只读（隐藏移除 / 添加，Empty 不可点）。当前业务未使用。 */
+  disabled?: boolean;
 }) {
   const [galleryOpen, setGalleryOpen] = useState(false);
+  const [addMenuOpen, setAddMenuOpen] = useState(false);
   const { images: galleryImages, loadImages } = useImageStore();
   const [thumbs, setThumbs] = useState<Record<string, string>>({});
 
@@ -183,9 +207,16 @@ function SourceImagePicker(props: {
   }
 
   async function pickLocal() {
+    setAddMenuOpen(false);
     const path = await api.selectImageFile();
     if (!path) return;
     appendImages([{ path, name: fileNameOfPath(path) }]);
+  }
+
+  function openGallery() {
+    setAddMenuOpen(false);
+    void loadImages();
+    setGalleryOpen(true);
   }
 
   function pickFromGallery(image: ImageRecord) {
@@ -194,34 +225,89 @@ function SourceImagePicker(props: {
     setGalleryOpen(false);
   }
 
+  /** 扩展名徽标（文件名是 metadata，只进 Tooltip；尺寸当前数据链路不可全量获得，不展示） */
+  function extOf(name: string): string {
+    const ext = name.split('.').pop()?.toUpperCase() ?? '';
+    return /^[A-Z0-9]{1,4}$/.test(ext) ? ext : '';
+  }
+
   return (
-    <div className="studio-source-picker">
-      <div className={`studio-dropzone${props.dragActive ? ' drag-active' : ''}`}>
-        <p className="studio-dropzone-title">🖼 {props.dragActive ? '松开即可添加参考图片' : '将图片拖到这里'}</p>
-        <div className="settings-actions-row studio-dropzone-actions">
-          <button type="button" className="settings-btn settings-btn-secondary settings-btn-sm" onClick={() => void pickLocal()}>从本地选择</button>
-          <button type="button" className="settings-btn settings-btn-secondary settings-btn-sm" onClick={() => { void loadImages(); setGalleryOpen(true); }}>从图片库选择</button>
+    <div className={`studio-media-input${props.dragActive ? ' drag-active' : ''}`}>
+      {props.images.length === 0 ? (
+        <div
+          className={`studio-dropzone${props.dragActive ? ' drag-active' : ''}`}
+          role="button"
+          tabIndex={props.disabled ? -1 : 0}
+          aria-label="拖入或点击选择参考图片"
+          onClick={() => { if (!props.disabled) void pickLocal(); }}
+          onKeyDown={e => {
+            if (props.disabled) return;
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              void pickLocal();
+            }
+          }}
+        >
+          <svg className="studio-dropzone-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden>
+            <rect x="3" y="5" width="18" height="14" rx="2" />
+            <circle cx="8.5" cy="10" r="1.5" />
+            <path d="M3.5 16.5l4.8-4.8a1.5 1.5 0 0 1 2.1 0l3.1 3.1m0 0l2-2a1.5 1.5 0 0 1 2.1 0l3 3" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          <p className="studio-dropzone-title">{props.dragActive ? '松开即可添加参考图片' : '拖入图片，或点击选择图片'}</p>
+          <div className="settings-actions-row studio-dropzone-actions">
+            <button type="button" className="settings-btn settings-btn-secondary settings-btn-sm" onClick={e => { e.stopPropagation(); void pickLocal(); }}>本地选择</button>
+            <button type="button" className="settings-btn settings-btn-secondary settings-btn-sm" onClick={e => { e.stopPropagation(); openGallery(); }}>从图片库选择</button>
+          </div>
+          <p className="studio-dropzone-hint">支持 PNG / JPG / JPEG / WebP</p>
         </div>
-        <p className="studio-dropzone-hint">PNG / JPG / JPEG / WebP</p>
-      </div>
-      {props.images.length > 0 && (
-        <div className="studio-source-grid">
+      ) : (
+        <div className="studio-media-grid">
           {props.images.map((item, index) => (
-            <div className="studio-source-thumb" key={item.path}>
+            <div className="studio-media-tile" key={item.path}>
               {thumbs[item.path]
-                ? <img src={thumbs[item.path]} alt={item.name} title="点击查看大图" style={{ cursor: 'pointer' }} onClick={() => void api.openFile(item.path)} />
-                : <span className="studio-source-placeholder">…</span>}
-              <button
-                type="button"
-                className="studio-source-remove"
-                title="移除"
-                onClick={() => props.onChange(props.images.filter((_, i) => i !== index))}
-              >
-                ×
-              </button>
-              <span className="studio-source-name" title={item.name}>{item.name}</span>
+                ? <img
+                    src={thumbs[item.path]}
+                    alt={item.name}
+                    title={`${item.name}（点击查看大图）`}
+                    onClick={() => useImageViewerStore.getState().openViewer(
+                      props.images.map(source => ({
+                        id: source.path,
+                        path: source.path,
+                        title: '参考图片',
+                        fileName: source.name,
+                      })),
+                      index,
+                    )}
+                  />
+                : <span className="studio-media-placeholder">…</span>}
+              {extOf(item.name) && <span className="studio-media-ext">{extOf(item.name)}</span>}
+              {!props.disabled && (
+                <button
+                  type="button"
+                  className="studio-media-remove"
+                  title="移除参考图片"
+                  aria-label={`移除参考图片 ${item.name}`}
+                  onClick={() => props.onChange(props.images.filter((_, i) => i !== index))}
+                >
+                  ×
+                </button>
+              )}
             </div>
           ))}
+          {!props.disabled && (
+            <div className="studio-media-add-wrap">
+              <button type="button" className="studio-media-add" onClick={() => setAddMenuOpen(v => !v)}>
+                <span className="studio-media-add-icon" aria-hidden>＋</span>
+                <span>添加图片</span>
+              </button>
+              {addMenuOpen && (
+                <div className="bp-more-menu studio-media-add-menu">
+                  <button type="button" onClick={() => void pickLocal()}>从本地选择</button>
+                  <button type="button" onClick={openGallery}>从图片库选择</button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
       {galleryOpen && (
@@ -249,8 +335,8 @@ function SourceImagePicker(props: {
   );
 }
 
-/** 批量模式公共参数（尺寸 / 质量 / 格式 / 输出目录）—— 所有需求共享 */
-function OutputSettings(props: {
+/** 生成设置（尺寸 / 质量 / 格式 / 输出目录）—— 单张 / 批量三种模式共用的唯一实现 */
+function GenerationSettings(props: {
   size: string; onSize: (v: string) => void;
   quality: string; onQuality: (v: string) => void;
   format: string; onFormat: (v: string) => void;
@@ -261,8 +347,8 @@ function OutputSettings(props: {
     if (dir) props.onOutputDir(dir);
   }
   return (
-    <>
-      <div className="form-row form-row-wrap">
+    <div className="studio-settings">
+      <div className="studio-settings-grid">
         <div className="form-group">
           <label>图片尺寸</label>
           <select value={props.size} onChange={e => props.onSize(e.target.value)}>
@@ -282,14 +368,14 @@ function OutputSettings(props: {
           </select>
         </div>
       </div>
-      <div className="form-group">
+      <div className="form-group studio-dir-group">
         <label>输出目录</label>
         <div className="dir-input">
           <input value={props.outputDir} onChange={e => props.onOutputDir(e.target.value)} placeholder="选择图片保存位置" readOnly />
-          <button className="browse-btn" onClick={() => void browse()}>浏览</button>
+          <button type="button" className="browse-btn" onClick={() => void browse()}>浏览</button>
         </div>
       </div>
-    </>
+    </div>
   );
 }
 
@@ -433,51 +519,86 @@ function planFromAi(parsed: ParsedAiPlan, source: GenerationPlan['source'], opti
 }
 
 // ============================================================
+// Workspace 公共片段：Section 标题 / 摘要行 / 最近任务
+// ============================================================
+
+/** 区块标题（Creator Workspace 统一 Section 层级；divided = 与上一区块之间加分隔线） */
+function SectionHead({ title, hint, divided }: { title: ReactNode; hint?: ReactNode; divided?: boolean }) {
+  return (
+    <div className={`studio-section-head${divided ? ' divided' : ''}`}>
+      <span className="studio-section-title">{title}</span>
+      {hint && <span className="studio-section-hint">{hint}</span>}
+    </div>
+  );
+}
+
+/** 任务摘要行：Label 次级色 / Value 主色，长值 ellipsis（title 悬浮看全文） */
+function SummaryRow(props: { label: string; value: ReactNode; title?: string; emphasis?: boolean; path?: boolean }) {
+  return (
+    <div className={`studio-summary-row${props.emphasis ? ' emphasis' : ''}`}>
+      <span className="studio-summary-label">{props.label}</span>
+      <span className={`studio-summary-value${props.path ? ' path' : ''}`} title={props.title}>{props.value}</span>
+    </div>
+  );
+}
+
+// ============================================================
 // 最近任务（统一 TaskStore 数据源：createdAt DESC / 实时事件刷新见 ensureTaskEventBridge）
 // ============================================================
+
+/** 状态词与 TaskQueue 对齐（copy.md：生成中 / 已完成 / 失败 / 已取消；pending 沿用「等待中」） */
+const RECENT_STATUS: Record<string, { label: string; cls: string }> = {
+  pending: { label: '等待中', cls: 'run' },
+  running: { label: '生成中', cls: 'run' },
+  completed: { label: '已完成', cls: 'ok' },
+  failed: { label: '失败', cls: 'fail' },
+  cancelled: { label: '已取消', cls: 'cancel' },
+};
 
 function RecentTasksPanel({ tasks }: { tasks: Task[] }) {
   const recent = useMemo(() => selectRecentImageTasks(tasks, RECENT_TASKS_LIMIT), [tasks]);
   return (
-    <aside className="studio-recent">
-      <div className="studio-recent-head">
-        <h3>最近任务</h3>
-        <button className="settings-btn settings-btn-link settings-btn-sm" onClick={() => {
+    <div className="studio-side-section studio-recent">
+      <div className="studio-side-head">
+        <h3 className="studio-side-title">最近任务</h3>
+        <button className="studio-link-btn" onClick={() => {
           window.dispatchEvent(new CustomEvent('cyimage-navigate', { detail: { page: 'queue' } }));
         }}>
           查看全部
         </button>
       </div>
-      {recent.length === 0 && <p className="form-hint">暂无任务。提交后任务会立即出现在这里并进入统一任务队列。</p>}
-      {recent.map(task => {
-        const total = task.count || 1;
-        const done = task.success_count + task.failed_count;
-        const dotCls = task.status === 'completed' ? 'ok' : task.status === 'failed' ? 'fail' : task.status === 'running' ? 'pending' : 'muted';
-        const dot = task.status === 'completed' ? '✓' : task.status === 'failed' ? '✕' : task.status === 'running' ? '●' : '○';
-        const fullTitle = recentTaskDisplayTitle(task);
-        return (
-          <button
-            key={task.id}
-            className="studio-recent-item"
-            title={fullTitle}
-            onClick={() => window.dispatchEvent(new CustomEvent('cyimage-navigate', { detail: { page: 'queue', focusTaskId: task.id } }))}
-          >
-            <span className={`agent-dot ${dotCls}`}>{dot}</span>
-            <span className="studio-recent-main">
-              <span className="studio-recent-name">{fullTitle}</span>
-              <span className="studio-recent-meta">
-                <span className="studio-recent-time">{formatTaskTime(task.created_at)}</span>
-                <span className="studio-recent-progress">
-                  {task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled'
-                    ? `${task.success_count}/${total}`
-                    : `${done}/${total}`}
+      {recent.length === 0 && <p className="studio-recent-empty">暂无任务。提交后任务会立即出现在这里并进入统一任务队列。</p>}
+      <div className="studio-recent-list">
+        {recent.map(task => {
+          const total = task.count || 1;
+          const done = task.success_count + task.failed_count;
+          const status = RECENT_STATUS[task.status] || RECENT_STATUS.pending;
+          const fullTitle = recentTaskDisplayTitle(task);
+          return (
+            <button
+              key={task.id}
+              className="studio-recent-item"
+              title={fullTitle}
+              onClick={() => window.dispatchEvent(new CustomEvent('cyimage-navigate', { detail: { page: 'queue', focusTaskId: task.id } }))}
+            >
+              <span className={`studio-recent-status ${status.cls}`} aria-hidden />
+              <span className="studio-recent-main">
+                <span className="studio-recent-name">{fullTitle}</span>
+                <span className="studio-recent-meta">
+                  <span className="studio-recent-time">{formatTaskTime(task.created_at)}</span>
+                  <span className={`studio-recent-state ${status.cls}`}>{status.label}</span>
+                  <span className="studio-recent-progress">
+                    {task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled'
+                      ? `${task.success_count}/${total}`
+                      : `${done}/${total}`}
+                  </span>
                 </span>
               </span>
-            </span>
-          </button>
-        );
-      })}
-    </aside>
+            </button>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
@@ -1135,156 +1256,86 @@ export default function ImageStudio() {
 
     return (
       <section className="settings-card studio-card">
-        <div className="create-layout studio-single-layout">
-          <div className="create-form">
-            {isEdit && (
-              <div className="form-group">
-                <label>参考图片 <span className="required">*</span></label>
-                <SourceImagePicker images={i2iSources} onChange={updateI2iSources} dragActive={sourceDragActive} />
-              </div>
-            )}
-
-            <div className="form-group">
-              <label>{isEdit ? '图片编辑需求' : '提示词'} <span className="required">*</span></label>
-              {visionCarryMeta?.optimization && (
-                <p className="form-hint studio-vision-carry">
-                  来自视觉理解复刻方案{visionCarryMeta.sourceVisionTaskId ? `（视觉理解任务 #${visionCarryMeta.sourceVisionTaskId.slice(0, 8)}）` : ''}：
-                  当前 Prompt 已优化，提交生成时不会再次执行 AI 优化。
-                  {isEdit && visionCarryMeta.negativePrompt?.trim() ? '负面提示词将随方案一并提交。' : ''}
-                </p>
-              )}
-              <textarea
-                rows={4}
-                value={promptText}
-                onChange={e => (isEdit ? setI2iPrompt : setT2iPrompt)(e.target.value)}
-                placeholder={isEdit
-                  ? '描述你想要对图片进行的编辑，例如：把背景换成夜晚的城市街道，保留人物姿态……'
-                  : '描述你想要生成的图片，越详细效果越好……'}
-              />
+        {isEdit && (
+          <div className="form-group">
+            <div className="studio-field-head">
+              <label>参考图片 <span className="required">*</span></label>
+              {i2iSources.length > 0 && <span className="studio-media-count">已选 {i2iSources.length} 张</span>}
             </div>
-
-            <div className="settings-actions-row studio-optimizer-row">
-              <button
-                className="settings-btn settings-btn-secondary settings-btn-sm"
-                disabled={optimizing || !promptText.trim() || !optimizerModelLabel}
-                onClick={() => void optimizeSingle()}
-              >
-                {optimizing ? 'AI 优化中…' : hasResult ? '重新优化' : '✨ AI 优化提示词'}
-              </button>
-              <span className="studio-optimizer-meta">把提示词优化为专业的正向 / 负面提示词（可选）</span>
-            </div>
-
-            {opt.status === 'error' && (
-              <p className="form-hint form-hint-error studio-req-error">
-                AI 优化失败：{opt.error || '请重试'}
-                <button className="settings-btn settings-btn-link settings-btn-sm" disabled={optimizing || !optimizerModelLabel} onClick={() => void optimizeSingle()}>重新优化</button>
-              </p>
-            )}
-
-            {hasResult && (
-              <SingleOptResult
-                opt={opt}
-                optimizing={optimizing}
-                onPatch={patch => setSingleOpt(prev => ({ ...prev, ...patch }))}
-                onReoptimize={() => void optimizeSingle()}
-              />
-            )}
-
-            {!isEdit && (
-              <div className="form-group">
-                <label>负面提示词</label>
-                <textarea
-                  rows={2}
-                  value={t2iNegative}
-                  onChange={e => setT2iNegative(e.target.value)}
-                  placeholder="描述你不希望出现在图片中的内容（采用 AI 优化结果时，以优化得到的负面提示词为准）"
-                />
-              </div>
-            )}
-
-            <div className="form-row">
-              <div className="form-group">
-                <label>图片尺寸</label>
-                <select value={size} onChange={e => setSize(e.target.value)}>
-                  {SIZES.map(s => <option key={s} value={s}>{s}</option>)}
-                </select>
-              </div>
-              <div className="form-group">
-                <label>质量</label>
-                <select value={quality} onChange={e => setQuality(e.target.value)}>
-                  {QUALITIES.map(q => <option key={q} value={q}>{QUALITY_LABELS[q] || q}</option>)}
-                </select>
-              </div>
-            </div>
-
-            <div className="form-group">
-              <label>输出格式</label>
-              <select value={format} onChange={e => setFormat(e.target.value)}>
-                {FORMATS.map(f => <option key={f} value={f}>{f.toUpperCase()}</option>)}
-              </select>
-            </div>
-
-            <div className="form-group">
-              <label>输出目录</label>
-              <div className="dir-input">
-                <input value={outputDir} onChange={e => setOutputDir(e.target.value)} placeholder="选择图片保存位置" readOnly />
-                <button className="browse-btn" onClick={() => void api.selectDirectory().then(dir => { if (dir) setOutputDir(dir); })}>浏览</button>
-              </div>
-            </div>
+            <ReferenceImageInput images={i2iSources} onChange={updateI2iSources} dragActive={sourceDragActive} />
           </div>
+        )}
 
-          <div className="task-summary-card">
-            <h3>任务摘要</h3>
-            {isEdit && (
-              <div className="summary-item">
-                <span className="summary-label">参考图片</span>
-                <span className="summary-value">{i2iSources.length} 张</span>
-              </div>
-            )}
-            <div className="summary-item">
-              <span className="summary-label">{isEdit ? '编辑需求' : '提示词'}</span>
-              <span className="summary-value">{promptText || '未填写'}</span>
-            </div>
-            {hasResult && opt.useOptimized && (
-              <div className="summary-item">
-                <span className="summary-label">AI 优化</span>
-                <span className="summary-value">已采用</span>
-              </div>
-            )}
-            <div className="summary-item">
-              <span className="summary-label">图片尺寸</span>
-              <span className="summary-value">{size}</span>
-            </div>
-            <div className="summary-item">
-              <span className="summary-label">质量</span>
-              <span className="summary-value">{quality}</span>
-            </div>
-            <div className="summary-item">
-              <span className="summary-label">输出格式</span>
-              <span className="summary-value">{format.toUpperCase()}</span>
-            </div>
-            <div className="summary-divider" />
-            <div className="summary-item highlight">
-              <span className="summary-label">生成数量</span>
-              <span className="summary-value">{visionCarryMeta?.count && visionCarryMeta.count > 0 ? visionCarryMeta.count : 1} 张</span>
-            </div>
-            <div className="summary-item">
-              <span className="summary-label">输出目录</span>
-              <span className="summary-value path">{outputDir || '未选择'}</span>
-            </div>
+        <div className="form-group">
+          <div className="studio-field-head studio-prompt-head">
+            <label>{isEdit ? '图片编辑需求' : '提示词'} <span className="required">*</span></label>
+            <span className="studio-optimizer-meta studio-prompt-hint" title="把提示词优化为专业的正向 / 负面提示词（可选）">
+              把提示词优化为专业的正向 / 负面提示词（可选）
+            </span>
             <button
-              className="start-btn"
-              onClick={() => void submitSingle()}
-              disabled={submitting}
+              type="button"
+              className={`settings-btn settings-btn-sm${hasResult ? ' studio-btn-ai' : ' settings-btn-secondary'}`}
+              disabled={optimizing || !promptText.trim() || !optimizerModelLabel}
+              title={optimizerModelLabel ? `AI 提示词优化 · ${optimizerModelLabel}` : '尚未配置 AI 提示词优化模型'}
+              onClick={() => void optimizeSingle()}
             >
-              {submitting ? '创建中...' : isEdit ? '开始编辑' : '开始生成图片'}
+              {optimizing ? 'AI 优化中…' : hasResult ? '重新优化' : '✨ AI 优化'}
             </button>
-            <p className="summary-note">
-              {isEdit ? '图生图任务将使用所选参考图片进行 AI 编辑。' : '系统将为每张图片单独调用 API，确保稳定性。'}
-              可在「任务队列」中查看实时进度。
-            </p>
           </div>
+          {visionCarryMeta?.optimization && (
+            <p className="form-hint studio-vision-carry">
+              来自视觉理解复刻方案{visionCarryMeta.sourceVisionTaskId ? `（视觉理解任务 #${visionCarryMeta.sourceVisionTaskId.slice(0, 8)}）` : ''}：
+              当前 Prompt 已优化，提交生成时不会再次执行 AI 优化。
+              {isEdit && visionCarryMeta.negativePrompt?.trim() ? '负面提示词将随方案一并提交。' : ''}
+            </p>
+          )}
+          <textarea
+            className="studio-textarea studio-textarea-lg"
+            rows={5}
+            value={promptText}
+            onChange={e => (isEdit ? setI2iPrompt : setT2iPrompt)(e.target.value)}
+            placeholder={isEdit
+              ? '描述你想要对图片进行的编辑，例如：把背景换成夜晚的城市街道，保留人物姿态……'
+              : '描述你想要生成的图片，越详细效果越好……'}
+          />
         </div>
+
+        {opt.status === 'error' && (
+          <p className="form-hint form-hint-error studio-req-error">
+            AI 优化失败：{opt.error || '请重试'}
+            <button className="settings-btn settings-btn-link settings-btn-sm" disabled={optimizing || !optimizerModelLabel} onClick={() => void optimizeSingle()}>重新优化</button>
+          </p>
+        )}
+
+        {hasResult && (
+          <SingleOptResult
+            opt={opt}
+            optimizing={optimizing}
+            onPatch={patch => setSingleOpt(prev => ({ ...prev, ...patch }))}
+            onReoptimize={() => void optimizeSingle()}
+          />
+        )}
+
+        {!isEdit && (
+          <div className="form-group studio-field-secondary">
+            <label>负面提示词</label>
+            <textarea
+              className="studio-textarea studio-textarea-sm"
+              rows={2}
+              value={t2iNegative}
+              onChange={e => setT2iNegative(e.target.value)}
+              placeholder="描述你不希望出现在图片中的内容（采用 AI 优化结果时，以优化得到的负面提示词为准）"
+            />
+          </div>
+        )}
+
+        <SectionHead divided title="生成设置" />
+        <GenerationSettings
+          size={size} onSize={setSize}
+          quality={quality} onQuality={setQuality}
+          format={format} onFormat={setFormat}
+          outputDir={outputDir} onOutputDir={setOutputDir}
+        />
       </section>
     );
   }
@@ -1294,54 +1345,56 @@ export default function ImageStudio() {
     const planError = batch.planningStatus === 'error';
     const showPlansSection = plans.length > 0 || planning;
     const skeletonCount = plans.length > 0 ? plans.length : batch.targetCount;
-    const canSubmit = allPlansReady && batch.requirement.trim().length > 0 && !anyOptimizing && !submitting;
 
     return (
       <section className="settings-card studio-card">
         {isEdit && (
           <div className="form-group">
-            <label>参考图片 <span className="required">*</span></label>
+            <div className="studio-field-head">
+              <label>参考图片 <span className="required">*</span></label>
+              {batchSources.length > 0 && <span className="studio-media-count">已选 {batchSources.length} 张</span>}
+            </div>
             <span className="form-hint studio-source-hint">所有方案共用当前参考图，可添加多张。</span>
-            <SourceImagePicker images={batchSources} onChange={setBatchSources} dragActive={sourceDragActive} />
+            <ReferenceImageInput images={batchSources} onChange={setBatchSources} dragActive={sourceDragActive} />
           </div>
         )}
 
-        {/* ① 批量生成需求：总需求 + 目标数量 + AI 智能规划 */}
-        <div className="bp-stage-head">
-          <span className="bp-stage-title"><span className="bp-stage-no">1</span>批量生成需求</span>
-          <span className="bp-stage-hint">描述你想批量生成的内容，AI 会根据目标数量规划不同方案</span>
-        </div>
+        {/* 批量生成需求：总需求 + 目标数量 + AI 智能规划（单页表单，不做人造步骤编号） */}
+        <SectionHead title="批量生成需求" hint="描述你想批量生成的内容，AI 会根据目标数量规划不同方案" />
         <div className="form-group">
           <label>需求内容 <span className="required">*</span></label>
           <textarea
-            rows={4}
+            className="studio-textarea studio-textarea-lg"
+            rows={5}
             value={batch.requirement}
             onChange={e => patchBatch({ requirement: e.target.value })}
             placeholder={isEdit
               ? '例如：基于这个人物生成3种不同的战国女将造型，甲胄、武器、姿态要明显不同……'
               : '例如：我需要生成3张不同的战国时期女战将，人物的服装、武器、姿势、背景需要明显不同，整体保持真实战国历史电影质感。'}
           />
+          {batch.requirement.length > 0 && (
+            <span className="studio-char-hint">{batch.requirement.length} 字</span>
+          )}
         </div>
-        {batch.requirement.length > 0 && (
-          <p className="form-hint" style={{ marginTop: -6 }}>{batch.requirement.length} 字</p>
-        )}
 
         {/* 规划前：目标数量 + AI 主按钮；规划后：stepper 退出，数量只随增删方案变化 */}
         {plans.length === 0 && !planning && (
-          <div className="bp-require-actions">
-            <span className="studio-count-row" style={{ margin: 0 }}>
+          <div className="studio-require-actions">
+            <span className="studio-count-row">
               <span className="studio-count-label">目标数量</span>
               <TargetCountStepper value={batch.targetCount} onChange={v => patchBatch({ targetCount: v })} />
             </span>
             <button
-              className="settings-btn settings-btn-primary"
+              className="settings-btn studio-btn-ai"
               disabled={!batch.requirement.trim() || !optimizerModelLabel}
               onClick={() => void runPlanning()}
             >
               ✨ AI 智能规划并优化 {batch.targetCount} 个方案
             </button>
             <div className="bp-more-wrap">
-              <button className="settings-btn settings-btn-secondary settings-btn-sm" onClick={() => setMoreWaysOpen(v => !v)}>更多方式 ▾</button>
+              <button className="settings-btn settings-btn-secondary settings-btn-sm" onClick={() => setMoreWaysOpen(v => !v)}>
+                更多方式 <span className={`studio-caret${moreWaysOpen ? ' open' : ''}`}>▾</span>
+              </button>
               {moreWaysOpen && (
                 <div className="bp-more-menu">
                   <button type="button" onClick={() => { setMoreWaysOpen(false); setBulkImportOpen(true); }}>批量导入方案</button>
@@ -1380,21 +1433,18 @@ export default function ImageStudio() {
         )}
 
         {requirementModified && !planning && (
-          <p className="bp-requirement-hint">
+          <p className="studio-requirement-hint">
             总需求已修改，现有方案不会自动变化。如需按新需求重新生成，可使用方案区「更多 ▾ → 重新规划全部」。
           </p>
         )}
 
-        {/* ② 生成方案：规划成功后才显示（规划前不显示空方案卡片） */}
+        {/* 生成方案：规划成功后才显示（规划前不显示空方案卡片） */}
         {showPlansSection && (
-          <div ref={plansSectionRef}>
-            <div className="bp-stage-head bp-stage-head-plans">
-              <span className="bp-stage-title"><span className="bp-stage-no">2</span>生成方案（{plans.length}）</span>
-              <span className="bp-stage-hint">1 个方案 = 1 张图片</span>
-            </div>
+          <div ref={plansSectionRef} className="studio-plans-section">
+            <SectionHead divided title={`生成方案（${plans.length}）`} hint="1 个方案 = 1 张图片" />
 
-            <div className="bp-plans-toolbar">
-              <span className="bp-plans-count">当前方案：{plans.length} 个</span>
+            <div className="studio-plans-toolbar">
+              <span className="studio-plans-count">当前方案：{plans.length} 个</span>
               <button
                 className="settings-btn settings-btn-secondary settings-btn-sm"
                 disabled={appendBusy || planning || plans.length >= MAX_PLAN_COUNT}
@@ -1403,7 +1453,9 @@ export default function ImageStudio() {
                 {appendBusy ? 'AI 补充中…' : '+ 增加一个方案'}
               </button>
               <div className="bp-more-wrap">
-                <button className="settings-btn settings-btn-secondary settings-btn-sm" onClick={() => setPlansMenuOpen(v => !v)}>更多 ▾</button>
+                <button className="settings-btn settings-btn-secondary settings-btn-sm" onClick={() => setPlansMenuOpen(v => !v)}>
+                  更多 <span className={`studio-caret${plansMenuOpen ? ' open' : ''}`}>▾</span>
+                </button>
                 {plansMenuOpen && (
                   <div className="bp-more-menu">
                     <button
@@ -1426,13 +1478,13 @@ export default function ImageStudio() {
             </div>
 
             {planning && (
-              <div className="bp-planning">
-                <span className="bp-planning-status">AI 正在规划并优化 {skeletonCount} 个方案…</span>
+              <div className="studio-planning">
+                <span className="studio-planning-status">AI 正在规划并优化 {skeletonCount} 个方案…</span>
                 {Array.from({ length: skeletonCount }).map((_, i) => (
-                  <div className="bp-skeleton-card" key={i}>
-                    <span className="bp-skeleton-line w35" />
-                    <span className="bp-skeleton-line w90" />
-                    <span className="bp-skeleton-line w60" />
+                  <div className="studio-skeleton-card" key={i}>
+                    <span className="studio-skeleton-line w35" />
+                    <span className="studio-skeleton-line w90" />
+                    <span className="studio-skeleton-line w60" />
                   </div>
                 ))}
               </div>
@@ -1454,60 +1506,23 @@ export default function ImageStudio() {
           </div>
         )}
 
-        {/* ③ 生成设置：所有方案共享 */}
-        <div className="bp-stage-head bp-stage-head-settings">
-          <span className="bp-stage-title"><span className="bp-stage-no">3</span>生成设置</span>
-          <span className="bp-stage-hint">所有方案共享</span>
-        </div>
-        <OutputSettings
+        {/* 生成设置：所有方案共享（与单张模式同一组件） */}
+        <SectionHead divided title="生成设置" hint="所有方案共享" />
+        <GenerationSettings
           size={size} onSize={setSize}
           quality={quality} onQuality={setQuality}
           format={format} onFormat={setFormat}
           outputDir={outputDir} onOutputDir={setOutputDir}
         />
-
-        {/* ④ 生成摘要 + 提交 */}
-        <div className="bp-stage-head bp-stage-head-summary">
-          <span className="bp-stage-title"><span className="bp-stage-no">4</span>生成摘要</span>
-        </div>
-        <div className="bp-summary-grid">
-          <div className="bp-summary-item">
-            <div className="bp-summary-num">{plans.length}</div>
-            <div className="bp-summary-label">生成方案（个）</div>
-          </div>
-          <div className="bp-summary-item">
-            <div className="bp-summary-num">{readyCount}</div>
-            <div className="bp-summary-label">已准备（个）</div>
-          </div>
-          <div className="bp-summary-item">
-            <div className="bp-summary-num">{pendingCount}</div>
-            <div className="bp-summary-label">待完善（个）</div>
-          </div>
-          <div className="bp-summary-item">
-            <div className="bp-summary-num">{plans.length}</div>
-            <div className="bp-summary-label">最终图片（张）</div>
-          </div>
-        </div>
-
-        <div className="studio-submit-row">
-          <button
-            className="settings-btn settings-btn-primary studio-submit-btn"
-            disabled={!canSubmit}
-            onClick={() => void submitBatch()}
-          >
-            {submitting ? '提交中…' : `开始批量生成（${plans.length} 张）`}
-          </button>
-          <span className={`bp-submit-hint${pendingCount > 0 ? ' warn' : ''}`}>
-            {plans.length === 0
-              ? 'AI 规划生成方案后可开始批量生成'
-              : pendingCount > 0
-                ? `还有 ${pendingCount} 个方案尚未完善`
-                : `${readyCount} 个方案已准备 · 共 ${plans.length} 张${anyOptimizing ? ' · 有方案正在 AI 优化' : ''}`}
-          </span>
-        </div>
       </section>
     );
   }
+
+  // ===== 侧栏摘要（单张：任务摘要 / 批量：生成摘要）+ 统一 Primary CTA =====
+  const promptText = isEdit ? i2iPrompt : t2iPrompt;
+  const singleCount = visionCarryMeta?.count && visionCarryMeta.count > 0 ? visionCarryMeta.count : 1;
+  const singleAdopted = singleOpt.status === 'success' && singleOpt.useOptimized;
+  const canSubmitBatch = allPlansReady && batch.requirement.trim().length > 0 && !anyOptimizing && !submitting;
 
   return (
     <div className="page image-studio-page">
@@ -1519,32 +1534,118 @@ export default function ImageStudio() {
       <div className="studio-mode-bar">
         <div className="studio-mode-group">
           <span className="studio-mode-label">生成方式</span>
-          <div className="studio-tabs">
+          <div className="studio-seg">
             {([['t2i', '文生图'], ['i2i', '图生图']] as const).map(([key, label]) => (
-              <button key={key} className={`studio-tab ${generationType === key ? 'active' : ''}`} onClick={() => setGenerationType(key)}>{label}</button>
+              <button
+                key={key}
+                type="button"
+                className={`studio-seg-btn${generationType === key ? ' active' : ''}`}
+                aria-pressed={generationType === key}
+                onClick={() => setGenerationType(key)}
+              >
+                {label}
+              </button>
             ))}
           </div>
         </div>
         <div className="studio-mode-group">
           <span className="studio-mode-label">生成模式</span>
-          <div className="studio-tabs">
+          <div className="studio-seg">
             {([['single', '单张生成'], ['batch', '批量生成']] as const).map(([key, label]) => (
-              <button key={key} className={`studio-tab ${generationMode === key ? 'active' : ''}`} onClick={() => setGenerationMode(key)}>{label}</button>
+              <button
+                key={key}
+                type="button"
+                className={`studio-seg-btn${generationMode === key ? ' active' : ''}`}
+                aria-pressed={generationMode === key}
+                onClick={() => setGenerationMode(key)}
+              >
+                {label}
+              </button>
             ))}
           </div>
         </div>
-        <div className="studio-mode-group studio-mode-group-meta">
+        <div className="studio-mode-meta">
           <OptimizerModelNote label={optimizerModelLabel} />
         </div>
       </div>
 
       {error && <div className="error-banner">{error}</div>}
 
-      <div className="studio-layout">
+      <div className="studio-workspace">
         <div className="studio-main">
           {isSingle ? renderSingle() : renderBatch()}
         </div>
-        <RecentTasksPanel tasks={tasks} />
+
+        {/* TaskSidebar：摘要（含 Primary CTA）+ 最近任务，同一卡片容器，sticky 跟随 */}
+        <aside className="studio-sidebar">
+          {isSingle ? (
+            <div className="studio-side-section">
+              <h3 className="studio-side-title">任务摘要</h3>
+              <div className="studio-summary-rows">
+                {isEdit && <SummaryRow label="参考图片" value={`${i2iSources.length} 张`} />}
+                <SummaryRow label={isEdit ? '编辑需求' : '提示词'} value={promptText || '未填写'} title={promptText || undefined} />
+                {singleAdopted && <SummaryRow label="AI 优化" value="已采用" />}
+                <SummaryRow label="图片尺寸" value={size} />
+                <SummaryRow label="质量" value={quality} />
+                <SummaryRow label="输出格式" value={format.toUpperCase()} />
+                <div className="studio-summary-divider" />
+                <SummaryRow emphasis label="生成数量" value={`${singleCount} 张`} />
+                <SummaryRow label="输出目录" value={outputDir || '未选择'} title={outputDir || undefined} path />
+              </div>
+              <button
+                type="button"
+                className="studio-cta-btn"
+                onClick={() => void submitSingle()}
+                disabled={submitting}
+              >
+                {submitting ? '创建中…' : isEdit ? '开始编辑' : '开始生成图片'}
+              </button>
+              <p className="studio-side-note">
+                {isEdit ? '图生图任务将使用所选参考图片进行 AI 编辑。' : '系统将为每张图片单独调用 API，确保稳定性。'}
+                可在「任务队列」中查看实时进度。
+              </p>
+            </div>
+          ) : (
+            <div className="studio-side-section">
+              <h3 className="studio-side-title">生成摘要</h3>
+              <div className="studio-stats-grid">
+                <div className={`studio-stat${plans.length === 0 ? ' is-zero' : ''}`}>
+                  <span className="studio-stat-num">{plans.length}</span>
+                  <span className="studio-stat-label">生成方案（个）</span>
+                </div>
+                <div className={`studio-stat${readyCount === 0 ? ' is-zero' : allPlansReady ? ' stat-ready' : ''}`}>
+                  <span className="studio-stat-num">{readyCount}</span>
+                  <span className="studio-stat-label">已准备（个）</span>
+                </div>
+                <div className={`studio-stat${pendingCount > 0 ? ' stat-pending' : ' is-zero'}`}>
+                  <span className="studio-stat-num">{pendingCount}</span>
+                  <span className="studio-stat-label">待完善（个）</span>
+                </div>
+                <div className={`studio-stat${plans.length > 0 ? ' stat-final' : ' is-zero'}`}>
+                  <span className="studio-stat-num">{plans.length}</span>
+                  <span className="studio-stat-label">最终图片（张）</span>
+                </div>
+              </div>
+              <button
+                type="button"
+                className="studio-cta-btn"
+                disabled={!canSubmitBatch}
+                onClick={() => void submitBatch()}
+              >
+                {submitting ? '提交中…' : `开始批量生成（${plans.length} 张）`}
+              </button>
+              <p className={`studio-side-note${plans.length > 0 && pendingCount > 0 ? ' warn' : ''}`}>
+                {plans.length === 0
+                  ? 'AI 规划生成方案后可开始批量生成'
+                  : pendingCount > 0
+                    ? `还有 ${pendingCount} 个方案尚未完善`
+                    : `${readyCount} 个方案已准备 · 共 ${plans.length} 张${anyOptimizing ? ' · 有方案正在 AI 优化' : ''}`}
+              </p>
+            </div>
+          )}
+          <div className="studio-side-divider" />
+          <RecentTasksPanel tasks={tasks} />
+        </aside>
       </div>
 
       {/* ===== 方案详情抽屉（页面最外层 Overlay，不挤压最近任务布局） ===== */}
@@ -1569,7 +1670,7 @@ export default function ImageStudio() {
           <div className="bp-confirm" onClick={e => e.stopPropagation()}>
             <div className="bp-confirm-title">增加方案（当前 {plans.length} 个，已有方案不会变化）</div>
             <div className="bp-confirm-text">选择新增方式：</div>
-            <div className="settings-actions-row" style={{ justifyContent: 'stretch', flexDirection: 'column', gap: 8 }}>
+            <div className="settings-actions-row studio-vertical-actions">
               <button
                 className="settings-btn settings-btn-primary settings-btn-sm"
                 disabled={appendBusy || !batch.requirement.trim() || !optimizerModelLabel}

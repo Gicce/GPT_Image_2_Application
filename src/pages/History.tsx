@@ -47,6 +47,7 @@ const SUB_STATUS_META: Record<SubTask['status'], { label: string; cls: string }>
 const IMAGE_EXECUTION_MODEL = 'GPT Image 2';
 
 function getSourceLabel(task: Task): string {
+  if (task.task_source === 'cy-video-studio') return 'CY Video Studio · 视频复刻';
   return task.task_source === 'agent' ? 'AI Agent' : '手动';
 }
 
@@ -446,6 +447,26 @@ function HistoryTaskDetail(props: {
                 <span>来源链路</span>
                 <span>视觉理解任务{task.source_task_id ? ` #${task.source_task_id.slice(0, 8)}` : ''} → 图片生成任务</span>
               </div>
+            )}
+            {task.source_app === 'cy-video-studio' && (
+              <>
+                <div className="detail-row">
+                  <span>来源项目</span>
+                  <span>
+                    CY Video Studio · 视频复刻
+                    {task.source_context?.projectName ? ` · ${task.source_context.projectName}` : ''}
+                  </span>
+                </div>
+                {task.source_context?.trackType && (
+                  <div className="detail-row">
+                    <span>用途</span>
+                    <span>
+                      {{ character: '人物参考图', scene: '场景参考图', style: '风格参考图', transition_reference: '转场参考图', first_frame: '首帧参考图' }[task.source_context.trackType] || task.source_context.trackType}
+                      {task.source_context?.purpose ? ` · ${task.source_context.purpose}` : ''}
+                    </span>
+                  </div>
+                )}
+              </>
             )}
             {task.task_plan_summary && (
               <div className="detail-row"><span>任务摘要</span><span>{task.task_plan_summary}</span></div>

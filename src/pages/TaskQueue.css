@@ -299,3 +299,9 @@
   outline-offset: 2px;
   box-shadow: 0 4px 14px color-mix(in srgb, var(--accent-primary) 30%, transparent);
 }
+
+/* 任务行 AI 评价摘要（Phase 22）：轻量展示，不抢任务状态视觉权重 */
+.task-meta span.task-eval-summary {
+  color: var(--badge-success-text);
+  font-weight: 600;
+}

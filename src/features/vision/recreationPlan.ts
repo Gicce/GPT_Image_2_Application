@@ -17,6 +17,7 @@ import type { VisionAnalysis } from '../../types';
 
 export type RecreationFieldKey =
   | 'subject'
+  | 'clothing'
   | 'pose'
   | 'composition'
   | 'camera'
@@ -25,12 +26,30 @@ export type RecreationFieldKey =
   | 'style'
   | 'color';
 
+/** 全部维度 key（固定顺序；优化器 changed_dimensions 校验与测试矩阵的单一来源）。 */
+export const RECREATION_FIELD_KEYS: RecreationFieldKey[] = [
+  'subject', 'clothing', 'pose', 'composition', 'camera', 'scene', 'lighting', 'style', 'color',
+];
+
+/**
+ * 锁定来源（优先级：user_override > intent > default）：
+ *  - default：初始提取的默认保留（软约束，AI 可按修改意图打开）；
+ *  - intent：本轮 AI 按修改意图判定为需要修改 / 保持的维度；
+ *  - user_override：用户手动切换过（硬约束，后续 AI 重新判定不得覆盖）。
+ * 旧会话数据缺省该字段 → 视为 default。
+ */
+export type FieldLockSource = 'default' | 'intent' | 'user_override';
+
 export interface RecreationPlanField {
   key: RecreationFieldKey;
   label: string;
   value: string;
   /** 锁定 = Prompt 优化时必须保持不变的维度（优化器会显式强化约束）。 */
   locked: boolean;
+  /** V4.1：锁定来源（旧数据缺省 = default）。 */
+  lockSource?: FieldLockSource;
+  /** V4.1：初始分析值（维度 Diff 的「原」侧；旧数据缺省 = 不展示维度 Diff）。 */
+  originalValue?: string;
 }
 
 export interface VisualRecreationPlan {
@@ -41,6 +60,7 @@ export interface VisualRecreationPlan {
 
 export const PLAN_FIELD_LABELS: Record<RecreationFieldKey, string> = {
   subject: '人物 / 主体',
+  clothing: '服装 / 造型',
   pose: '动作',
   composition: '构图',
   camera: '镜头',
@@ -65,11 +85,12 @@ export function buildRecreationPlan(analysis: VisionAnalysis): VisualRecreationP
         primary.count && primary.count > 1 ? `${primary.count} 名` : '',
         primary.label,
         primary.appearance?.length ? `（${primary.appearance.join('、')}）` : '',
-        primary.clothing?.length ? `，身着 ${primary.clothing.join('、')}` : '',
       ]
         .filter(Boolean)
         .join('')
     : '';
+
+  const clothingText = primary?.clothing?.length ? primary.clothing.join('，') : '';
 
   const fields: RecreationPlanField[] = [
     {
@@ -77,12 +98,24 @@ export function buildRecreationPlan(analysis: VisionAnalysis): VisualRecreationP
       label: PLAN_FIELD_LABELS.subject,
       value: subjectText || analysis.summary.slice(0, 60),
       locked: !DEFAULT_UNLOCKED.includes('subject'),
+      lockSource: 'default',
+      originalValue: subjectText || analysis.summary.slice(0, 60),
+    },
+    {
+      key: 'clothing',
+      label: PLAN_FIELD_LABELS.clothing,
+      value: clothingText,
+      locked: true,
+      lockSource: 'default',
+      originalValue: clothingText,
     },
     {
       key: 'pose',
       label: PLAN_FIELD_LABELS.pose,
       value: joinDefined([primary?.pose, primary?.action]),
       locked: true,
+      lockSource: 'default',
+      originalValue: joinDefined([primary?.pose, primary?.action]),
     },
     {
       key: 'composition',
@@ -93,6 +126,12 @@ export function buildRecreationPlan(analysis: VisionAnalysis): VisualRecreationP
         analysis.composition.crop,
       ]),
       locked: true,
+      lockSource: 'default',
+      originalValue: joinDefined([
+        analysis.composition.subject_placement,
+        analysis.composition.symmetry,
+        analysis.composition.crop,
+      ]),
     },
     {
       key: 'camera',
@@ -103,6 +142,12 @@ export function buildRecreationPlan(analysis: VisionAnalysis): VisualRecreationP
         analysis.camera.depth_of_field,
       ]),
       locked: true,
+      lockSource: 'default',
+      originalValue: joinDefined([
+        analysis.camera.shot_type,
+        analysis.camera.angle,
+        analysis.camera.depth_of_field,
+      ]),
     },
     {
       key: 'scene',
@@ -114,6 +159,13 @@ export function buildRecreationPlan(analysis: VisionAnalysis): VisualRecreationP
         analysis.scene.time_of_day,
       ]),
       locked: true,
+      lockSource: 'default',
+      originalValue: joinDefined([
+        analysis.scene.environment,
+        analysis.scene.location,
+        analysis.scene.background,
+        analysis.scene.time_of_day,
+      ]),
     },
     {
       key: 'lighting',
@@ -125,6 +177,13 @@ export function buildRecreationPlan(analysis: VisionAnalysis): VisualRecreationP
         analysis.lighting.contrast,
       ]),
       locked: true,
+      lockSource: 'default',
+      originalValue: joinDefined([
+        analysis.lighting.source,
+        analysis.lighting.direction,
+        analysis.lighting.softness,
+        analysis.lighting.contrast,
+      ]),
     },
     {
       key: 'style',
@@ -135,6 +194,12 @@ export function buildRecreationPlan(analysis: VisionAnalysis): VisualRecreationP
         analysis.style.rendering,
       ]),
       locked: true,
+      lockSource: 'default',
+      originalValue: joinDefined([
+        analysis.style.category,
+        analysis.style.medium,
+        analysis.style.rendering,
+      ]),
     },
     {
       key: 'color',
@@ -145,6 +210,12 @@ export function buildRecreationPlan(analysis: VisionAnalysis): VisualRecreationP
         analysis.colors.saturation,
       ]),
       locked: true,
+      lockSource: 'default',
+      originalValue: joinDefined([
+        analysis.colors.dominant_palette?.slice(0, 6).join(' '),
+        analysis.colors.temperature,
+        analysis.colors.saturation,
+      ]),
     },
   ];
 
@@ -166,9 +237,16 @@ export interface RecreationState {
   originalPrompt: string;
   originalNegativePrompt: string;
   editState: RecreationEditState;
-  /** 用户是否已做修改（决定生图前是否必须重新优化）。 */
-  modified: boolean;
-  /** 统一「调整要求」输入框内容（大白话；优化器的主要输入之一）。 */
+  /**
+   * V4.1 语义修订模型（View State 与 Semantic State 分离的核心）：
+   *  - semanticRevision：只有真实语义修改（自然语言要求 / 维度 / 人物 / 服装 / 参考资产）才 +1；
+   *  - optimizedRevision：优化成功时对齐 semanticRevision；
+   *  - needsOptimization = semanticRevision !== optimizedRevision（派生，替代旧的粘滞 modified 标记）。
+   * 折叠 / 展开 / Tab / Viewer / 选中缩略图等纯 UI 操作绝不改变 revision。
+   */
+  semanticRevision: number;
+  optimizedRevision: number;
+  /** 统一「调整要求」输入框内容（大白话 + 结构化修改意图合成；优化器的主要输入之一）。 */
   adjustInstruction: string;
   /** 最近一次「优化复刻 Prompt」失败原因（dirty 状态下非空 → 主状态栏显示「优化失败」）。 */
   optimizeError?: string;
@@ -194,7 +272,8 @@ export function initialRecreationState(
     originalPrompt,
     originalNegativePrompt,
     editState: 'ready',
-    modified: false,
+    semanticRevision: 0,
+    optimizedRevision: 0,
     adjustInstruction: '',
     optimizedPrompt: originalPrompt,
     optimizedNegativePrompt: originalNegativePrompt,
@@ -202,37 +281,130 @@ export function initialRecreationState(
   };
 }
 
-/** 任何修改（调整要求 / 锁定项 / 原始 Prompt）统一进入 dirty。 */
+/**
+ * 旧持久化数据（vision_workspace_v1 / vision_sessions_v1）缺 revision 字段的迁移：
+ * 旧 `modified: true` → 语义修订领先 1（保持「已修改待优化」语义），否则双双归 0。
+ */
+export function normalizeRecreationState(state: RecreationState): RecreationState {
+  if (typeof state.semanticRevision === 'number' && typeof state.optimizedRevision === 'number') {
+    return state;
+  }
+  const legacyModified = (state as RecreationState & { modified?: boolean }).modified === true;
+  return {
+    ...state,
+    semanticRevision: legacyModified ? 1 : 0,
+    optimizedRevision: 0,
+  };
+}
+
+/** 是否需要重新优化（唯一派生判定；纯 UI 操作不改变 revision 因而不影响本函数）。 */
+export function needsOptimization(state: RecreationState): boolean {
+  return state.semanticRevision !== state.optimizedRevision;
+}
+
+/** 任何真实语义修改（调整要求 / 锁定项 / 原始 Prompt / 结构化修改意图）统一进入 dirty。 */
 export function markRecreationDirty(state: RecreationState): RecreationState {
-  return { ...state, editState: 'dirty', modified: true, optimizeError: undefined };
+  return {
+    ...state,
+    editState: 'dirty',
+    semanticRevision: state.semanticRevision + 1,
+    optimizeError: undefined,
+  };
 }
 
 /**
- * 统一「调整要求」输入框变更：
- *  - 有内容 → dirty（记录 adjustInstruction，清空历史失败原因）；
- *  - 清空且从未成功优化过 → 回到 ready（没有待消化的修改，避免空指令卡死在 dirty）；
- *  - 清空但已有优化产物 → 保持 dirty（内容变化即 dirty，需重新优化或重新输入）。
+ * 结构化修改意图合成指令落位（V4.1 修改意图 = 自由文本 + 快捷维度 + 人物替换 + 服装策略）：
+ *  - 有内容 → dirty（revision +1，记录合成指令，清空历史失败原因）；
+ *  - 内容清空且无待消化修改 → 维持现状（优化产物仍有效，绝不空指令卡死在 dirty）；
+ *  - 内容清空但有待消化修改 → 对齐 revision（用户放弃未优化的修改，保留当前生效 Prompt）。
  */
-export function applyAdjustmentInput(state: RecreationState, value: string): RecreationState {
-  const instruction = value.trim();
-  if (instruction) {
-    return { ...markRecreationDirty(state), adjustInstruction: instruction };
+export function applyModificationInstruction(state: RecreationState, instruction: string): RecreationState {
+  const next = instruction.trim();
+  if (next) {
+    return { ...markRecreationDirty(state), adjustInstruction: next };
   }
-  if (state.editState === 'ready' || state.optimizedBy !== 'optimizer') {
-    return { ...state, adjustInstruction: '', editState: 'ready', modified: false, optimizeError: undefined };
+  if (!needsOptimization(state)) {
+    return { ...state, adjustInstruction: '', optimizeError: undefined };
   }
-  return { ...markRecreationDirty(state), adjustInstruction: '' };
+  return { ...revertToLastSuccessfulPrompt(state), adjustInstruction: '' };
 }
 
-/** 切换锁定项：锁定状态立即生效并进入 dirty（锁定项参与下一次优化）。 */
+/** 兼容旧调用名：统一「调整要求」输入框变更（语义同 applyModificationInstruction）。 */
+export function applyAdjustmentInput(state: RecreationState, value: string): RecreationState {
+  return applyModificationInstruction(state, value);
+}
+
+/** 切换锁定项：用户手动操作 → lockSource=user_override（后续 AI 判定不得覆盖），状态进入 dirty。 */
 export function togglePlanFieldLock(state: RecreationState, key: RecreationFieldKey): RecreationState {
-  const fields = state.plan.fields.map(f => (f.key === key ? { ...f, locked: !f.locked } : f));
+  const fields = state.plan.fields.map(f =>
+    f.key === key ? { ...f, locked: !f.locked, lockSource: 'user_override' as FieldLockSource } : f,
+  );
   return { ...markRecreationDirty(state), plan: { ...state.plan, fields } };
 }
 
-/** 「优化复刻 Prompt」开始：dirty → optimizing。 */
+/**
+ * 结构化维度意图落位（优化成功的配套动作）：
+ *  - changedDimensions = 本轮优化中 AI 判定「按用户修改意图需要修改」的维度；
+ *  - 优先级强制：user_override 字段保持用户设定（锁定值与原值都不动，即使 AI 报告改了它）；
+ *  - 其余字段：在 changed 内 → 解锁（lockSource=intent）+ 更新维度值；不在 → 锁定（default）；
+ *  - 未知 key 一律忽略；dimensionValues 缺失时仅更新锁定状态，不改值。
+ */
+export function applyDimensionIntent(
+  state: RecreationState,
+  changedDimensions: RecreationFieldKey[],
+  dimensionValues?: Partial<Record<RecreationFieldKey, string>>,
+): RecreationState {
+  const changed = new Set(changedDimensions.filter(key => RECREATION_FIELD_KEYS.includes(key)));
+  const fields = state.plan.fields.map(field => {
+    if (field.lockSource === 'user_override') return field;
+    const isChanged = changed.has(field.key);
+    const nextValue = isChanged
+      ? (dimensionValues?.[field.key] ?? field.value).trim() || field.value
+      : field.value;
+    return {
+      ...field,
+      locked: !isChanged,
+      lockSource: 'intent' as FieldLockSource,
+      value: nextValue,
+    };
+  });
+  return { ...state, plan: { ...state.plan, fields } };
+}
+
+/**
+ * 「使用上一次 Prompt」：优化失败 / 待优化时放弃当前修改，回退到最近一次成功的
+ * 最终 Prompt（无优化史时回退 ready = 原始复刻 Prompt）。调用方需同步刷新
+ * promptDraft / negativeDraft / 修改意图草稿。
+ */
+export function revertToLastSuccessfulPrompt(state: RecreationState): RecreationState {
+  const hasOptimizerResult = state.optimizedBy === 'optimizer' && !!state.optimizedPrompt?.trim();
+  return {
+    ...state,
+    editState: hasOptimizerResult ? 'optimized' : 'ready',
+    semanticRevision: state.optimizedRevision,
+    optimizeError: undefined,
+    adjustInstruction: '',
+    optimizedPrompt: state.optimizedPrompt?.trim() || state.originalPrompt,
+    optimizedNegativePrompt: state.optimizedNegativePrompt?.trim() || state.originalNegativePrompt,
+  };
+}
+
+/** 是否存在可回退的「上一次成功 Prompt」（失败横幅显示「使用上一次 Prompt」的条件）。 */
+export function hasSuccessfulPrompt(state: RecreationState | null): boolean {
+  if (!state) return false;
+  return !!state.optimizedPrompt?.trim();
+}
+
+/**
+ * 「优化复刻 Prompt」开始：dirty → optimizing。
+ * 从已对齐状态（ready / optimized，如「重新优化」）发起 = 一次新的待消化语义尝试：
+ * revision +1，失败后保持领先（守卫拦截 + 状态栏显示「优化失败」+ 可回退上一次 Prompt）。
+ */
 export function markOptimizing(state: RecreationState): RecreationState {
-  return { ...state, editState: 'optimizing', optimizeError: undefined };
+  const pendingAttempt = state.semanticRevision === state.optimizedRevision
+    ? { semanticRevision: state.semanticRevision + 1 }
+    : {};
+  return { ...state, editState: 'optimizing', optimizeError: undefined, ...pendingAttempt };
 }
 
 /** 「优化复刻 Prompt」失败：回到 dirty 并记录失败原因（状态栏切红色「优化失败」）。 */
@@ -256,7 +428,7 @@ export function canGenerateFromRecreation(state: RecreationState | null): Genera
   if (state.editState === 'optimizing') {
     return { allowed: false, reason: '正在优化提示词，请稍候再确认生成。' };
   }
-  if (state.editState === 'dirty' || state.modified) {
+  if (needsOptimization(state)) {
     return { allowed: false, reason: '当前方案已修改但尚未优化，请先点击【优化复刻 Prompt】。' };
   }
   if (!state.optimizedPrompt || !state.optimizedPrompt.trim()) {
@@ -265,9 +437,9 @@ export function canGenerateFromRecreation(state: RecreationState | null): Genera
   return { allowed: true };
 }
 
-/** 重复点击优化时是否需要再次优化：只有 dirty 才需要（ready / optimized 直接用现成 Prompt）。 */
+/** 重复点击优化时是否需要再次优化：语义修订落后才需要（ready / optimized 直接用现成 Prompt）。 */
 export function needsReoptimization(state: RecreationState): boolean {
-  return state.editState === 'dirty';
+  return needsOptimization(state);
 }
 
 // ===== 主状态栏（状态 → 标签 / 色调 / 引导语，文案唯一来源，测试锚点） =====
@@ -308,13 +480,16 @@ export function describeRecreationStatus(state: RecreationState | null): Recreat
       note: '正在结合复刻方案、锁定项与你的调整要求优化提示词，完成后即可确认生成图片。',
     };
   }
-  if (state.editState === 'dirty') {
+  if (needsOptimization(state)) {
     if (state.optimizeError) {
+      const fallback = state.optimizedBy === 'optimizer' && state.optimizedPrompt?.trim()
+        ? '上一次成功的 Prompt 仍在，可点「使用上一次 Prompt」直接生成。'
+        : '';
       return {
         key: 'optimize_failed',
         label: '优化失败',
         tone: 'red',
-        note: `优化失败：${state.optimizeError}。可点击「优化复刻 Prompt」重试，或调整要求后重新优化。`,
+        note: `优化失败：${state.optimizeError}。可点击「优化复刻 Prompt」重试。${fallback}`,
       };
     }
     return {
@@ -350,13 +525,20 @@ export function applyOptimizationResult(
     summary: string;
     providerName?: string;
     modelName?: string;
+    /** V4.1：AI 判定的本轮需修改维度（存在即同步落位锁定来源，空缺 = 保持现锁定结构）。 */
+    changedDimensions?: RecreationFieldKey[];
+    /** V4.1：AI 重建后的各维度值（维度 Diff 的「新」侧；只对非 user_override 字段生效）。 */
+    dimensionValues?: Partial<Record<RecreationFieldKey, string>>;
   },
 ): RecreationState {
+  const withIntent = result.changedDimensions
+    ? applyDimensionIntent(state, result.changedDimensions, result.dimensionValues)
+    : state;
   return {
-    ...state,
+    ...withIntent,
     editState: 'optimized',
-    // 修改已被本轮优化消化：modified 复位，否则优化后仍会被生图守卫拦截
-    modified: false,
+    // 修改已被本轮优化消化：修订对齐，否则优化后仍会被生图守卫拦截
+    optimizedRevision: withIntent.semanticRevision,
     optimizeError: undefined,
     optimizedPrompt: result.optimizedPrompt,
     optimizedNegativePrompt: result.optimizedNegativePrompt,
@@ -385,6 +567,8 @@ export interface GenerationCarryMeta {
   /** V4.0.8 图生图参考图：视觉理解工作区原图路径（复用素材，不重复导入）。 */
   sourceImagePath?: string;
   sourceAssetId?: string;
+  /** V4.1 人物替换参考图（i2i 时作为第二张参考图；身份 / 脸部 / 发型 / 体型）。 */
+  personReferencePath?: string;
   /** 已优化标记：ImageStudio 提交时冻结快照，绝不再执行一次 AI 优化。 */
   optimization?: {
     providerName?: string;
@@ -407,6 +591,8 @@ export function buildGenerationCarry(
     generationMode?: 't2i' | 'i2i';
     sourceImagePath?: string;
     sourceAssetId?: string;
+    /** V4.1 人物替换参考图路径（i2i 时作为第二张参考图带入图片工作室）。 */
+    personReferencePath?: string;
   },
 ): GenerationCarryMeta {
   const instruction = state.adjustInstruction.trim();
@@ -425,6 +611,7 @@ export function buildGenerationCarry(
     generationMode: extra.generationMode,
     sourceImagePath: extra.sourceImagePath,
     sourceAssetId: extra.sourceAssetId,
+    personReferencePath: extra.personReferencePath,
     optimization: {
       providerName: state.providerName,
       modelName: state.modelName,

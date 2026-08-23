@@ -1,13 +1,12 @@
 ﻿import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useChatStore } from '../store/useChatStore';
 import { useAIProviderStore, resolveConversationAgent } from '../features/aiProviders/store';
-import { isNewlyDiscovered } from '../features/aiProviders/registry/registry';
 import { resolveProfileBaseUrl } from '../features/aiProviders/adapters';
 import { ProviderLogo } from '../features/aiProviders/ProviderLogo';
 import { isSyntheticAssistantMessage } from '../utils/agent/historySanitizer';
-import type { AIProviderModel } from '../features/aiProviders/types';
 import { defaultUseScopes } from '../features/aiProviders/types';
-import { BILLING_MODE_LABELS } from '../features/aiProviders/types';
+import ModelPicker from '../components/ModelPicker';
+import BillingBadge from '../components/BillingBadge';
 import { memo } from 'react';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { useImageStore } from '../store/useImageStore';
@@ -60,6 +59,7 @@ import { INVALID_IMAGE_DROP_TOAST, type DroppedImageFile } from '../utils/imageD
 import { resolveChatImageReadiness } from '../utils/chatImageReadiness';
 import { buildDroppedChatAttachmentDraft } from '../utils/chatDropAttachments';
 import { useImageDrop } from '../hooks/useImageDrop';
+import { useConversationDraftStore, ANONYMOUS_DRAFT_KEY, type ConversationComposerDraft } from '../store/useConversationDraftStore';
 import 'highlight.js/styles/atom-one-dark.css';
 import './Chat.css';
 import './ImageEdit.css';
@@ -246,6 +246,9 @@ function estimateConversationTokens(conv?: ChatConversation | null): number {
 const CONVERSATION_ROW_HEIGHT = 46;
 const CONVERSATION_OVERSCAN = 8;
 
+/** 无草稿会话的稳定空对象（selector 返回值兜底，避免每次 render 新建引用） */
+const EMPTY_COMPOSER_DRAFT: ConversationComposerDraft = { input: '', chat: [], task: [] };
+
 const ConversationListItem = memo(function ConversationListItem({
   conversation,
   active,
@@ -391,15 +394,6 @@ export default function Chat() {
   const { settings } = useSettingsStore();
   const { user, isLoggedIn } = useAuthStore();
   const { images, loadImages } = useImageStore();
-  const [input, setInput] = useState('');
-  // Composer 图片附件按对话/任务模式严格隔离。
-  // 切到 chat → 永远从 chat[] 起手（即使 task[] 还有图）。
-  // 切回 task → 恢复 task[]，不会因去 chat 问一句话就丢任务素材。
-  // active_image_id 不再隐式进入普通 chat —— chat[] 仅由用户在对话模式下主动选图填充。
-  const [attachmentsByMode, setAttachmentsByMode] = useState<{
-    chat: ChatAttachment[];
-    task: ChatAttachment[];
-  }>({ chat: [], task: [] });
   const [isListening, setIsListening] = useState(false);
   const recognitionRef = useRef<any>(null);
   const [deletingConv, setDeletingConv] = useState<{ id: string; title: string } | null>(null);
@@ -452,14 +446,13 @@ export default function Chat() {
     };
   }, [activeId, conversations]);
   const enabledProfileGroups = useMemo(() => {
-    // 使用范围双层判定：Provider 级与模型级 use_scopes 都允许「AI 对话」才进入选择器
+    // 使用范围双层判定：Provider 级与模型级 use_scopes 都允许「AI 对话」才进入选择器。
+    // 展示顺序 / 常用与更多分组由 modelUiPolicy 统一决定（V4.0.9）。
     return aiProfiles
       .filter(profile => profile.enabled && (profile.use_scopes ?? defaultUseScopes()).chat)
       .map(profile => ({
         profile,
-        models: profile.models
-          .filter(model => model.enabled && (model.use_scopes ?? defaultUseScopes()).chat)
-          .sort((a, b) => (a.model_id === profile.default_model_id ? -1 : b.model_id === profile.default_model_id ? 1 : 0)),
+        models: profile.models.filter(model => model.enabled && (model.use_scopes ?? defaultUseScopes()).chat),
       }))
       .filter(group => group.models.length > 0);
   }, [aiProfiles]);
@@ -479,38 +472,41 @@ export default function Chat() {
     setConversationChatMode(activeId, mode);
   }, [activeId, newConversation, setConversationChatMode]);
 
-  // 当前模式对应的附件数组 +  setter。所有读 attachments / 调 setAttachments
-  // 的代码都不需要知道自己处于哪个模式 —— 这层 indirection 帮我们隔离 chat/task。
-  const attachments = attachmentsByMode[activeChatMode];
-  const setAttachments = useCallback(
-    (next: ChatAttachment[] | ((prev: ChatAttachment[]) => ChatAttachment[])) => {
-      setAttachmentsByMode(prev => {
-        const current = prev[activeChatMode];
-        const resolved =
-          typeof next === 'function'
-            ? (next as (p: ChatAttachment[]) => ChatAttachment[])(current)
-            : next;
-        if (resolved === current) return prev;
-        return { ...prev, [activeChatMode]: resolved };
-      });
-    },
-    [activeChatMode],
-  );
+  // ====== Composer 草稿：按 conversation 隔离（V4.0.8 修复） ======
+  // 旧实现：input + chat/task 两套附件是页面级 useState —— 对话 A 的任务图片
+  // 会出现在对话 B，切页面即丢。现在草稿全部落在 useConversationDraftStore：
+  // key = conversationId（无会话时用唯一匿名键，newConversation 时自动迁移），
+  // 切会话 = 读另一个 key，天然隔离；chat[] / task[] 仍按模式严格分离，
+  // active_image_id 不进入普通 chat —— chat[] 仅由用户在对话模式下主动选图填充。
+  const composerDraftKey = activeId || ANONYMOUS_DRAFT_KEY;
+  const composerDraft = useConversationDraftStore(s => s.drafts[composerDraftKey]) || EMPTY_COMPOSER_DRAFT;
+  const input = composerDraft.input;
+  const attachments = composerDraft[activeChatMode];
+  const setInput = useCallback((value: string | ((prev: string) => string)) => {
+    useConversationDraftStore.getState().setInput(composerDraftKey, value);
+  }, [composerDraftKey]);
+
+  // 异步图片入口（本地选择 / 拖入 / 图库 / 粘贴）在 await 前捕获目标
+  // (conversationKey, mode)：等待读图期间用户切了会话，图片也只会写进
+  // 发起操作的那个会话，绝不污染当前会话（V4.0.8 跨对话串图修复）。
+  const currentComposerTarget = useCallback((): { key: string; mode: ChatMode } => {
+    const store = useChatStore.getState();
+    const convId = store.activeId;
+    if (!convId) return { key: ANONYMOUS_DRAFT_KEY, mode: 'chat' };
+    const conv = store.conversations.find(c => c.id === convId);
+    return { key: convId, mode: conv?.chat_mode === 'task' ? 'task' : 'chat' };
+  }, []);
 
   // 模式切换诊断：让 Runtime 一眼确认 chat[] / task[] 没有互相串线。
   useEffect(() => {
     if (!activeId) return;
-    const chatCount = attachmentsByMode.chat.length;
-    const taskCount = attachmentsByMode.task.length;
-    const chatLabels = attachmentsByMode.chat.map((_, idx) =>
-      getAttachmentDisplayLabel(idx),
-    );
+    const draft = useConversationDraftStore.getState().drafts[activeId] || EMPTY_COMPOSER_DRAFT;
     console.log('[ComposerMode]', {
       to: activeChatMode,
       conversationId: activeId,
-      chat_images: chatCount,
-      task_images: taskCount,
-      chat_labels: chatLabels,
+      chat_images: draft.chat.length,
+      task_images: draft.task.length,
+      chat_labels: draft.chat.map((_, idx) => getAttachmentDisplayLabel(idx)),
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeChatMode, activeId]);
@@ -824,32 +820,31 @@ export default function Chat() {
       : '给 Agent 发送消息或问题…（Shift+Enter 换行）';
   };
 
-  const addAttachment = (attachment: Omit<ChatAttachment, 'id'>) => {
-    setAttachments(prev => {
-      if (attachment.filePath && prev.some(item => item.filePath === attachment.filePath)) {
-        return prev;
-      }
-      return [...prev, {
-        ...attachment,
-        id: 'att_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
-      }];
-    });
-  };
+  // Composer 附件写入的唯一入口：显式携带 (conversationKey, mode)。
+  // task 模式图片 = 用户主动提供的任务图片 → 绑定态至少 manual；
+  // none 之后重新加图也由此回到 manual（不会因 none 被永久禁用）。
+  const addComposerAttachment = useCallback((key: string, mode: ChatMode, attachment: Omit<ChatAttachment, 'id'>) => {
+    useConversationDraftStore.getState().addModeAttachment(key, mode, attachment);
+    if (mode === 'task') useChatStore.getState().syncTaskImageBinding(key);
+  }, []);
 
-  const removeAttachment = (id: string) => {
-    setAttachments(prev => prev.filter(a => a.id !== id));
-  };
+  const removeComposerAttachment = useCallback((key: string, mode: ChatMode, attachmentId: string) => {
+    useConversationDraftStore.getState().removeModeAttachment(key, mode, attachmentId);
+    // 删除最后一张手动任务图片 → 绑定态收敛 none（系统不得再自动补图）。
+    if (mode === 'task') useChatStore.getState().syncTaskImageBinding(key);
+  }, []);
 
   // 一键清空当前 Composer 的全部图片附件。模式切换不清图，
-  // 但用户点击 Context Bar 的"清除全部"会主动清空当前模式对应的 attachments，
-  // 并（仅在 task 模式下）撤销会话级 active_image 绑定。
+  // 但用户点击 Context Bar / 图库的"清除全部"会主动清空当前模式对应的 attachments，
+  // 并（仅在 task 模式下）撤销会话级 active_image 绑定（→ none，持久化）。
   // chat 模式下 active_image 本就不展示，因此只清空 chat[]。
-  const clearAllAttachments = () => {
-    setAttachments([]);
-    if (isTaskMode && activeId && activeConv?.active_image_id) {
-      useChatStore.getState().setActiveImageId(activeId, null, null);
+  const clearAllComposerAttachments = useCallback(() => {
+    const { key, mode } = currentComposerTarget();
+    useConversationDraftStore.getState().clearModeAttachments(key, mode);
+    if (mode === 'task') {
+      useChatStore.getState().setActiveImageId(key, null, null);
     }
-  };
+  }, [currentComposerTarget]);
 
   // 给每张附件按当前数组下标生成 "图一 / 图二 / 图三" 语义标签。
   // 删除中间项后，剩余项的标签会随下标自动重排 —— 无需维护额外状态。
@@ -1017,7 +1012,9 @@ export default function Chat() {
     // ====== 任务模式：只创建 WAITING_CONFIRM 任务卡，不调用图片模型 ======
     if (!planOnly && isTaskMode) {
       setInput('');
-      setAttachments([]);
+      // 附件随任务卡消费：只清空 Composer 草稿，不改绑定四态
+      //（任务成功后由 syncTaskMessage 按规则推进 active_image）。
+      useConversationDraftStore.getState().clearModeAttachments(composerDraftKey, 'task');
       if (inputRef.current) inputRef.current.style.height = 'auto';
 
       await sendTaskMessage({
@@ -1063,7 +1060,7 @@ export default function Chat() {
     }
 
     setInput('');
-    setAttachments([]);
+    useConversationDraftStore.getState().clearModeAttachments(composerDraftKey, activeChatMode);
     if (inputRef.current) inputRef.current.style.height = 'auto';
 
     await sendMessage(text || '(附件)', {
@@ -1079,7 +1076,7 @@ export default function Chat() {
       agent_context_window: settings.agent_context_window,
       vision_model: settings.vision_model,
     }, { planOnly, attachments });
-  }, [input, attachments, isSending, taskSubmitting, resolvedAgentSelection, contextLimit, contextUsed, activeConv, settings, sendMessage, sendTaskMessage, isTaskMode, applyLocalContextCompression, appendGalleryClarification, appendDirectGallerySearch]);
+  }, [input, attachments, isSending, taskSubmitting, resolvedAgentSelection, contextLimit, contextUsed, activeConv, settings, sendMessage, sendTaskMessage, isTaskMode, applyLocalContextCompression, appendGalleryClarification, appendDirectGallerySearch, composerDraftKey, activeChatMode, setInput]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(false); }
@@ -1091,10 +1088,12 @@ export default function Chat() {
   };
 
   const handlePickImage = async () => {
+    // await 前捕获目标会话与模式：读图期间切会话不串图
+    const { key, mode } = currentComposerTarget();
     const path = await api.selectImageFile();
     if (!path) return;
     const dataUrl = await api.readImageData(path);
-    addAttachment({
+    addComposerAttachment(key, mode, {
       type: 'image',
       source: 'upload',
       name: path.split(/[\\/]/).pop() || 'image.png',
@@ -1106,11 +1105,13 @@ export default function Chat() {
   // ===== V4.0.8 OS 文件拖入：只加入当前模式附件（与按钮/图库/粘贴同一数据结构），
   // 绝不自动发送、绝不触发模型调用；付款行为仍由发送按钮显式触发。=====
   async function acceptDroppedChatImages(files: DroppedImageFile[]) {
+    // Drop 落点 = 拖入瞬间激活的会话；批量读图期间切会话不会串图
+    const { key, mode } = currentComposerTarget();
     const broken: string[] = [];
     for (const file of files) {
       try {
         const dataUrl = await api.readImageData(file.path);
-        addAttachment(buildDroppedChatAttachmentDraft(file, dataUrl));
+        addComposerAttachment(key, mode, buildDroppedChatAttachmentDraft(file, dataUrl));
       } catch {
         broken.push(file.name);
       }
@@ -1142,11 +1143,17 @@ export default function Chat() {
         reader.onload = async () => {
           const dataUrl = reader.result as string;
           if (dataUrl) {
-            const store = useChatStore.getState();
-            const conversationId = store.activeId || store.newConversation();
+            // 粘贴目标 = 粘贴瞬间的会话与模式；保存/读图期间切会话不串图
+            const target = currentComposerTarget();
+            let conversationId = target.key;
+            if (conversationId === ANONYMOUS_DRAFT_KEY) {
+              conversationId = useChatStore.getState().newConversation();
+              // 落盘需要真实会话 id；匿名草稿已由 newConversation 迁移
+            }
+            const mode = target.mode;
             try {
               const saved = await api.saveChatImage(dataUrl, conversationId);
-              addAttachment({
+              addComposerAttachment(conversationId, mode, {
                 type: 'image',
                 source: 'paste',
                 name: saved.file_name || `粘贴图片_${Date.now()}.png`,
@@ -1155,7 +1162,7 @@ export default function Chat() {
               });
             } catch (error) {
               console.error('粘贴图片保存本地失败', error);
-              addAttachment({
+              addComposerAttachment(conversationId, mode, {
                 type: 'image',
                 source: 'paste',
                 name: `粘贴图片_${Date.now()}.png`,
@@ -1170,13 +1177,14 @@ export default function Chat() {
         reader.readAsDataURL(file);
       }
     }
-  }, []);
+  }, [currentComposerTarget, addComposerAttachment]);
 
   const handleAddFile = async () => {
+    const { key, mode } = currentComposerTarget();
     try {
       const result = await invoke<{ name: string; content: string; size: number } | null>('select_text_file');
       if (result) {
-        addAttachment({
+        addComposerAttachment(key, mode, {
           type: 'file',
           source: 'upload',
           name: result.name,
@@ -1254,16 +1262,19 @@ export default function Chat() {
     // Toggle 行为：如果图片已经被选中，立即移除；否则加入。
     // 修复"图库多选无法再次点击取消"的核心问题 —— 旧版本只能通过附件区 × 删除。
     // 比较用 normalized path，与选择器选中态保持同一身份判定。
+    // 选中态 source of truth = 当前会话的 Composer 草稿（await 前捕获，防串会话）。
+    const { key, mode } = currentComposerTarget();
     const imageKey = normalizeGalleryPath(image.local_path);
-    const existing = attachments.find(att => normalizeGalleryPath(att.filePath) === imageKey);
+    const existing = (useConversationDraftStore.getState().drafts[key]?.[mode] || [])
+      .find(att => normalizeGalleryPath(att.filePath) === imageKey);
     if (existing) {
-      removeAttachment(existing.id);
+      removeComposerAttachment(key, mode, existing.id);
       return;
     }
 
     try {
       const dataUrl = await api.readImageData(image.local_path);
-      addAttachment({
+      addComposerAttachment(key, mode, {
         type: 'image',
         source: 'gallery',
         name: image.file_name || image.local_path.split(/[\\/]/).pop() || 'gallery-image.png',
@@ -1354,12 +1365,13 @@ export default function Chat() {
       return;
     }
     patchGalleryResult(messageId, result.image.id, current => ({ ...current, selectionState: 'selecting' }));
+    const { key, mode } = currentComposerTarget();
     try {
       const dataUrl = galleryFullImageCache[result.image.local_path] || await api.readImageData(result.image.local_path);
       if (!galleryFullImageCache[result.image.local_path]) {
         setGalleryFullImageCache(prev => ({ ...prev, [result.image.local_path]: dataUrl }));
       }
-      addAttachment({
+      addComposerAttachment(key, mode, {
         type: 'image',
         source: 'gallery',
         name: result.image.file_name,
@@ -1377,7 +1389,7 @@ export default function Chat() {
     } finally {
       void useChatStore.getState().save();
     }
-  }, [galleryFullImageCache, patchGalleryResult]);
+  }, [galleryFullImageCache, patchGalleryResult, currentComposerTarget, addComposerAttachment]);
 
   const handleOpenGalleryResult = useCallback(async (result: GallerySearchResult) => {
     if (result.image.missing) {
@@ -1871,9 +1883,7 @@ export default function Chat() {
                 : '未配置 AI 模型'}
             </span>
             {resolvedAgentSelection?.profile.billing_mode && (
-              <span className="model-mode-tag">
-                {BILLING_MODE_LABELS[resolvedAgentSelection.profile.billing_mode]}
-              </span>
+              <BillingBadge mode={resolvedAgentSelection.profile.billing_mode} />
             )}
           </span>
           {activeConv && activeConv.messages.length > 0 && (
@@ -2079,7 +2089,7 @@ export default function Chat() {
                     <button
                       type="button"
                       className="chat-context-clear-all"
-                      onClick={clearAllAttachments}
+                      onClick={clearAllComposerAttachments}
                       title="清空全部图片附件，并解除编辑目标绑定"
                     >清除全部</button>
                   )}
@@ -2135,7 +2145,10 @@ export default function Chat() {
                         </div>
                         <button
                           className="chat-context-remove"
-                          onClick={() => removeAttachment(att.id)}
+                          onClick={() => {
+                            const { key, mode } = currentComposerTarget();
+                            removeComposerAttachment(key, mode, att.id);
+                          }}
                           title="移除该图片"
                         >×</button>
                       </div>
@@ -2380,7 +2393,7 @@ export default function Chat() {
                 </div>
                 <div className="gp-footer-btns">
                   {attachments.length > 0 && (
-                    <button className="gp-btn-clear" onClick={clearAllAttachments} title="清空当前全部选中">
+                    <button className="gp-btn-clear" onClick={clearAllComposerAttachments} title="清空当前全部选中">
                       清空选中（{attachments.length}）
                     </button>
                   )}
@@ -2925,122 +2938,6 @@ function OptionGroup({
           );
         })}
       </div>
-    </div>
-  );
-}
-
-type ProfilePickerGroup = {
-  profile: { id: string; name: string; provider_type: import('../features/aiProviders/types').AIProviderType; billing_mode?: import('../features/aiProviders/types').BillingMode };
-  models: AIProviderModel[];
-};
-
-function ModelPicker({ profileGroups = [], resolvedSelection, conversationSelection, onProfileSelect, onGoToSettings }: {
-  profileGroups?: ProfilePickerGroup[];
-  /** 会话级解析结果（含全局默认兜底），仅用于按钮文案与选中态展示 */
-  resolvedSelection?: { profile: { id: string; name: string; provider_type: import('../features/aiProviders/types').AIProviderType; billing_mode?: import('../features/aiProviders/types').BillingMode }; model: AIProviderModel } | null;
-  conversationSelection?: { profileId: string; modelId: string } | null;
-  onProfileSelect?: (profileId: string, modelId: string) => void;
-  onGoToSettings?: () => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const wrapRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onClick = (e: MouseEvent) => {
-      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener('mousedown', onClick);
-    return () => document.removeEventListener('mousedown', onClick);
-  }, [open]);
-
-  // 唯一来源：用户已启用 Provider 的模型。没有 Provider 时显示配置引导。
-  const display = resolvedSelection
-    ? `${resolvedSelection.profile.name} · ${resolvedSelection.model.display_name || resolvedSelection.model.model_id}`
-    : '尚未配置模型';
-
-  const activeProfileId = conversationSelection?.profileId || resolvedSelection?.profile.id || '';
-  const activeModelId = conversationSelection?.modelId || resolvedSelection?.model.model_id || '';
-
-  return (
-    <div className="model-picker" ref={wrapRef}>
-      <button
-        type="button"
-        className={`model-picker-btn ${open ? 'open' : ''}`}
-        onClick={() => setOpen(v => !v)}
-      >
-        <span className="model-picker-name">
-          {resolvedSelection && (
-            <ProviderLogo
-              providerType={resolvedSelection.profile.provider_type}
-              name={resolvedSelection.profile.name}
-              size={16}
-            />
-          )}
-          <span className="model-picker-name-text">{display}</span>
-          {resolvedSelection?.profile.billing_mode && (
-            <span className="model-mode-tag">{BILLING_MODE_LABELS[resolvedSelection.profile.billing_mode]}</span>
-          )}
-        </span>
-        <svg width="10" height="10" viewBox="0 0 12 12" fill="currentColor">
-          <path d="M2 4l4 4 4-4" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
-        </svg>
-      </button>
-      {open && (
-        <div className="model-picker-panel">
-          {profileGroups.length === 0 && (
-            <div className="model-option empty">
-              <div>尚未配置 AI 对话模型</div>
-              <div className="model-option-empty-hint">请在「设置与更新 → AI 智能体」中添加</div>
-              {onGoToSettings && (
-                <button
-                  className="model-option-goto"
-                  onClick={() => {
-                    onGoToSettings();
-                    setOpen(false);
-                  }}
-                >
-                  前往设置
-                </button>
-              )}
-            </div>
-          )}
-          {profileGroups.map(group => (
-            <div key={group.profile.id} className="model-picker-group">
-              <div className="model-option-group-title">
-                <ProviderLogo providerType={group.profile.provider_type} name={group.profile.name} size={14} />
-                <span className="model-option-group-name">{group.profile.name}</span>
-                {group.profile.billing_mode && (
-                  <span className="model-mode-tag">{BILLING_MODE_LABELS[group.profile.billing_mode]}</span>
-                )}
-              </div>
-              {group.models.map(m => {
-                const selected = group.profile.id === activeProfileId && m.model_id === activeModelId;
-                return (
-                  <div
-                    key={`${group.profile.id}:${m.model_id}`}
-                    className={`model-option ${selected ? 'selected' : ''}`}
-                    onClick={() => {
-                      onProfileSelect?.(group.profile.id, m.model_id);
-                      setOpen(false);
-                    }}
-                  >
-                    <span className="model-option-name">{m.display_name || m.model_id}</span>
-                    {isNewlyDiscovered(m) && <span className="model-option-tag new">✨新</span>}
-                    {m.supports_vision && <span className="model-option-tag vision">视觉</span>}
-                    {m.test_status === 'failed' && <span className="model-option-tag warn">⚠</span>}
-                    {selected && (
-                      <svg className="model-option-check" width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-                        <path d="M13.5 4.5L6 12 2.5 8.5" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
-                      </svg>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          ))}
-        </div>
-      )}
     </div>
   );
 }

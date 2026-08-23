@@ -5,6 +5,8 @@
   --bg-page: #fafafa;
   --bg-card: #ffffff;
   --bg-card-alt: #f8f9fa;
+  --bg-section: #f8f9fa;
+  --card-shadow: 0 1px 2px rgba(16, 24, 40, 0.05), 0 2px 8px rgba(16, 24, 40, 0.05);
   --bg-input: #ffffff;
   --bg-hover: #f3f4f6;
   --bg-subtle: #f9fafb;
@@ -78,6 +80,10 @@
   --text-token-badge: rgba(0,0,0,0.5);
   --accent-orange: #e8913a;
   --accent-success-hover: #047857;
+  --diff-added: #047857;
+  --diff-added-bg: #d1fae5;
+  --diff-removed: #b91c1c;
+  --diff-removed-bg: #fee2e2;
 }
 
 [data-theme="dark"] {
@@ -85,6 +91,8 @@
   --bg-page: #212121;
   --bg-card: #2a2a2a;
   --bg-card-alt: #2f2f2f;
+  --bg-section: #242424;
+  --card-shadow: none;
   --bg-input: #2f2f2f;
   --bg-hover: #484848;
   --bg-subtle: #2f2f2f;
@@ -158,6 +166,10 @@
   --text-token-badge: rgba(255,255,255,0.75);
   --accent-orange: #e8913a;
   --accent-success-hover: #059669;
+  --diff-added: #34d399;
+  --diff-added-bg: rgba(16,185,129,0.16);
+  --diff-removed: #f87171;
+  --diff-removed-bg: rgba(239,68,68,0.16);
 }
 
 /* ===== Base Styles ===== */

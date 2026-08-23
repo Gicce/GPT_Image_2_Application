@@ -4,7 +4,6 @@ import { api } from '../services/api';
 import { toastError, toastInfo, toastSuccess, toastWarning } from '../components/Toast';
 import { useAIProviderStore, resolveByokVisionConfig } from '../features/aiProviders/store';
 import { getAvailableVisionModels, resolveModelSelectionOrFirst } from '../features/aiProviders/modelUsability';
-import ModelCapabilityBadges, { capabilityOptionSuffix } from '../components/ModelCapabilityBadges';
 import { useDraftStore } from '../store/useDraftStore';
 import { useVisionWorkspaceStore } from '../store/useVisionWorkspaceStore';
 import { compileReversePrompt, type PromptDialect } from '../features/vision/reversePrompt';
@@ -21,22 +20,43 @@ import {
   type RecreationStage,
 } from '../features/vision/recreation';
 import {
-  applyAdjustmentInput,
+  applyModificationInstruction,
   applyOptimizationResult,
   buildGenerationCarry,
   buildRecreationPlan,
   canGenerateFromRecreation,
   describeRecreationStatus,
+  hasSuccessfulPrompt,
   initialRecreationState,
   markOptimizationFailed,
   markOptimizing,
   markRecreationDirty,
-  needsReoptimization,
+  needsOptimization,
+  revertToLastSuccessfulPrompt,
   togglePlanFieldLock,
   type RecreationState,
 } from '../features/vision/recreationPlan';
 import {
+  buildModificationInstruction,
+  clearPersonReplacement,
+  EMPTY_MODIFICATION_DRAFT,
+  isModificationDraftEmpty,
+  personHasImage,
+  setPersonReplacement,
+  toggleModificationDimension,
+  toggleReplicationBoost,
+  type ModificationDraft,
+  type ModificationDimension,
+  type PersonReplacement,
+} from '../features/vision/modificationIntent';
+import { computePromptDiff, dimensionDiff } from '../features/vision/promptDiff';
+import {
   ADJUST_INPUT,
+  ADVANCED_SETTINGS,
+  AI_PLAN,
+  DIMENSION_LOCK,
+  FINAL_PROMPT,
+  EVALUATION_COPY,
   GENERATE_DIALOG,
   GENERATION_MODE,
   GENERATION_PARAMS,
@@ -44,8 +64,12 @@ import {
   OPTIMIZE_TOAST,
   REOPTIMIZE_ACTION,
   RESTART_ACTION,
+  UNDERSTANDING,
   optimizeFailureMessage,
 } from '../features/vision/recreationCopy';
+import VisualAnalysisProgress from '../features/vision/VisualAnalysisProgress';
+import ModificationChips from '../features/vision/ModificationChips';
+import PersonReplacementPanel from '../features/vision/PersonReplacementPanel';
 import {
   createVisionUnderstandingTask,
   markVisionTaskCompleted,
@@ -61,6 +85,10 @@ import {
   type VisionMode,
   type VisionSession,
 } from '../features/vision/session';
+import { readEvaluationSettings, writeEvaluationSettings } from '../features/evaluation/evaluationSettings';
+import VisionResultSection from '../features/evaluation/VisionResultSection';
+import { useImageViewerStore } from '../store/useImageViewerStore';
+import { useVisionViewStore } from '../store/useVisionViewStore';
 import type { ImageMeta, ImageRecord } from '../types';
 import { SIZES, QUALITIES, QUALITY_LABELS } from '../types';
 import './VisionUnderstanding.css';
@@ -119,6 +147,11 @@ function dialectForGenerationModel(): PromptDialect {
   return 'gpt_image';
 }
 
+/** 参考图来源标签（本地导入 / 图库 / 拖入），不常驻完整路径（路径进 tooltip）。 */
+function describeSource(assetId?: string): string {
+  return assetId ? '图片库' : '本地图片';
+}
+
 export default function VisionUnderstanding() {
   // ===== 工作区持久化状态（页面切换 / 卸载 / 重启均恢复；恢复绝不重调视觉 API） =====
   const ws = useVisionWorkspaceStore();
@@ -140,22 +173,29 @@ export default function VisionUnderstanding() {
     visionTaskId,
     recreation,
     originalPromptDraft,
-    adjustmentInput,
+    modificationDraft,
     genParams,
     generationMode,
   } = ws;
 
+  // ===== View State（折叠 / Tab 等纯 UI 状态；与语义状态物理隔离，绝不触发 dirty） =====
+  const view = useVisionViewStore();
+  const { dimensionsCollapsed, advancedCollapsed, analysisDetailCollapsed, promptView } = view;
+
   // ===== 仅进程内 UI 状态（预览图 / 弹层 / 轮询细节，不持久化） =====
   const [previewUrl, setPreviewUrl] = useState('');
   const [meta, setMeta] = useState<ImageMeta | null>(null);
+  /** 图库弹层用途：source = 更换参考图；person = 选择人物替换参考图。 */
   const [galleryOpen, setGalleryOpen] = useState(false);
+  const [galleryPurpose, setGalleryPurpose] = useState<'source' | 'person'>('source');
   const [images, setImages] = useState<ImageRecord[]>([]);
   const [galleryUrls, setGalleryUrls] = useState<Record<string, string>>({});
-  const [analysisOpen, setAnalysisOpen] = useState(false);
+  const [autoEvaluate, setAutoEvaluate] = useState(() => readEvaluationSettings().autoEvaluate);
   const [generateConfirmOpen, setGenerateConfirmOpen] = useState(false);
   const [restartConfirmOpen, setRestartConfirmOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const cancelRef = useRef(false);
+  const intentInputRef = useRef<HTMLTextAreaElement | null>(null);
   const [running, setRunning] = useState(false);
   const [stageDetail, setStageDetail] = useState('');
 
@@ -402,7 +442,7 @@ export default function VisionUnderstanding() {
 
   const intentSummary = useMemo(() => {
     const instruction = recreation?.adjustInstruction?.trim();
-    return instruction ? `调整要求 → ${instruction}` : '未修改，直接复刻参考图方案';
+    return instruction ? `修改意图 → ${instruction.slice(0, 80)}${instruction.length > 80 ? '…' : ''}` : '未修改，直接复刻参考图方案';
   }, [recreation]);
 
   const generateFromPlan = () => {
@@ -415,6 +455,7 @@ export default function VisionUnderstanding() {
       toastError('当前缺少可用于生图的最终 Prompt，请先执行提示词优化。', '暂时不能生成');
       return;
     }
+    const personPath = personHasImage(modificationDraft.person) ? modificationDraft.person!.path : undefined;
     const carry = buildGenerationCarry(
       {
         ...recreation!,
@@ -430,6 +471,7 @@ export default function VisionUnderstanding() {
         generationMode,
         sourceImagePath: sourcePath || undefined,
         sourceAssetId: sourceAssetId || undefined,
+        personReferencePath: personPath || undefined,
       },
     );
     useDraftStore.getState().setVisionCarry(carry);
@@ -437,16 +479,94 @@ export default function VisionUnderstanding() {
     window.dispatchEvent(new CustomEvent('cyimage-navigate', { detail: { page: 'imagestudio' } }));
   };
 
-  // ===== 复刻方案编辑：统一「调整要求」输入 + 锁定 =====
+  // ===== 修改意图（核心操作区：自由文本 + 快捷维度 + 人物替换 + 服装策略）=====
 
-  /** 统一输入框变更：内容变化 → dirty（清空且从未优化过则回 ready），绝不直接生图。 */
-  const onAdjustmentChange = (value: string) => {
+  /**
+   * 结构化修改意图变更唯一入口：
+   *  - draft 落 workspace（文本输入走防抖持久化）；
+   *  - 合成指令落 recreation（真实语义修改 → semanticRevision +1；纯 UI 不经过这里）；
+   *  - 合成指令为空时按修订模型归一（绝不空指令卡死在 dirty）。
+   */
+  const commitModificationDraft = (nextDraft: ModificationDraft, opts?: { debounce?: boolean }) => {
     const wstore = useVisionWorkspaceStore.getState();
-    wstore.setAdjustmentInput(value);
+    wstore.setModificationDraft(nextDraft, opts);
     if (!wstore.recreation || wstore.recreation.editState === 'optimizing') return;
-    const next = applyAdjustmentInput(wstore.recreation, value);
-    wstore.setRecreation(next, { debounce: true });
-    persistRecreation(next);
+    const instruction = buildModificationInstruction(nextDraft);
+    const nextRecreation = applyModificationInstruction(wstore.recreation, instruction);
+    wstore.setRecreation(nextRecreation, { debounce: opts?.debounce === true });
+    persistRecreation(nextRecreation);
+  };
+
+  /** 自由文本输入（textarea）：只改 freeText，不动结构化意图。 */
+  const onFreeTextChange = (value: string) => {
+    commitModificationDraft(
+      { ...useVisionWorkspaceStore.getState().modificationDraft, freeText: value },
+      { debounce: true },
+    );
+  };
+
+  /** 快捷维度 Chip toggle：唯一槽位（重复点击 = 取消），绝不向 textarea 追加文本。 */
+  const onToggleDimensionChip = (key: ModificationDimension) => {
+    const current = useVisionWorkspaceStore.getState().modificationDraft;
+    commitModificationDraft(toggleModificationDimension(current, key));
+  };
+
+  /** 「提高复刻度」toggle：独立复刻强度偏好，不占维度槽位。 */
+  const onToggleBoostChip = () => {
+    const current = useVisionWorkspaceStore.getState().modificationDraft;
+    commitModificationDraft(toggleReplicationBoost(current));
+  };
+
+  /** 人物替换数据变更（参考图 / 文字描述）。 */
+  const onPersonChange = (person: PersonReplacement | null) => {
+    const current = useVisionWorkspaceStore.getState().modificationDraft;
+    commitModificationDraft(setPersonReplacement(current, person));
+  };
+
+  /** 服装策略 / 自定义服装变更。 */
+  const onClothingPolicyChange = (policy: ModificationDraft['clothingPolicy']) => {
+    const current = useVisionWorkspaceStore.getState().modificationDraft;
+    commitModificationDraft({ ...current, clothingPolicy: policy });
+  };
+
+  const onCustomClothingChange = (text: string) => {
+    const current = useVisionWorkspaceStore.getState().modificationDraft;
+    commitModificationDraft({ ...current, customClothing: text }, { debounce: true });
+  };
+
+  /** 「移除人物替换」：删除人物参考与 subject 结构化意图，不影响其它维度与自由文本。 */
+  const onRemovePersonReplacement = () => {
+    const current = useVisionWorkspaceStore.getState().modificationDraft;
+    commitModificationDraft(clearPersonReplacement(current));
+  };
+
+  /** 人物参考图选择入口。 */
+  const pickPersonFromGallery = () => {
+    setGalleryPurpose('person');
+    setGalleryOpen(true);
+  };
+
+  const pickPersonFromLocal = async () => {
+    const file = await api.selectImageFile();
+    if (!file) return;
+    onPersonChange({
+      source: 'local',
+      path: file,
+      label: file.split(/[\\/]/).pop(),
+    });
+  };
+
+  /** 反馈闭环回填：把上一轮评价 + 用户反馈组装进自由文本（只填充，不自动优化）。 */
+  const continueAdjustFromResult = (instruction: string) => {
+    const current = useVisionWorkspaceStore.getState().modificationDraft;
+    const merged = current.freeText.trim()
+      ? `${current.freeText.replace(/\s+$/, '')}\n${instruction}`
+      : instruction;
+    commitModificationDraft({ ...current, freeText: merged }, { debounce: true });
+    requestAnimationFrame(() => {
+      const el = intentInputRef.current;
+      if (el) el.focus();
+    });
   };
 
   const toggleFieldLock = (key: Parameters<typeof togglePlanFieldLock>[1]) => {
@@ -454,6 +574,22 @@ export default function VisionUnderstanding() {
     const next = togglePlanFieldLock(recreation, key);
     ws.setRecreation(next);
     persistRecreation(next);
+  };
+
+  /**
+   * 「使用上一次 Prompt」：放弃当前待优化 / 失败的修改，整体回退到最近一次成功的
+   * 最终 Prompt（工作区 promptDraft / negativeDraft / 修改意图草稿同步复位）。
+   */
+  const useLastSuccessfulPrompt = () => {
+    const wstore = useVisionWorkspaceStore.getState();
+    if (!wstore.recreation) return;
+    const next = revertToLastSuccessfulPrompt(wstore.recreation);
+    wstore.setRecreation(next);
+    wstore.setPromptDraft(next.optimizedPrompt ?? '');
+    wstore.setNegativeDraft(next.optimizedNegativePrompt ?? '');
+    wstore.setModificationDraft({ ...EMPTY_MODIFICATION_DRAFT });
+    persistRecreation(next);
+    toastSuccess(FINAL_PROMPT.useLastToast);
   };
 
   /** 手动编辑原始复刻 Prompt = 结构化修改 → 需要重新优化。 */
@@ -467,36 +603,43 @@ export default function VisionUnderstanding() {
 
   /**
    * 「优化复刻 Prompt」：dirty → optimizing → optimized（失败回 dirty 并标记失败原因）；
-   * 「重新优化」（force=true）：基于当前图片 + 分析结果 + 调整要求强制再执行一次
+   * 「重新优化」（force=true）：基于当前图片 + 分析结果 + 修改意图强制再执行一次
    * （会再次调用 AI 消耗 Token）；失败时旧结果原样保留，成功后才替换。
+   * 优化输入 = 自由文本 + 快捷维度 + 人物替换 + 服装策略的合成指令（结构化意图可不依赖自由文本）。
    */
   const optimizeRecreationPrompt = async (force = false) => {
     const wstore = useVisionWorkspaceStore.getState();
     const current = wstore.recreation;
     if (!current) return;
     if (current.editState === 'optimizing') return;
-    if (!force && !needsReoptimization(current)) {
+    if (!force && !needsOptimization(current)) {
       toastInfo(OPTIMIZE_TOAST.idleGuard, '无需重复优化');
       return;
     }
-    if (!wstore.adjustmentInput.trim()) {
-      toastInfo(force ? REOPTIMIZE_ACTION.emptyInstruction : OPTIMIZE_TOAST.emptyInstruction, '请先输入调整要求');
+    const instruction = buildModificationInstruction(wstore.modificationDraft);
+    if (!instruction.trim()) {
+      toastInfo(force ? REOPTIMIZE_ACTION.emptyInstruction : OPTIMIZE_TOAST.emptyInstruction, '请先输入修改要求');
       return;
     }
     const optimizingState = markOptimizing({
       ...current,
       originalPrompt: wstore.originalPromptDraft,
-      adjustInstruction: wstore.adjustmentInput.trim(),
+      adjustInstruction: instruction.trim(),
     });
     wstore.setRecreation(optimizingState);
-    const outcome = await optimizeVisionRecreation({
-      originalRecreationPrompt: wstore.originalPromptDraft,
-      structuredRecreationPlan: optimizingState.plan,
-      lockedFields: optimizingState.plan.fields.filter(f => f.locked).map(f => f.key),
-      userAdjustmentInstruction: optimizingState.adjustInstruction,
-      targetImageModelInfo: 'gpt-image-2（GPT Image 系，自然语言长句偏好）',
-      originalNegativePrompt: current.originalNegativePrompt,
-    });
+    let outcome: Awaited<ReturnType<typeof optimizeVisionRecreation>>;
+    try {
+      outcome = await optimizeVisionRecreation({
+        originalRecreationPrompt: wstore.originalPromptDraft,
+        structuredRecreationPlan: optimizingState.plan,
+        userAdjustmentInstruction: optimizingState.adjustInstruction,
+        targetImageModelInfo: 'gpt-image-2（GPT Image 系，自然语言长句偏好）',
+        originalNegativePrompt: current.originalNegativePrompt,
+      });
+    } catch (error: any) {
+      // 服务层异常兜底：绝不把状态永远留在 optimizing
+      outcome = { ok: false, kind: 'request_failed', error: error?.message || '提示词优化请求失败，请重试。' };
+    }
     if (!outcome.ok) {
       // 失败：optimizedPrompt / promptDraft 均不改动（旧结果保留），状态回 dirty 并记录原因
       const reverted = markOptimizationFailed(optimizingState, outcome.error);
@@ -514,6 +657,11 @@ export default function VisionUnderstanding() {
     toastSuccess(OPTIMIZE_TOAST.success, force ? '重新优化完成' : '优化完成');
   };
 
+  const toggleAutoEvaluate = (enabled: boolean) => {
+    setAutoEvaluate(enabled);
+    writeEvaluationSettings({ autoEvaluate: enabled });
+  };
+
   const copyText = async (text: string, label: string) => {
     try {
       await navigator.clipboard.writeText(text);
@@ -526,10 +674,11 @@ export default function VisionUnderstanding() {
   /** 「重新开始」：确认后清空当前工作区（不动历史任务 / 会话记录 / 已生成图片 / 素材库）。 */
   const restartWorkspace = () => {
     useVisionWorkspaceStore.getState().reset();
+    useVisionViewStore.getState().reset();
     setRestartConfirmOpen(false);
     setGenerateConfirmOpen(false);
     setConfirmOpen(false);
-    setAnalysisOpen(false);
+    setGalleryOpen(false);
     cancelRef.current = true;
     setRunning(false);
     setStageDetail('');
@@ -680,20 +829,62 @@ export default function VisionUnderstanding() {
   const planStatus = useMemo(() => describeRecreationStatus(recreation), [recreation]);
   const optimizing = recreation?.editState === 'optimizing';
 
-  const finalPromptNote = useMemo(() => {
+  /** AI 生成方案的自然语言摘要：优化过 → 优化器 summary；未修改 → 原图方案直复刻。 */
+  const planNarrative = useMemo(() => {
     if (!recreation) return '';
-    if (recreation.editState === 'optimizing') return '正在结合复刻方案、锁定项与你的调整要求优化提示词…';
-    if (recreation.editState === 'dirty') return '方案已修改但尚未优化：此 Prompt 还未按你的最新要求重建，请先执行「优化复刻 Prompt」。';
-    if (recreation.editState === 'optimized') return '此 Prompt 已根据你的调整要求重新优化，可直接用于图片生成。';
-    return '未经修改时，原始复刻 Prompt 即最终生图 Prompt，可直接生成（提交时不会重复优化）。';
+    if (recreation.summary?.trim()) return recreation.summary.trim();
+    return `${AI_PLAN.readySummaryPrefix}：${recreation.plan.summary}`;
   }, [recreation]);
+
+  // ===== 最终生图 Prompt（Prompt Provenance：显示值 === generateFromPlan 提交值） =====
+  const finalPrompt = promptDraft.trim();
+
+  /** 最终 Prompt 状态：failed（失败可回退）/ pending（待重新生成）/ manual（手动修改）/ generated（已生成）。 */
+  const finalPromptStatus = useMemo<'generated' | 'pending' | 'failed' | 'manual'>(() => {
+    if (!recreation) return 'generated';
+    if (recreation.editState === 'dirty' && recreation.optimizeError) return 'failed';
+    if (recreation.editState === 'dirty') return 'pending';
+    // AI 产物与当前编辑值不一致 = 用户手动改过 FinalPromptEditor（不阻断生成）
+    const aiPrompt = (recreation.optimizedPrompt ?? recreation.originalPrompt).trim();
+    if (finalPrompt !== aiPrompt) return 'manual';
+    return 'generated';
+  }, [recreation, finalPrompt]);
+
+  const finalPromptStatusText = finalPromptStatus === 'failed'
+    ? (hasSuccessfulPrompt(recreation) ? `${FINAL_PROMPT.statusFailed} · ${FINAL_PROMPT.statusFailedFallback}` : FINAL_PROMPT.statusFailed)
+    : finalPromptStatus === 'pending'
+      ? FINAL_PROMPT.statusDirty
+      : finalPromptStatus === 'manual'
+        ? FINAL_PROMPT.statusManual
+        : FINAL_PROMPT.statusReady;
+
+  /** 全文 Diff：原始复刻 Prompt → 最终生图 Prompt（「查看修改对比」）。 */
+  const fullPromptDiff = useMemo(
+    () => computePromptDiff(recreation?.originalPrompt ?? '', finalPrompt),
+    [recreation?.originalPrompt, finalPrompt],
+  );
+  const promptChanged = fullPromptDiff.addedCount > 0 || fullPromptDiff.removedCount > 0;
+
+  /** 维度 Diff（维度卡原 / 新对比；只统计有原始值且发生变化的维度）。 */
+  const changedFieldKeys = useMemo(() => {
+    if (!recreation) return [];
+    return recreation.plan.fields
+      .filter(field => dimensionDiff(field.originalValue, field.value).changed)
+      .map(field => field.key);
+  }, [recreation]);
+  const showUseLastPrompt = !!recreation
+    && recreation.editState === 'dirty'
+    && hasSuccessfulPrompt(recreation);
+
+  const lockedCount = recreation?.plan.fields.filter(f => f.locked).length ?? 0;
+  const unlockedCount = recreation ? recreation.plan.fields.length - lockedCount : 0;
 
   return (
     <div className="page vision-page">
       <div className="page-header vision-page-header">
         <div>
           <h2>视觉理解</h2>
-          <p>从参考图反向提取结构化复刻方案：输入大白话调整要求，AI 重新优化最终 Prompt，选择生成参数后生成图片。</p>
+          <p>理解原图 → 告诉 AI 怎么改 → 生成新图：AI 自动评价每一张结果，不满意就继续调整。</p>
         </div>
         {(sourcePath || analysis) && (
           <button
@@ -706,18 +897,33 @@ export default function VisionUnderstanding() {
         )}
       </div>
 
-      {/* ===== 参考图 ===== */}
+      {/* ===== 1. 原图（Preview + 尺寸 + 来源 + 更换；路径只进 tooltip） ===== */}
       <section className="vision-card vision-source">
         {previewUrl ? (
           <div className="vision-source-loaded">
-            <img className="vision-source-img" src={previewUrl} alt="参考图" />
+            <img
+              className="vision-source-img"
+              src={previewUrl}
+              alt="参考图"
+              title="点击在内置图片查看器中查看"
+              onClick={() => useImageViewerStore.getState().openViewer([{
+                id: sourcePath,
+                path: sourcePath,
+                title: '参考图',
+                width: meta?.width,
+                height: meta?.height,
+                fileName: sourcePath.split(/[\\/]/).pop(),
+                metadata: [{ label: '来源', value: describeSource(sourceAssetId) }],
+              }])}
+            />
             <div className="vision-source-meta">
-              {meta ? (
-                <p>{meta.width} × {meta.height} · {aspectRatio(meta.width, meta.height)} · {formatBytes(meta.file_size)}</p>
-              ) : <p>读取元信息中…</p>}
-              <p className="vision-source-path" title={sourcePath}>{sourcePath}</p>
+              <p>
+                {meta ? `${meta.width} × ${meta.height} · ${aspectRatio(meta.width, meta.height)} · ${formatBytes(meta.file_size)}` : '读取元信息中…'}
+                <span className="vision-source-kind">{describeSource(sourceAssetId)}</span>
+              </p>
               <div className="vision-source-actions">
-                <button className="vision-btn" onClick={() => void api.openFolder(sourcePath.replace(/[\\/][^\\/]+$/, ''))}>打开所在目录</button>
+                <button className="vision-btn" onClick={() => { setGalleryPurpose('source'); setGalleryOpen(true); }}>更换图片</button>
+                <button className="vision-btn" onClick={() => void api.openFolder(sourcePath.replace(/[\\/][^\\/]+$/, ''))} title={sourcePath}>打开所在目录</button>
                 <button className="vision-btn" onClick={() => useVisionWorkspaceStore.getState().removeSource()}>移除图片</button>
               </div>
             </div>
@@ -730,66 +936,35 @@ export default function VisionUnderstanding() {
                 const file = await api.selectImageFile();
                 if (file) useVisionWorkspaceStore.getState().setSource(file);
               }}>本地选择</button>
-              <button className="vision-btn" onClick={() => setGalleryOpen(true)}>从图片库选择</button>
+              <button className="vision-btn" onClick={() => { setGalleryPurpose('source'); setGalleryOpen(true); }}>从图片库选择</button>
             </div>
             <p className="vision-hint">支持 PNG / JPEG / WebP；图片将直接发送给你配置的视觉模型服务（不会上传任何图床）。</p>
           </div>
         )}
       </section>
 
-      {/* ===== 模型与模式 ===== */}
-      <section className="vision-card vision-config">
-        <div className="vision-config-row">
-          <div className="vision-config-item vision-config-grow">
-            <label>视觉模型</label>
-            {modelOptions.length > 0 ? (
-              <div className="vision-model-field">
-                <select
-                  value={`${selectedProfileId}|${selectedModelId}`}
-                  onChange={e => {
-                    const [profileId, modelId] = e.target.value.split('|');
-                    setVisionConfig(profileId, modelId);
-                  }}
-                >
-                  {modelOptions.map(option => (
-                    <option key={`${option.profileId}|${option.modelId}`} value={`${option.profileId}|${option.modelId}`}>
-                      {option.profileName} / {option.displayName}{capabilityOptionSuffix(option.model.capabilities)}
-                    </option>
-                  ))}
-                </select>
-                {selectedOption && (
-                  <ModelCapabilityBadges capabilities={selectedOption.model.capabilities} />
-                )}
-              </div>
-            ) : (
-              <div className="vision-no-model">
-                <span>{NO_USABLE_VISION_MODEL}</span>
-                <button className="vision-btn" onClick={goConfigure}>前往模型管理</button>
-              </div>
-            )}
-          </div>
-          <div className="vision-config-item">
-            <label>模式</label>
-            <select value={mode} onChange={e => ws.setMode(e.target.value as VisionMode)} disabled={busy}>
-              <option value="quick">快速理解</option>
-              <option value="reverse_prompt">专业反向 Prompt</option>
-              <option value="high_fidelity">高复刻</option>
-            </select>
-          </div>
-          <button
-            className="vision-btn vision-btn-primary"
-            onClick={runAnalysis}
-            disabled={busy || !sourcePath || modelOptions.length === 0}
-          >
-            {stage === 'analyzing' ? '分析中…' : mode === 'quick' ? '开始理解' : '提取复刻方案'}
-          </button>
-        </div>
-        {mode === 'high_fidelity' && (
-          <p className="vision-hint">
-            高复刻 = 先提取 Prompt（不生成图片），由你确认后才开始「生成 → 双图评审 → 差异修正」循环（费用见确认弹窗）。
-          </p>
-        )}
-      </section>
+      {/* ===== 分析前：主入口（模型 / 模式细节在高级设置） ===== */}
+      {!analysis && (
+        <section className="vision-card vision-start">
+          {modelOptions.length > 0 ? (
+            <>
+              <p className="vision-start-model">视觉模型：{selectedOption?.profileName ?? '—'} / {selectedOption?.displayName ?? selectedModelId ?? '—'}</p>
+              <button
+                className="vision-btn vision-btn-primary vision-btn-lg"
+                onClick={runAnalysis}
+                disabled={busy || !sourcePath}
+              >
+                {stage === 'analyzing' ? '正在理解…' : '开始理解这张图片'}
+              </button>
+            </>
+          ) : (
+            <div className="vision-no-model">
+              <span>{NO_USABLE_VISION_MODEL}</span>
+              <button className="vision-btn" onClick={goConfigure}>前往模型管理</button>
+            </div>
+          )}
+        </section>
+      )}
 
       {errorText && (
         <section className="vision-card vision-error">
@@ -797,22 +972,35 @@ export default function VisionUnderstanding() {
         </section>
       )}
 
-      {(stageDetail || STAGE_LABELS[stage]) && busy && (
+      {/* 视觉理解分析阶段：参考图缩略图 + 创意文案轮播 + 轻量扫描反馈（失败态由 errorText 卡片呈现，轮播随卸载停止） */}
+      {stage === 'analyzing' && (
+        <VisualAnalysisProgress
+          thumbUrl={previewUrl}
+          modelLabel={selectedOption ? `${selectedOption.profileName} / ${selectedOption.displayName}` : (selectedModelId || '—')}
+        />
+      )}
+
+      {(stageDetail || STAGE_LABELS[stage]) && busy && stage !== 'analyzing' && (
         <section className="vision-card vision-stage">
           <span className="vision-spinner" />
           <p>{stageDetail || STAGE_LABELS[stage]}</p>
         </section>
       )}
 
-      {/* ===== 结构化分析 ===== */}
+      {/* ===== 2. AI 理解（summary 常驻；详细分析默认折叠） ===== */}
       {analysis && (
-        <section className="vision-card">
-          <button className="vision-section-toggle" onClick={() => setAnalysisOpen(v => !v)}>
-            {analysisOpen ? '▾' : '▸'} 图片理解（结构化分析）
-          </button>
-          {analysisOpen && (
+        <section className="vision-card vision-understanding">
+          <div className="vision-understanding-head">
+            <div>
+              <h3>{UNDERSTANDING.title}</h3>
+              <p className="vision-understanding-summary">{analysis.summary}</p>
+            </div>
+            <button className="vision-section-toggle" onClick={() => view.toggleAnalysisDetail()}>
+              {analysisDetailCollapsed ? `▸ ${UNDERSTANDING.detailToggle}` : `▾ ${UNDERSTANDING.detailToggle}`}
+            </button>
+          </div>
+          {!analysisDetailCollapsed && (
             <div className="vision-analysis">
-              <p><strong>概述：</strong>{analysis.summary}</p>
               {analysis.subjects.length > 0 && (
                 <div>
                   <strong>主体</strong>
@@ -850,64 +1038,73 @@ export default function VisionUnderstanding() {
         </section>
       )}
 
-      {/* ===== 复刻工作台（视觉理解任务 → 统一调整要求 → Prompt 优化 → 生图）===== */}
+      {/* ===== 复刻工作台：理解任务 → 修改意图 → Prompt 优化 → 生图 ===== */}
       {reverseResult && (
         <>
           {visionTaskId && (
             <section className="vision-card vision-task-banner">
               <span className="vision-task-type">视觉理解任务</span>
               <span className="vision-task-id">#{visionTaskId.slice(0, 8)}</span>
-              <span className="vision-task-desc">正在分析参考图片的主体、构图、动作、背景、光线、风格，并生成可复刻的结构化方案（可在任务队列查看链路）。</span>
+              <span className="vision-task-desc">已理解参考图并生成可复刻方案；输入修改意图后由 AI 重新优化生成方案。</span>
             </section>
           )}
 
+          {/* ===== 3. 修改意图（核心操作区：自由文本 + 结构化维度选择器） ===== */}
           {recreation && (
-            <section className="vision-card">
-              <div className="vision-prompt-head">
-                <h3>复刻方案</h3>
-              </div>
-
-              {/* 主状态栏：当前处于流程哪一步、下一步做什么 */}
-              <div className={`vision-status-bar tone-${planStatus.tone}`} role="status">
-                <span className="vision-status-label">{planStatus.label}</span>
-                <span className="vision-status-note">{planStatus.note}</span>
-              </div>
-
-              {/* 方案摘要卡片：哪些维度会跟着变、哪些尽量保留不变 */}
-              <div className="vision-plan-grid">
-                {recreation.plan.fields.map(field => (
-                  <div key={field.key} className="vision-plan-field">
-                    <div className="vision-plan-field-head">
-                      <span className="vision-plan-field-label">{field.label}</span>
-                      <button
-                        type="button"
-                        className={`vision-lock-badge ${field.locked ? 'is-locked' : 'is-unlocked'}`}
-                        disabled={busy || running || optimizing}
-                        onClick={() => toggleFieldLock(field.key)}
-                        title={field.locked ? '锁定：优化时尽量保持不变，点击改为可修改' : '可修改：优化时允许跟随要求调整，点击锁定'}
-                      >
-                        {field.locked ? '锁定' : '可修改'}
-                      </button>
-                    </div>
-                    <p title={field.value}>{field.value || '（未识别）'}</p>
-                  </div>
-                ))}
-              </div>
-              <p className="vision-hint">摘要仅供参考，无需逐项编辑：标注「锁定」的维度在优化时必须保持不变，「可修改」的维度会跟随你的调整要求变化（点击角标可切换）。</p>
-
-              {/* 统一「调整要求」输入框：大白话 → 优化器（旧分叉入口已移除） */}
+            <section className="vision-card vision-intent">
               <div className="vision-adjust-box">
                 <label className="vision-adjust-label" htmlFor="vision-adjust-input">{ADJUST_INPUT.title}</label>
                 <p className="vision-adjust-desc">{ADJUST_INPUT.desc}</p>
                 <textarea
                   id="vision-adjust-input"
+                  ref={intentInputRef}
                   className="vision-adjust-textarea"
                   rows={4}
-                  value={adjustmentInput}
+                  value={modificationDraft.freeText}
                   disabled={busy || running || optimizing}
-                  onChange={e => onAdjustmentChange(e.target.value)}
+                  onChange={e => onFreeTextChange(e.target.value)}
                   placeholder={ADJUST_INPUT.placeholder}
                 />
+                <ModificationChips
+                  draft={modificationDraft}
+                  disabled={busy || running || optimizing}
+                  onToggleDimension={onToggleDimensionChip}
+                  onToggleBoost={onToggleBoostChip}
+                />
+                {modificationDraft.activeDimensions.includes('subject') && (
+                  <PersonReplacementPanel
+                    person={modificationDraft.person}
+                    clothingPolicy={modificationDraft.clothingPolicy}
+                    customClothing={modificationDraft.customClothing}
+                    clothingDimensionActive={modificationDraft.activeDimensions.includes('clothing')}
+                    disabled={busy || running || optimizing}
+                    onPersonChange={onPersonChange}
+                    onClothingPolicyChange={onClothingPolicyChange}
+                    onCustomClothingChange={onCustomClothingChange}
+                    onRemove={onRemovePersonReplacement}
+                    onGalleryPick={pickPersonFromGallery}
+                    onLocalPick={() => void pickPersonFromLocal()}
+                  />
+                )}
+              </div>
+
+              {/* 主状态栏（WorkflowStatusBanner）：状态点 + 标签 + 引导语；CTA 独立在 Banner 外 */}
+              <div className="vision-status-row">
+                <div className={`vision-status-bar tone-${planStatus.tone}`} role="status">
+                  <span className="vision-status-dot" aria-hidden="true" />
+                  <span className="vision-status-label">{planStatus.label}</span>
+                  <span className="vision-status-note">{planStatus.note}</span>
+                </div>
+                {showUseLastPrompt && (
+                  <button
+                    className="vision-btn vision-btn-sm"
+                    disabled={busy || running || optimizing}
+                    onClick={useLastSuccessfulPrompt}
+                    title="放弃当前待优化的修改，回退到最近一次成功的最终 Prompt"
+                  >
+                    {FINAL_PROMPT.useLastButton}
+                  </button>
+                )}
               </div>
 
               {/* 主操作：优化提示词 → 确认生成 */}
@@ -936,143 +1133,389 @@ export default function VisionUnderstanding() {
                   确认生成图片
                 </button>
               </div>
-              {recreation.summary && (
-                <p className="vision-plan-summary">{recreation.summary}</p>
-              )}
             </section>
           )}
 
-          <section className="vision-card">
-            <div className="vision-prompt-head">
-              <h3>原始复刻 Prompt</h3>
-              <div className="vision-prompt-head-actions">
-                <button className="vision-btn" onClick={() => void copyText(originalPromptDraft, '原始 Prompt')}>复制</button>
-                <button className="vision-btn" onClick={() => editOriginalPrompt(reverseResult.prompt)}>重置</button>
+          {/* ===== 4. AI 生成方案（自然语言方案 + 最终生图 Prompt + 维度锁定 / 修改对比） ===== */}
+          {recreation && (
+            <section className="vision-card vision-plan">
+              <div className="vision-prompt-head">
+                <h3>{AI_PLAN.title}</h3>
+                <div className="vision-prompt-head-actions">
+                  <button
+                    className="vision-btn"
+                    disabled={busy || running || optimizing}
+                    onClick={() => view.toggleDimensions()}
+                  >
+                    {dimensionsCollapsed ? `维度锁定（${AI_PLAN.lockedSummary} ${lockedCount} · ${AI_PLAN.unlockedSummary} ${unlockedCount}）` : '收起维度锁定'}
+                  </button>
+                </div>
               </div>
-            </div>
-            <p className="vision-hint">来源于视觉模型分析，偏「描述事实」。手动编辑等同于修改复刻方案，需要重新优化。</p>
-            <textarea className="vision-prompt-textarea" value={originalPromptDraft} disabled={busy || running || optimizing} onChange={e => editOriginalPrompt(e.target.value)} rows={5} />
-          </section>
+              <p className="vision-plan-narrative">{planNarrative}</p>
 
-          <section className="vision-card">
-            <div className="vision-prompt-head">
-              <h3>最终生图 Prompt</h3>
-              <div className="vision-prompt-head-actions">
-                <button className="vision-btn" onClick={() => void copyText(promptDraft, '生图 Prompt')}>复制</button>
-              </div>
-            </div>
-            <p className="vision-hint">{finalPromptNote}</p>
-            <textarea className="vision-prompt-textarea" value={promptDraft} onChange={e => ws.setPromptDraft(e.target.value)} rows={8} />
-          </section>
+              {/* FinalPromptEditor：最终生图 Prompt 唯一查看 / 编辑 / Diff / 复制入口（禁止第二套 Prompt 编辑区） */}
+              <div className={`vision-final-prompt status-${finalPromptStatus}`}>
+                <div className="vision-final-head">
+                  <span className="vision-final-title">{FINAL_PROMPT.title}</span>
+                  <span className="vision-final-status">{finalPromptStatusText}</span>
+                </div>
+                <p className="vision-final-desc">{FINAL_PROMPT.desc}</p>
+                <div className="vision-final-tabs" role="tablist" aria-label={FINAL_PROMPT.title}>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={promptView === 'final'}
+                    className={`vision-final-tab ${promptView === 'final' ? 'active' : ''}`}
+                    onClick={() => view.setPromptView('final')}
+                  >
+                    {FINAL_PROMPT.tabFinal}
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={promptView === 'diff'}
+                    className={`vision-final-tab ${promptView === 'diff' ? 'active' : ''}`}
+                    disabled={!promptChanged}
+                    title={promptChanged ? FINAL_PROMPT.diffSubtitle : FINAL_PROMPT.diffEmpty}
+                    onClick={() => view.setPromptView('diff')}
+                  >
+                    {FINAL_PROMPT.tabDiff}
+                  </button>
+                </div>
 
-          <section className="vision-card">
-            <div className="vision-prompt-head">
-              <h3>Negative Prompt</h3>
-              <div className="vision-prompt-head-actions">
-                <button className="vision-btn" onClick={() => void copyText(negativeDraft, '负面词')}>复制</button>
-                <button className="vision-btn" onClick={() => ws.setNegativeDraft(reverseResult.negativePrompt)}>重置</button>
-              </div>
-            </div>
-            <textarea className="vision-prompt-textarea" value={negativeDraft} onChange={e => ws.setNegativeDraft(e.target.value)} rows={3} />
-          </section>
+                {promptView === 'final' ? (
+                  <>
+                    <textarea
+                      className="vision-final-editor"
+                      aria-label={FINAL_PROMPT.title}
+                      value={promptDraft}
+                      disabled={busy || running || optimizing}
+                      onChange={e => ws.setPromptDraft(e.target.value)}
+                      rows={8}
+                    />
+                    <p className="vision-hint vision-final-editor-hint">{FINAL_PROMPT.editorHint}</p>
+                  </>
+                ) : (
+                  <>
+                    <p className="vision-diff-body">
+                      {fullPromptDiff.segments.map((seg, i) =>
+                        seg.type === 'equal' ? (
+                          <span key={i} className="diff-seg">{seg.text}</span>
+                        ) : seg.type === 'added' ? (
+                          <span key={i} className="diff-seg diff-added" title={FINAL_PROMPT.diffAddedLabel}>+{seg.text}</span>
+                        ) : (
+                          <span key={i} className="diff-seg diff-removed" title={FINAL_PROMPT.diffRemovedLabel}>-{seg.text}</span>
+                        ),
+                      )}
+                    </p>
+                    <p className="vision-diff-legend">
+                      <span className="diff-seg diff-added">+ {FINAL_PROMPT.diffAddedLabel}</span>
+                      <span className="diff-seg diff-removed">- {FINAL_PROMPT.diffRemovedLabel}</span>
+                      <span className="vision-hint">{FINAL_PROMPT.diffSubtitle} · ＋{fullPromptDiff.addedCount} · －{fullPromptDiff.removedCount}</span>
+                    </p>
+                  </>
+                )}
 
-          {/* ===== 生成方式（V4.0.8）：视觉理解只负责出 Prompt，文生图 / 图生图由用户选择 ===== */}
-          <section className="vision-card vision-genmode">
-            <h3>{GENERATION_MODE.title}</h3>
-            <div className="vision-genmode-row" role="radiogroup" aria-label={GENERATION_MODE.title}>
-              <button
-                type="button"
-                className={`vision-genmode-btn ${generationMode === 't2i' ? 'active' : ''}`}
-                role="radio"
-                aria-checked={generationMode === 't2i'}
-                disabled={busy || running || optimizing}
-                onClick={() => ws.setGenerationMode('t2i')}
-              >
-                <span className="vision-genmode-label">{GENERATION_MODE.t2iLabel}</span>
-                <span className="vision-genmode-hint">{GENERATION_MODE.t2iHint}</span>
-              </button>
-              <button
-                type="button"
-                className={`vision-genmode-btn ${generationMode === 'i2i' ? 'active' : ''}`}
-                role="radio"
-                aria-checked={generationMode === 'i2i'}
-                disabled={busy || running || optimizing}
-                onClick={() => ws.setGenerationMode('i2i')}
-              >
-                <span className="vision-genmode-label">{GENERATION_MODE.i2iLabel}</span>
-                <span className="vision-genmode-hint">{GENERATION_MODE.i2iHint}</span>
-              </button>
-            </div>
-            <p className="vision-hint">
-              {generationMode === 'i2i' ? GENERATION_MODE.i2iFact : GENERATION_MODE.t2iFact}
-            </p>
-          </section>
+                <div className="vision-final-actions">
+                  <button
+                    className="vision-btn vision-btn-sm"
+                    disabled={!finalPrompt}
+                    onClick={() => void copyText(finalPrompt, FINAL_PROMPT.copyLabel)}
+                  >
+                    {FINAL_PROMPT.copyLabel}
+                  </button>
+                </div>
+              </div>
 
-          {/* ===== 生成参数（用户可选，与图生图参数体系一致；默认值来自视觉模型推荐）===== */}
-          <section className="vision-card vision-genparams">
-            <h3>{GENERATION_PARAMS.title}</h3>
-            <div className="vision-config-row">
-              <div className="vision-config-item">
-                <label>{GENERATION_PARAMS.ratioLabel}</label>
-                <select
-                  value={ratioOfSize(genParams.size)}
-                  disabled={busy || running || optimizing}
-                  onChange={e => {
-                    const option = RATIO_OPTIONS.find(o => o.value === e.target.value);
-                    if (option) ws.setGenParams({ size: option.size });
-                  }}
-                >
-                  {RATIO_OPTIONS.map(option => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
-                  ))}
-                </select>
-              </div>
-              <div className="vision-config-item">
-                <label>{GENERATION_PARAMS.sizeLabel}</label>
-                <select
-                  value={genParams.size}
-                  disabled={busy || running || optimizing}
-                  onChange={e => ws.setGenParams({ size: e.target.value })}
-                >
-                  {SIZES.map(s => <option key={s} value={s}>{s}</option>)}
-                </select>
-              </div>
-              <div className="vision-config-item">
-                <label>{GENERATION_PARAMS.qualityLabel}</label>
-                <select
-                  value={genParams.quality}
-                  disabled={busy || running || optimizing}
-                  onChange={e => ws.setGenParams({ quality: e.target.value })}
-                >
-                  {QUALITIES.map(q => <option key={q} value={q}>{QUALITY_LABELS[q] || q}</option>)}
-                </select>
-              </div>
-              <div className="vision-config-item">
-                <label>{GENERATION_PARAMS.countLabel}</label>
-                <select
-                  value={genParams.count}
-                  disabled={busy || running || optimizing}
-                  onChange={e => ws.setGenParams({ count: Number(e.target.value) })}
-                >
-                  {COUNT_OPTIONS.map(n => (
-                    <option key={n} value={n}>{n} {GENERATION_PARAMS.countUnit}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
-            <p className="vision-hint">{GENERATION_PARAMS.hint}</p>
-          </section>
+              {!dimensionsCollapsed && (
+                <>
+                  <div className="vision-plan-grid">
+                    {recreation.plan.fields.map(field => {
+                      const dimDiff = dimensionDiff(field.originalValue, field.value);
+                      const isChanged = dimDiff.changed && !field.locked;
+                      const manual = field.lockSource === 'user_override';
+                      const badgeTitle = manual
+                        ? `${DIMENSION_LOCK.userLabel}（重新优化不会覆盖）`
+                        : DIMENSION_LOCK.aiLabel;
+                      return (
+                        <div key={field.key} className={`vision-plan-field ${isChanged ? 'is-changed' : ''}`}>
+                          <div className="vision-plan-field-head">
+                            <span className="vision-plan-field-label">{field.label}</span>
+                            <button
+                              type="button"
+                              className={`vision-lock-badge ${isChanged ? 'is-changed' : field.locked ? 'is-locked' : 'is-unlocked'}`}
+                              disabled={busy || running || optimizing}
+                              onClick={() => toggleFieldLock(field.key)}
+                              title={badgeTitle}
+                            >
+                              {isChanged ? DIMENSION_LOCK.changed : field.locked ? DIMENSION_LOCK.locked : DIMENSION_LOCK.unlocked}
+                              {manual ? `·${DIMENSION_LOCK.manualSuffix}` : ''}
+                            </button>
+                          </div>
+                          {isChanged ? (
+                            <div className="vision-field-diff" title={`${DIMENSION_LOCK.oldValuePrefix}：${dimDiff.oldValue}\n${DIMENSION_LOCK.newValuePrefix}：${dimDiff.newValue}`}>
+                              <p className="diff-seg diff-removed">-{DIMENSION_LOCK.oldValuePrefix}：{dimDiff.oldValue || '（未识别）'}</p>
+                              <p className="diff-seg diff-added">+{DIMENSION_LOCK.newValuePrefix}：{dimDiff.newValue || '（未识别）'}</p>
+                            </div>
+                          ) : (
+                            <p title={field.value}>{field.value || '（未识别）'}</p>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <p className="vision-hint">
+                    {changedFieldKeys.length > 0
+                      ? DIMENSION_LOCK.intentHint
+                      : DIMENSION_LOCK.pendingHint}
+                  </p>
+                </>
+              )}
 
-          <section className="vision-card vision-actions-card">
-            <button
-              className="vision-btn vision-btn-caution"
-              disabled={busy}
-              onClick={() => setConfirmOpen(true)}
-            >
-              {running ? '高复刻进行中…' : '高复刻验证'}
+            </section>
+          )}
+
+          {/* ===== 5. 生成结果（Before / After + per-image AI 评价 + 继续调整） ===== */}
+          {visionTaskId && sourcePath && (
+            <VisionResultSection
+              visionTaskId={visionTaskId}
+              sourcePath={sourcePath}
+              onContinueAdjust={continueAdjustFromResult}
+            />
+          )}
+
+          {/* ===== 6. 高级设置（默认折叠：模型 / Prompt 细节 / 生成方式 / 参数 / 高复刻 / 自动评价） ===== */}
+          <section className="vision-card vision-advanced">
+            <button className="vision-section-toggle vision-advanced-toggle" onClick={() => view.toggleAdvanced()}>
+              {advancedCollapsed ? `▸ ${ADVANCED_SETTINGS.title}` : `▾ ${ADVANCED_SETTINGS.title}`}
             </button>
-            {running && (
-              <button className="vision-btn vision-btn-danger" onClick={() => { cancelRef.current = true; }}>停止</button>
+            {!advancedCollapsed && (
+              <div className="vision-advanced-body">
+                {/* 模型与模式 */}
+                <div className="vision-config-row">
+                  <div className="vision-config-item vision-config-grow">
+                    <label>视觉模型</label>
+                    {modelOptions.length > 0 ? (
+                      <select
+                        value={`${selectedProfileId}|${selectedModelId}`}
+                        onChange={e => {
+                          const [profileId, modelId] = e.target.value.split('|');
+                          setVisionConfig(profileId, modelId);
+                        }}
+                      >
+                        {modelOptions.map(option => (
+                          <option key={`${option.profileId}|${option.modelId}`} value={`${option.profileId}|${option.modelId}`}>
+                            {option.profileName} / {option.displayName}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <div className="vision-no-model">
+                        <span>{NO_USABLE_VISION_MODEL}</span>
+                        <button className="vision-btn" onClick={goConfigure}>前往模型管理</button>
+                      </div>
+                    )}
+                  </div>
+                  <div className="vision-config-item">
+                    <label>模式</label>
+                    <select value={mode} onChange={e => ws.setMode(e.target.value as VisionMode)} disabled={busy}>
+                      <option value="quick">快速理解</option>
+                      <option value="reverse_prompt">专业反向 Prompt</option>
+                      <option value="high_fidelity">高复刻</option>
+                    </select>
+                  </div>
+                  <button className="vision-btn" onClick={runAnalysis} disabled={busy || !sourcePath || modelOptions.length === 0}>
+                    {stage === 'analyzing' ? '分析中…' : '重新分析'}
+                  </button>
+                </div>
+
+                {/* 原始复刻 Prompt */}
+                <div className="vision-advanced-block">
+                  <div className="vision-prompt-head">
+                    <h4>原始复刻 Prompt</h4>
+                    <div className="vision-prompt-head-actions">
+                      <button className="vision-btn" onClick={() => void copyText(originalPromptDraft, '原始 Prompt')}>复制</button>
+                      <button className="vision-btn" onClick={() => editOriginalPrompt(reverseResult.prompt)}>重置</button>
+                    </div>
+                  </div>
+                  <p className="vision-hint">来源于视觉模型分析，偏「描述事实」。手动编辑等同于修改复刻方案，需要重新优化。</p>
+                  <textarea className="vision-prompt-textarea" value={originalPromptDraft} disabled={busy || running || optimizing} onChange={e => editOriginalPrompt(e.target.value)} rows={5} />
+                </div>
+
+                {/* Negative Prompt */}
+                <div className="vision-advanced-block">
+                  <div className="vision-prompt-head">
+                    <h4>Negative Prompt</h4>
+                    <div className="vision-prompt-head-actions">
+                      <button className="vision-btn" onClick={() => void copyText(negativeDraft, '负面词')}>复制</button>
+                      <button className="vision-btn" onClick={() => ws.setNegativeDraft(reverseResult.negativePrompt)}>重置</button>
+                    </div>
+                  </div>
+                  <textarea className="vision-prompt-textarea" value={negativeDraft} onChange={e => ws.setNegativeDraft(e.target.value)} rows={3} />
+                </div>
+
+                {/* 生成方式（视觉复刻默认图生图） */}
+                <div className="vision-advanced-block vision-genmode">
+                  <h4>{GENERATION_MODE.title}</h4>
+                  <div className="vision-genmode-row" role="radiogroup" aria-label={GENERATION_MODE.title}>
+                    <button
+                      type="button"
+                      className={`vision-genmode-btn ${generationMode === 't2i' ? 'active' : ''}`}
+                      role="radio"
+                      aria-checked={generationMode === 't2i'}
+                      disabled={busy || running || optimizing}
+                      onClick={() => ws.setGenerationMode('t2i')}
+                    >
+                      <span className="vision-genmode-label">{GENERATION_MODE.t2iLabel}</span>
+                      <span className="vision-genmode-hint">{GENERATION_MODE.t2iHint}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className={`vision-genmode-btn ${generationMode === 'i2i' ? 'active' : ''}`}
+                      role="radio"
+                      aria-checked={generationMode === 'i2i'}
+                      disabled={busy || running || optimizing}
+                      onClick={() => ws.setGenerationMode('i2i')}
+                    >
+                      <span className="vision-genmode-label">{GENERATION_MODE.i2iLabel}</span>
+                      <span className="vision-genmode-hint">{GENERATION_MODE.i2iHint}</span>
+                    </button>
+                  </div>
+                  <p className="vision-hint">
+                    {generationMode === 'i2i' ? GENERATION_MODE.i2iFact : GENERATION_MODE.t2iFact}
+                    {generationMode === 'i2i' ? ` ${GENERATION_MODE.referenceStrengthHint}` : ''}
+                  </p>
+                </div>
+
+                {/* 生成参数 */}
+                <div className="vision-advanced-block vision-genparams">
+                  <h4>{GENERATION_PARAMS.title}</h4>
+                  <div className="vision-config-row">
+                    <div className="vision-config-item">
+                      <label>{GENERATION_PARAMS.ratioLabel}</label>
+                      <select
+                        value={ratioOfSize(genParams.size)}
+                        disabled={busy || running || optimizing}
+                        onChange={e => {
+                          const option = RATIO_OPTIONS.find(o => o.value === e.target.value);
+                          if (option) ws.setGenParams({ size: option.size });
+                        }}
+                      >
+                        {RATIO_OPTIONS.map(option => (
+                          <option key={option.value} value={option.value}>{option.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="vision-config-item">
+                      <label>{GENERATION_PARAMS.sizeLabel}</label>
+                      <select
+                        value={genParams.size}
+                        disabled={busy || running || optimizing}
+                        onChange={e => ws.setGenParams({ size: e.target.value })}
+                      >
+                        {SIZES.map(s => <option key={s} value={s}>{s}</option>)}
+                      </select>
+                    </div>
+                    <div className="vision-config-item">
+                      <label>{GENERATION_PARAMS.qualityLabel}</label>
+                      <select
+                        value={genParams.quality}
+                        disabled={busy || running || optimizing}
+                        onChange={e => ws.setGenParams({ quality: e.target.value })}
+                      >
+                        {QUALITIES.map(q => <option key={q} value={q}>{QUALITY_LABELS[q] || q}</option>)}
+                      </select>
+                    </div>
+                    <div className="vision-config-item">
+                      <label>{GENERATION_PARAMS.countLabel}</label>
+                      <select
+                        value={genParams.count}
+                        disabled={busy || running || optimizing}
+                        onChange={e => ws.setGenParams({ count: Number(e.target.value) })}
+                      >
+                        {COUNT_OPTIONS.map(n => (
+                          <option key={n} value={n}>{n} {GENERATION_PARAMS.countUnit}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                  <p className="vision-hint">{GENERATION_PARAMS.hint}</p>
+                </div>
+
+                {/* 自动评价开关 */}
+                <div className="vision-advanced-block">
+                  <label className="vision-auto-eval">
+                    <input
+                      type="checkbox"
+                      checked={autoEvaluate}
+                      onChange={e => toggleAutoEvaluate(e.target.checked)}
+                    />
+                    <span>{EVALUATION_COPY.autoEvaluateLabel}</span>
+                  </label>
+                  <p className="vision-hint">{EVALUATION_COPY.autoEvaluateHint}</p>
+                </div>
+
+                {/* 高复刻 */}
+                <div className="vision-advanced-block vision-actions-card">
+                  <button
+                    className="vision-btn vision-btn-caution"
+                    disabled={busy}
+                    onClick={() => setConfirmOpen(true)}
+                  >
+                    {running ? '高复刻进行中…' : '高复刻验证'}
+                  </button>
+                  {running && (
+                    <button className="vision-btn vision-btn-danger" onClick={() => { cancelRef.current = true; }}>停止</button>
+                  )}
+                </div>
+
+                {/* 高复刻结果（复刻相似度报告） */}
+                {report && (
+                  <div className="vision-similarity">
+                    <h4>复刻相似度</h4>
+                    <p className="vision-score">
+                      综合估算：<strong>{scoreToPercent(report.final_score)} / 100</strong>
+                    </p>
+                    <div className="vision-score-grid">
+                      <span>主体 {scoreToPercent(report.scores.subject)}</span>
+                      <span>构图 {scoreToPercent(report.scores.composition)}</span>
+                      <span>风格 {scoreToPercent(report.scores.style)}</span>
+                      <span>光线 {scoreToPercent(report.scores.lighting)}</span>
+                      <span>色彩 {scoreToPercent(report.scores.color)}</span>
+                      <span>对象 {report.scores.objects != null ? scoreToPercent(report.scores.objects) : 'N/A'}</span>
+                      <span>文字 {report.scores.ocr != null ? scoreToPercent(report.scores.ocr) : 'N/A'}</span>
+                      {report.local_color != null && <span>本地色彩 {scoreToPercent(report.local_color)}</span>}
+                      {report.local_composition != null && <span>本地构图 {scoreToPercent(report.local_composition)}</span>}
+                    </div>
+                    <p className="vision-hint">{SIMILARITY_DISCLAIMER}</p>
+
+                    {iterations.length > 0 && (
+                      <div className="vision-iterations">
+                        <strong>迭代记录</strong>
+                        {iterations.map(it => (
+                          <div key={it.attempt} className="vision-iteration">
+                            <span>第 {it.attempt} 轮 · 综合 {it.similarity ? scoreToPercent(it.similarity.final_score) : '—'}</span>
+                            {it.candidatePath && (
+                              <button className="vision-btn vision-btn-sm" onClick={() => void api.openFile(it.candidatePath!)}>查看候选图</button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {report.differences.length > 0 && (
+                      <div className="vision-differences">
+                        <strong>差异明细</strong>
+                        <ul>
+                          {report.differences.slice(0, 12).map((d, i) => (
+                            <li key={i} className={`diff-${d.kind}`}>{d.text}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
             )}
           </section>
         </>
@@ -1091,9 +1534,9 @@ export default function VisionUnderstanding() {
                 <li>来源：视觉理解复刻方案{visionTaskId ? `（视觉理解任务 #${visionTaskId.slice(0, 8)}）` : ''}</li>
                 <li>生成方式：{generationMode === 'i2i' ? `图生图 · ${GENERATION_MODE.i2iFact}` : `文生图 · ${GENERATION_MODE.t2iFact}`}</li>
                 <li>操作摘要：{intentSummary}</li>
-                <li>当前最终 Prompt {recreation.editState === 'optimized' ? '已按你的调整要求优化完成' : '为提取的原始复刻 Prompt（未修改）'}</li>
+                <li>当前最终 Prompt {recreation.editState === 'optimized' ? '已按你的修改意图优化完成' : '为提取的原始复刻 Prompt（未修改）'}</li>
                 <li>生成参数：比例 {ratioOfSize(genParams.size) || '—'} · 尺寸 {genParams.size} · 质量 {QUALITY_LABELS[genParams.quality] || genParams.quality} · 数量 {genParams.count} 张</li>
-                <li>进入图片工作室后提交生成，不会再次执行 AI 优化。</li>
+                <li>进入图片工作室后提交生成，不会再次执行 AI 优化；完成后自动进行 AI 评价（可在高级设置关闭）。</li>
               </ul>
             </div>
             <div className="vision-modal-footer">
@@ -1118,53 +1561,6 @@ export default function VisionUnderstanding() {
             </div>
           </div>
         </div>
-      )}
-
-      {/* ===== 高复刻结果 ===== */}
-      {report && (
-        <section className="vision-card vision-similarity">
-          <h3>复刻相似度</h3>
-          <p className="vision-score">
-            综合估算：<strong>{scoreToPercent(report.final_score)} / 100</strong>
-          </p>
-          <div className="vision-score-grid">
-            <span>主体 {scoreToPercent(report.scores.subject)}</span>
-            <span>构图 {scoreToPercent(report.scores.composition)}</span>
-            <span>风格 {scoreToPercent(report.scores.style)}</span>
-            <span>光线 {scoreToPercent(report.scores.lighting)}</span>
-            <span>色彩 {scoreToPercent(report.scores.color)}</span>
-            <span>对象 {report.scores.objects != null ? scoreToPercent(report.scores.objects) : 'N/A'}</span>
-            <span>文字 {report.scores.ocr != null ? scoreToPercent(report.scores.ocr) : 'N/A'}</span>
-            {report.local_color != null && <span>本地色彩 {scoreToPercent(report.local_color)}</span>}
-            {report.local_composition != null && <span>本地构图 {scoreToPercent(report.local_composition)}</span>}
-          </div>
-          <p className="vision-hint">{SIMILARITY_DISCLAIMER}</p>
-
-          {iterations.length > 0 && (
-            <div className="vision-iterations">
-              <strong>迭代记录</strong>
-              {iterations.map(it => (
-                <div key={it.attempt} className="vision-iteration">
-                  <span>第 {it.attempt} 轮 · 综合 {it.similarity ? scoreToPercent(it.similarity.final_score) : '—'}</span>
-                  {it.candidatePath && (
-                    <button className="vision-btn vision-btn-sm" onClick={() => void api.openFile(it.candidatePath!)}>查看候选图</button>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-
-          {report.differences.length > 0 && (
-            <div className="vision-differences">
-              <strong>差异明细</strong>
-              <ul>
-                {report.differences.slice(0, 12).map((d, i) => (
-                  <li key={i} className={`diff-${d.kind}`}>{d.text}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </section>
       )}
 
       {/* ===== 高复刻确认弹窗（成本保护） ===== */}
@@ -1209,12 +1605,12 @@ export default function VisionUnderstanding() {
         </div>
       )}
 
-      {/* ===== 图库选择 ===== */}
+      {/* ===== 图库选择（source = 更换参考图；person = 选择人物替换参考图） ===== */}
       {galleryOpen && (
         <div className="vision-modal-overlay" onClick={() => setGalleryOpen(false)}>
-          <div className="vision-modal vision-gallery-modal" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="从图片库选择">
+          <div className="vision-modal vision-gallery-modal" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={galleryPurpose === 'person' ? '从图片库选择人物' : '从图片库选择'}>
             <div className="vision-modal-header">
-              <h3>从图片库选择</h3>
+              <h3>{galleryPurpose === 'person' ? '从图片库选择人物' : '从图片库选择'}</h3>
             </div>
             <div className="vision-modal-body">
               <div className="vision-gallery-grid">
@@ -1226,7 +1622,16 @@ export default function VisionUnderstanding() {
                     title={img.file_name}
                     onClick={() => {
                       setGalleryOpen(false);
-                      useVisionWorkspaceStore.getState().setSource(img.local_path, img.id);
+                      if (galleryPurpose === 'person') {
+                        onPersonChange({
+                          source: 'gallery',
+                          assetId: img.id,
+                          path: img.local_path,
+                          label: img.file_name,
+                        });
+                      } else {
+                        useVisionWorkspaceStore.getState().setSource(img.local_path, img.id);
+                      }
                     }}
                   >
                     {galleryUrls[img.id]
