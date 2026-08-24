@@ -34,7 +34,7 @@ const CATEGORY_LABELS: Record<TaskCategory, string> = {
 export const TASK_STATUS_FILTERS: ReadonlyArray<{ key: TaskStatusFilter; label: string }> = [
   { key: 'all', label: '全部' },
   { key: 'pending', label: '等待中' },
-  { key: 'running', label: '执行中' },
+  { key: 'running', label: '生成中' },
   { key: 'completed', label: '已完成' },
   { key: 'failed', label: '失败' },
 ];

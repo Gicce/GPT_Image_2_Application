@@ -377,6 +377,11 @@
   color: var(--accent-danger);
 }
 
+.history-plan-suggestion {
+  color: var(--text-muted);
+  font-size: 12.5px;
+}
+
 .history-plan-times {
   display: flex;
   flex-direction: column;
@@ -520,4 +525,90 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 参考图角色徽标（画面模板 / 人物参考…；仅快照任务显示） */
+.history-img-item .history-img-role {
+  font-style: normal;
+  color: var(--accent-primary);
+  font-weight: 600;
+  margin-right: 4px;
+}
+
+/* ③ 本次修改方案（结构化行：人物替换为 @人物参考 / 动作 修改 / 服装 使用人物参考服装…） */
+.history-plan-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.history-plan-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  font-size: 13px;
+  padding: 4px 0;
+}
+
+.history-plan-row-label {
+  flex: 0 0 64px;
+  color: var(--text-muted);
+}
+
+.history-plan-row-value {
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.history-plan-row.is-modified .history-plan-row-value {
+  color: var(--accent-primary);
+  font-weight: 500;
+}
+
+.history-plan-row.is-source .history-plan-row-value {
+  font-weight: 500;
+}
+
+/* 执行规则摘要（最终执行 Prompt 之前的确定性规则速览；快照结构化字段派生） */
+.history-exec-rules {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 13px;
+  color: var(--text-primary);
+  background: var(--bg-inset);
+  border-radius: 8px;
+}
+
+.history-exec-rules li::before {
+  content: '·';
+  margin-right: 8px;
+  color: var(--text-muted);
+}
+
+/* ⑥ 模型执行记录（生成时快照，非当前 Settings） */
+.history-model-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.history-model-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  font-size: 13px;
+  padding: 4px 0;
+}
+
+.history-model-row-label {
+  flex: 0 0 88px;
+  color: var(--text-muted);
+}
+
+.history-model-row-value {
+  color: var(--text-primary);
 }

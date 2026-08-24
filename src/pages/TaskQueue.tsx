@@ -7,8 +7,19 @@ import EditTaskModal from '../components/EditTaskModal';
 import BatchRedoModal from '../components/BatchRedoModal';
 import DeleteTaskDialog from '../components/DeleteTaskDialog';
 import TaskFilterBar from '../components/TaskFilterBar';
+import { toastError, toastSuccess } from '../components/Toast';
+import { copyText } from '../utils/clipboard';
 import { formatDuration } from '../utils/taskDuration';
-import { executionModeLabel, promptOptimizationState } from '../utils/taskDisplay';
+import { executionModeLabel, formatTaskDateTime, promptOptimizationState } from '../utils/taskDisplay';
+import {
+  deriveTaskState,
+  DERIVED_STATUS_META,
+  resolveTaskFinishedAt,
+  resolveTaskStartedAt,
+  taskDurationMs,
+} from '../utils/taskState';
+import { attemptFailureHistory, classifySubTaskFailure, describeEndpoint } from '../utils/taskFailure';
+import { openTaskDetailFromQueue } from '../utils/taskNavigation';
 import {
   filterTasksByCategory,
   filterTasksByStatus,
@@ -18,25 +29,29 @@ import {
   type TaskCategoryFilter,
   type TaskStatusFilter,
 } from '../utils/taskCategory';
-import { classifySubTaskError } from '../utils/subtaskError';
 import { poseBatchTaskSourceLabel } from '../utils/poseBatch';
+import TaskBillingBadge from '../components/TaskBillingBadge';
 import './TaskQueue.css';
 import './ImageEdit.css';
 
-const STATUS_MAP: Record<string, { label: string; cls: string }> = {
-  pending: { label: '等待中', cls: 'status-pending' },
-  running: { label: '执行中', cls: 'status-running' },
-  completed: { label: '已完成', cls: 'status-completed' },
-  failed: { label: '失败', cls: 'status-failed' },
-  cancelled: { label: '已取消', cls: 'status-cancelled' },
+const SUB_STATUS_LABEL: Record<string, string> = {
+  pending: '等待中',
+  running: '生成中',
+  completed: '已完成',
+  failed: '失败',
+  cancelled: '已取消',
 };
 
-/** 失败但有成功子任务 → 「部分完成」（底层状态保持 failed，兼容历史语义与消费者） */
-function isPartialSuccess(task: Task): boolean {
-  return task.status === 'failed' && task.success_count > 0;
-}
-
 const FOCUS_KEY = 'cy_taskqueue_focus_id';
+
+/** 尝试历史的时钟展示（HH:mm:ss）。 */
+function formatClock(iso?: string): string {
+  if (!iso) return '';
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '';
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
 
 /** 前端驱动型任务（视觉理解）：不产出图片、不走生成接口 */
 function isVisionTask(task: Task): boolean {
@@ -49,16 +64,18 @@ function getSourceLabel(task: Task): string {
   return task.task_source === 'agent' ? 'Agent' : '手动';
 }
 
-function getApiEndpoint(task: Task): string {
+/** 执行接口脱敏摘要（完整 URL 只进失败卡「技术详情」；凭据从不出现在 endpoint） */
+function getApiEndpointSummary(task: Task): string {
   if (isVisionTask(task)) return 'BYOK 视觉模型（用户自配，非服务端计费）';
-  if (task.task_type === 'edit') return 'POST https://www.packyapi.com/v1/images/edits';
-  if (task.task_type === 'remove_background') return 'POST https://api.remove.bg/v1.0/removebg';
-  return 'POST https://www.packyapi.com/v1/images/generations';
+  if (task.task_type === 'remove_background') return describeEndpoint('https://api.remove.bg/v1.0/removebg');
+  // 摘要统一显示 path（历史任务的 runtime base_url 可能不同，不在此硬编码 host）
+  return task.task_type === 'edit'
+    ? describeEndpoint('/v1/images/edits')
+    : describeEndpoint('/v1/images/generations');
 }
 
 function getSubTaskStatusLabel(status: string): string {
-  const meta = STATUS_MAP[status];
-  return meta?.label || status;
+  return SUB_STATUS_LABEL[status] || status;
 }
 
 /** 批量任务判定：batch 执行模式或携带 batch_items（重做走 BatchRedoModal，不再用单任务编辑弹窗） */
@@ -78,9 +95,7 @@ export default function TaskQueue() {
   const [retryingKey, setRetryingKey] = useState<string | null>(null);
   const [activeCategory, setActiveCategory] = useState<TaskCategoryFilter>('all');
   const [activeStatus, setActiveStatus] = useState<TaskStatusFilter>('all');
-  // 执行中任务的实时耗时刷新（250ms，低频）。TaskQueue 没有单任务的
-  // executionStartedAt（那在 Chat 任务卡上），这里只显示已完成的固定 duration
-  // 和进行中的粗略状态 —— 所以用一个轻量 tick 驱动重渲染即可。
+  // 活跃任务实时耗时刷新：终态任务读持久化 finished/started，只有活跃任务需要 tick
   const [, setDurationTick] = useState(0);
   useEffect(() => {
     const hasActive = useTaskStore.getState().tasks.some(t => t.status === 'pending' || t.status === 'running');
@@ -130,19 +145,22 @@ export default function TaskQueue() {
     });
   };
 
-  /** V4.0.5 只重试失败子任务：indexes 缺省 = 全部失败项；单下标 = 单个子任务 */
+  /** V4.0.5 只重试失败子任务：indexes 缺省 = 全部失败项；单下标 = 单个子任务。
+   * 反馈一律走应用内 Toast（禁止 native alert 阻塞弹窗）。 */
   const handleRetryFailed = async (task: Task, indexes?: number[]) => {
     const key = indexes ? `${task.id}:${indexes.join(',')}` : `${task.id}:all`;
     if (retryingKey) return;
     setRetryingKey(key);
     try {
       const result = await retryTaskFailed(task.id, indexes);
-      const target = indexes && indexes.length === 1
-        ? `子任务 ${indexes[0] + 1}`
-        : `${result.resetCount} 个失败子任务`;
-      alert(`${target}已加入重试队列，已完成的结果保持不变。`);
-    } catch (err: any) {
-      alert(err?.message || err?.toString() || '重试失败');
+      const count = indexes && indexes.length === 1 ? 1 : result.resetCount;
+      toastSuccess(
+        `已将 ${count} 个失败项加入队列，已完成的结果不会重复生成。`,
+        '重试任务已加入队列',
+      );
+    } catch (err) {
+      console.error('[TaskQueue] retry failed subtasks error', task.id, err);
+      toastError('未能重新加入任务队列，请稍后重试。', '重试失败');
     } finally {
       setRetryingKey(null);
     }
@@ -169,7 +187,7 @@ export default function TaskQueue() {
     <div className="page">
       <div className="page-header">
         <h2>任务队列</h2>
-        <p>统一查看 Agent 和手动创建的图片任务、执行状态、批量子任务和最终提示词。</p>
+        <p>统一查看 Agent 和手动创建的图片任务的执行状态、失败原因与重试；完整审计请进历史记录详情。</p>
       </div>
 
       {sorted.length > 0 && (
@@ -195,19 +213,22 @@ export default function TaskQueue() {
       ) : (
         <div className="task-list">
           {visibleTasks.map(task => {
-            const partial = isPartialSuccess(task);
-            const statusMeta = partial
-              ? { label: '部分完成', cls: 'status-failed' }
-              : (STATUS_MAP[task.status] || STATUS_MAP.pending);
+            // 状态一律从 sub_tasks 事实派生（后端事件丢失也不再卡在「生成中」）
+            const derived = deriveTaskState(task);
+            const statusMeta = DERIVED_STATUS_META[derived];
+            const isActive = derived === 'queued' || derived === 'running';
+            const terminal = !isActive;
+            const hasFailedSlots = (derived === 'failed' || derived === 'partial') && task.failed_count > 0;
             const done = task.success_count + task.failed_count;
             const pct = task.count > 0 ? Math.round((done / task.count) * 100) : 0;
-            const isActive = task.status === 'pending' || task.status === 'running';
-            const isFinished = task.status === 'completed' || task.status === 'failed';
             const imageCount = task.sub_tasks.filter(s => s.image_id).length;
             const hasPromptDiff = !!task.final_prompt && task.final_prompt !== task.user_prompt_raw;
             const labels = task.sub_tasks.map(item => item.label).filter(Boolean) as string[];
             const subTaskErrors = task.sub_tasks.filter(subTask => subTask.error);
             const optimized = promptOptimizationState(task).applied;
+            const startedAt = resolveTaskStartedAt(task);
+            const finishedAt = resolveTaskFinishedAt(task);
+            const durationText = terminal ? formatDuration(taskDurationMs(task)) : '';
             // 任务行轻量评分（Phase 22）：只显示 best 摘要，每张图明细进任务详情 / 图库
             const evaluationSummary = taskEvaluationSummary(
               aggregateTaskEvaluations(evaluationsOfTask({ evaluations }, task.id)),
@@ -234,24 +255,36 @@ export default function TaskQueue() {
                     )}
                     <span className="task-id">#{task.id.slice(0, 8)}</span>
                   </div>
-                  <span className="task-time">{new Date(task.created_at).toLocaleString('zh-CN')}</span>
+                  <div className="task-time-block">
+                    {isActive ? (
+                      startedAt && (
+                        <span className="task-time">开始 {formatTaskDateTime(startedAt)}</span>
+                      )
+                    ) : (
+                      <>
+                        <span className="task-time">开始 {formatTaskDateTime(startedAt ?? '') || '—'}</span>
+                        <span className="task-time">结束 {formatTaskDateTime(finishedAt ?? '') || '—'}</span>
+                        <span className="task-time">耗时 {durationText || '—'}</span>
+                      </>
+                    )}
+                  </div>
                 </div>
 
-                {isVisionTask(task) && (task.status === 'pending' || task.status === 'running') && task.stage_note && (
+                {isVisionTask(task) && isActive && task.stage_note && (
                   <p className="task-dir">阶段：{task.stage_note}</p>
                 )}
 
                 {(() => {
-                  // 执行耗时：优先用 started_at（正式执行起点），旧任务回落 created_at
+                  // 活跃任务实时耗时：优先 started_at，旧任务回落 created_at（仅执行中展示）
                   if (!isActive) return null;
-                  const startIso = task.started_at || task.created_at;
+                  const startIso = startedAt || task.created_at;
                   const elapsed = Date.now() - new Date(startIso).getTime();
                   if (!Number.isFinite(elapsed) || elapsed <= 0) return null;
                   const text = formatDuration(elapsed);
                   if (!text) return null;
                   return (
                     <p className="task-dir task-queue-elapsed">
-                      {task.status === 'running' ? '生成中' : '等待中'} · {text}
+                      {derived === 'running' ? '生成中' : '等待中'} · {text}
                     </p>
                   );
                 })()}
@@ -271,6 +304,7 @@ export default function TaskQueue() {
                     <span>{task.output_format.toUpperCase()}</span>
                     {!isVisionTask(task) && <span>{task.count} 张</span>}
                     <span>{optimized ? '已优化提示词' : '原始提示词'}</span>
+                    <TaskBillingBadge taskId={task.id} />
                     {evaluationSummary && <span className="task-eval-summary">{evaluationSummary}</span>}
                   </div>
 
@@ -291,7 +325,7 @@ export default function TaskQueue() {
                     </div>
                   )}
 
-                  {task.status === 'running' && !isVisionTask(task) && (
+                  {derived === 'running' && !isVisionTask(task) && (
                     <div className="progress-bar-wrap">
                       <div className="progress-bar" style={{ width: `${pct}%` }} />
                       <span className="progress-text">{done} / {task.count} ({pct}%)</span>
@@ -312,23 +346,32 @@ export default function TaskQueue() {
                   {task.output_dir && (
                     <p className="task-dir">输出目录: {task.output_dir}</p>
                   )}
-                  <p className="task-dir">执行接口: {getApiEndpoint(task)}</p>
+                  <p className="task-dir">执行接口: {getApiEndpointSummary(task)}</p>
 
                   {subTaskErrors.length > 0 && (
                     <div className="task-errors">
                       {subTaskErrors.map(subTask => {
-                        const classified = classifySubTaskError(subTask.error);
+                        // canonical failure model：结构化 detail 优先，旧 string 回落解析
+                        const failure = classifySubTaskFailure(subTask);
+                        const attempts = attemptFailureHistory(subTask);
                         const detailKey = `${task.id}-${subTask.index}`;
                         const detailOpen = expandedDetails.has(detailKey);
-                        const attempts = subTask.attempt_errors ?? [];
+                        const tech = failure.technical;
                         return (
                           <div key={detailKey} className="task-subtask-error">
-                            <p className="task-error">
-                              子任务 {subTask.index + 1}{subTask.label ? ` (${subTask.label})` : ''} · {classified.title}
+                            <p className="task-error-title">
+                              <span className="task-error-icon" aria-hidden="true">⚠</span>
+                              子任务 {subTask.index + 1}{subTask.label ? ` (${subTask.label})` : ''} · {failure.title}
                             </p>
-                            <p className="task-error-hint">{classified.hint}</p>
+                            <p className="task-error-message">{failure.userMessage}</p>
+                            {failure.suggestion && (
+                              <p className="task-error-hint">{failure.suggestion}</p>
+                            )}
+                            {attempts.length > 1 && (
+                              <p className="task-error-attempt-count">历史尝试：{attempts.length} 次</p>
+                            )}
                             <div className="task-subtask-error-actions">
-                              {task.status === 'failed' && !isVisionTask(task) && (
+                              {hasFailedSlots && !isVisionTask(task) && (
                                 <button
                                   className="subtask-retry-btn"
                                   disabled={retryingKey !== null}
@@ -338,17 +381,63 @@ export default function TaskQueue() {
                                 </button>
                               )}
                               <button className="subtask-detail-btn" onClick={() => toggleDetail(detailKey)}>
-                                {detailOpen ? '收起详情' : '查看详情'}
+                                {detailOpen ? '收起技术详情' : '查看技术详情 ▾'}
                               </button>
                             </div>
                             {detailOpen && (
                               <div className="task-error-detail">
-                                <p>{subTask.error}</p>
+                                <div className="task-error-tech">
+                                  <div className="task-error-tech-row">
+                                    <span>错误类型</span><code>{failure.category}</code>
+                                  </div>
+                                  {tech?.httpStatus !== undefined && (
+                                    <div className="task-error-tech-row">
+                                      <span>HTTP 状态</span><code>{tech.httpStatus}</code>
+                                    </div>
+                                  )}
+                                  {tech?.providerCode && (
+                                    <div className="task-error-tech-row">
+                                      <span>Provider Code</span><code>{tech.providerCode}</code>
+                                    </div>
+                                  )}
+                                  {tech?.endpoint && (
+                                    <div className="task-error-tech-row">
+                                      <span>Endpoint</span><code>{tech.endpoint}</code>
+                                    </div>
+                                  )}
+                                  {tech?.requestId && (
+                                    <div className="task-error-tech-row">
+                                      <span>Request ID</span><code>{tech.requestId}</code>
+                                    </div>
+                                  )}
+                                </div>
+                                {(tech?.rawMessage || subTask.error) && (
+                                  <div className="task-error-raw">
+                                    <p>{tech?.rawMessage || subTask.error}</p>
+                                    <button
+                                      type="button"
+                                      className="subtask-detail-btn"
+                                      onClick={() => {
+                                        void copyText(tech?.rawMessage || subTask.error || '').then(ok => {
+                                          if (ok) toastSuccess('原始错误已复制');
+                                        });
+                                      }}
+                                    >
+                                      复制
+                                    </button>
+                                  </div>
+                                )}
                                 {attempts.length > 1 && (
-                                  <p className="task-error-attempts">
-                                    历史尝试（{attempts.length} 次）：
-                                    {attempts.map((err, i) => `第${i + 1}次 ${classifySubTaskError(err).title}`).join('；')}
-                                  </p>
+                                  <div className="task-error-attempts">
+                                    {attempts.map((attempt, i) => (
+                                      <p key={i} className="task-attempt-item">
+                                        尝试 {i + 1}{attempt.timestamp ? ` ${formatClock(attempt.timestamp)}` : ''}
+                                        {' '}{attempt.info.title}
+                                        {attempt.info.technical?.httpStatus !== undefined
+                                          ? ` · HTTP ${attempt.info.technical.httpStatus}` : ''}
+                                      </p>
+                                    ))}
+                                  </div>
                                 )}
                               </div>
                             )}
@@ -358,7 +447,7 @@ export default function TaskQueue() {
                     </div>
                   )}
 
-                  {(task.status === 'failed' || task.status === 'cancelled') && task.sub_tasks.length > 0 && (
+                  {(derived === 'failed' || derived === 'partial' || derived === 'cancelled') && task.sub_tasks.length > 0 && (
                     <div className="task-errors">
                       {task.sub_tasks.map(subTask => {
                         const retried = subTask.retry_count ?? 0;
@@ -372,7 +461,7 @@ export default function TaskQueue() {
                     </div>
                   )}
 
-                  {task.status === 'completed' && task.sub_tasks.some(st => (st.retry_count ?? 0) > 0) && (
+                  {derived === 'completed' && task.sub_tasks.some(st => (st.retry_count ?? 0) > 0) && (
                     <div className="task-errors">
                       {task.sub_tasks
                         .filter(st => (st.retry_count ?? 0) > 0)
@@ -391,26 +480,38 @@ export default function TaskQueue() {
                       取消任务
                     </button>
                   )}
-                  {task.status === 'failed' && task.failed_count > 0 && !isVisionTask(task) && (
+                  {terminal && hasFailedSlots && !isVisionTask(task) && (
                     <button
                       className="retry-btn"
                       disabled={retryingKey !== null}
                       onClick={() => void handleRetryFailed(task)}
                     >
-                      {retryingKey === `${task.id}:all` ? '提交中…' : `重试全部失败项（${task.failed_count}）`}
+                      {retryingKey === `${task.id}:all`
+                        ? '提交中…'
+                        : derived === 'partial'
+                          ? `重试失败项（${task.failed_count}）`
+                          : `重新生成失败项（${task.failed_count}）`}
                     </button>
                   )}
-                  {isFinished && isBatchTask(task) && (
+                  {terminal && (
+                    <button
+                      className="task-detail-nav-btn"
+                      onClick={() => openTaskDetailFromQueue(task.id)}
+                    >
+                      查看任务详情
+                    </button>
+                  )}
+                  {terminal && isBatchTask(task) && (
                     <button className="edit-resend-btn" onClick={() => setRedoingTask(task)}>
                       重做
                     </button>
                   )}
-                  {isFinished && !isBatchTask(task) && !isVisionTask(task) && (
+                  {terminal && !isBatchTask(task) && !isVisionTask(task) && (
                     <button className="edit-resend-btn" onClick={() => setEditingTask(task)}>
                       编辑重发
                     </button>
                   )}
-                  {!isActive && (
+                  {terminal && (
                     <button className="delete-task-btn" onClick={() => setDeletingTask(task)}>
                       删除
                     </button>

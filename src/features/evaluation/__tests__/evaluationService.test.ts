@@ -20,8 +20,15 @@ vi.mock('../../aiProviders/store', () => ({
     model: 'glm-5v-turbo',
     profileId: 'p1',
     profileName: '智谱',
-    modelEntity: null,
+    modelEntity: { model_id: 'glm-5v-turbo', display_name: 'GLM-5V-Turbo' },
   })),
+  useAIProviderStore: {
+    getState: () => ({
+      profiles: [],
+      resolveForUse: () => null,
+    }),
+  },
+  resolveConversationAgent: vi.fn(() => null),
 }));
 
 vi.mock('../../vision/session', () => ({

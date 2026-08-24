@@ -17,9 +17,16 @@
 
 import { serverApi, UsageAuthorizeResult, UsageSettleResult } from './serverApi';
 import { useAuthStore } from '../store/useAuthStore';
+import { requestQuoteConfirmation } from '../store/useQuoteStore';
+import { useTaskBillingStore } from '../store/useTaskBillingStore';
 
-/** 402 / QUOTA_EXHAUSTED 的统一用户文案 */
-export const QUOTA_EXHAUSTED_MESSAGE = '余额不足，请充值后继续使用';
+/** 402 / QUOTA_EXHAUSTED 的统一用户文案（CY Credits 口径） */
+export const QUOTA_EXHAUSTED_MESSAGE = '点数不足，请充值后继续使用';
+
+/** 用户在报价确认弹层取消（调用方可据此静默处理） */
+export function isQuoteCancelled(err: any): boolean {
+  return Boolean(err?.quoteCancelled);
+}
 
 export interface UnifiedBalance {
   balanceUsd: number;
@@ -55,19 +62,33 @@ function isQuotaExhausted(err: any): boolean {
 }
 
 /**
- * 生成前预占额度（authorize）。
- * - 402 / QUOTA_EXHAUSTED → 抛出固定文案「余额不足，请充值后继续使用」
- * - 其余错误（403 IMAGE2_DISABLED / 网络错误等）原样抛出，message 已由
- *   serverApi 从 detail.message 提取
- * - 成功后以后端响应回写本地余额
+ * 生成前报价 + 预占额度（quote → 用户确认 → authorize）。
+ *
+ * Generation Quote Pattern（V4.2 铁律）：所有付费图片 API 调用入口在
+ * authorize 之前必须先取服务端报价，用户在确认弹层看到
+ * 单张/预计/余额/剩余 后才继续。报价 10 分钟冻结，authorize 携 quote_id
+ * 按冻结价计费；用户取消 → 抛 quoteCancelled 错误。
+ *
+ * - 402 / QUOTA_EXHAUSTED → 抛出固定文案「点数不足，请充值后继续使用」
+ * - 其余错误（403 IMAGE2_DISABLED / 网络错误等）原样抛出
+ * - 成功后以后端响应回写本地余额（点数 + 旧 USD 镜像）
  */
 export async function authorizeImageTask(
   requestId: string,
   imageCount: number,
+  opts?: { feature?: string; skipQuoteConfirm?: boolean },
 ): Promise<UsageAuthorizeResult> {
+  const feature = opts?.feature ?? 'image';
+  let quoteId: string | null = null;
+
+  if (!opts?.skipQuoteConfirm) {
+    const quote = await requestQuoteConfirmation(feature, imageCount);
+    quoteId = quote.quote_id;
+  }
+
   let result: UsageAuthorizeResult;
   try {
-    result = await serverApi.authorizeImage2(requestId, imageCount);
+    result = await serverApi.authorizeImage2(requestId, imageCount, quoteId, feature);
   } catch (err: any) {
     if (isQuotaExhausted(err)) {
       err.message = QUOTA_EXHAUSTED_MESSAGE;
@@ -75,10 +96,24 @@ export async function authorizeImageTask(
     throw err;
   }
   if (result && result.balance_usd != null) {
-    useAuthStore.getState().updateBalances(result.balance_usd, result.trial_credit_usd);
+    useAuthStore.getState().updateBalances(result.balance_usd, result.trial_credit_usd, {
+      paid: result.paid_credits,
+      trial: result.trial_credits,
+      gift: result.gift_credits,
+      total: result.total_credits,
+    });
   }
+  // 计费展示侧车：预占成功即登记预计消耗（任务创建后 register 关联 taskId）
+  pendingAuthorize.set(requestId, {
+    estimated: result.amount_credits ?? 0,
+    unit: result.unit_credits ?? null,
+    requestId,
+  });
   return result;
 }
+
+/** authorize 与任务创建之间的短暂桥接（requestId → 预计消耗） */
+const pendingAuthorize = new Map<string, { estimated: number; unit: number | null; requestId: string }>();
 
 /**
  * 生成后结算（settle）。失败静默容错（console.warn，不阻断 UI）——
@@ -93,8 +128,17 @@ export async function settleImageTask(
   try {
     const result = await serverApi.settleImage2(requestId, success, imageCount, failureReason);
     if (result && result.balance_usd != null) {
-      useAuthStore.getState().updateBalances(result.balance_usd, result.trial_credit_usd);
+      useAuthStore.getState().updateBalances(result.balance_usd, result.trial_credit_usd, {
+        paid: result.paid_credits,
+        trial: result.trial_credits,
+        gift: result.gift_credits,
+        total: result.total_credits,
+      });
     }
+    // 计费展示侧车：登记实际消耗（partial 任务 actual < estimated，差额已自动退回）
+    useTaskBillingStore.getState().recordSettle(
+      requestId, result.amount_credits ?? 0, result.status,
+    );
     return result;
   } catch (err) {
     console.warn(`[billing] settle 失败（依赖服务端 2h 自动释放兜底）: ${requestId}`, err);
@@ -123,6 +167,16 @@ export function registerTaskAuthorization(
 ): void {
   if (!taskId || !requestId) return;
   taskAuthorization.set(taskId, { requestId, retriedIndexes });
+  // 计费展示侧车：把 authorize 的预计消耗关联到任务
+  const pending = pendingAuthorize.get(requestId);
+  if (pending) {
+    useTaskBillingStore.getState().recordAuthorize(taskId, {
+      requestId,
+      estimated: pending.estimated,
+      unit: pending.unit,
+    });
+    pendingAuthorize.delete(requestId);
+  }
 }
 
 /** 取出并删除该任务的预占登记；不存在（未授权 / 已结算 / 重启丢失）返回 undefined */

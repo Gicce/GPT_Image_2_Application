@@ -3,6 +3,7 @@ import { useSettingsStore } from '../store/useSettingsStore';
 import { useImageStore } from '../store/useImageStore';
 import { useTaskStore } from '../store/useTaskStore';
 import { api } from '../services/api';
+import { toastError, toastSuccess } from './Toast';
 import { SIZES, QUALITIES, QUALITY_LABELS, FORMATS } from '../types';
 import type { Task } from '../types';
 import './EditTaskModal.css';
@@ -29,6 +30,7 @@ export default function EditTaskModal({ task, onClose }: Props) {
   const [sourceImages, setSourceImages] = useState<string[]>(task.source_images || []);
   const [previewUrls, setPreviewUrls] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
+  const [formError, setFormError] = useState('');
   const [showGalleryPicker, setShowGalleryPicker] = useState(false);
   const [galleryUrls, setGalleryUrls] = useState<Record<string, string>>({});
 
@@ -75,8 +77,9 @@ export default function EditTaskModal({ task, onClose }: Props) {
   };
 
   const handleSubmit = async () => {
-    if (isEdit && sourceImages.length === 0) { alert('请至少选择一张源图片'); return; }
-    if (!prompt.trim()) { alert('请输入提示词'); return; }
+    if (isEdit && sourceImages.length === 0) { setFormError('请至少选择一张源图片'); return; }
+    if (!prompt.trim()) { setFormError('请输入提示词'); return; }
+    setFormError('');
 
     setSubmitting(true);
     try {
@@ -93,10 +96,14 @@ export default function EditTaskModal({ task, onClose }: Props) {
         source_images: isEdit ? sourceImages : [],
       });
       addTask(newTask);
-      alert(isEdit ? '编辑已下发，请在任务队列中查看任务进度。' : '提交成功，请在任务队列中查看任务进度。');
+      toastSuccess(
+        isEdit ? '编辑已下发，请在任务队列中查看任务进度。' : '提交成功，请在任务队列中查看任务进度。',
+        '任务已提交',
+      );
       onClose();
-    } catch (err: any) {
-      alert(err?.toString() || '提交失败');
+    } catch (err) {
+      console.error('[EditTaskModal] submit failed', err);
+      toastError(err?.toString() || '提交失败，请稍后重试。', '提交失败');
     } finally {
       setSubmitting(false);
     }
@@ -140,6 +147,7 @@ export default function EditTaskModal({ task, onClose }: Props) {
           <div className="form-group" style={{ marginBottom: 16 }}>
             <label>提示词</label>
             <textarea value={prompt} onChange={e => setPrompt(e.target.value)} rows={3} />
+            {formError && <p className="edit-modal-form-error">{formError}</p>}
           </div>
 
           <div className="form-row" style={{ marginBottom: 16 }}>

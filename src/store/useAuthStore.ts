@@ -72,7 +72,7 @@ interface AuthState {
   refreshUser: () => Promise<void>;
   updateAccountType: (account_type: 'trial' | 'normal' | 'paid') => void;
   /** 以后端 authorize/settle/refresh 响应回写统一余额（字符串透传，客户端不累计） */
-  updateBalances: (balanceUsd: string | number, trialCreditUsd: string | number | undefined | null) => void;
+  updateBalances: (balanceUsd: string | number, trialCreditUsd: string | number | undefined | null, credits?: { paid?: number; trial?: number; gift?: number; total?: number }) => void;
   loadFromStorage: () => void;
 }
 
@@ -168,13 +168,21 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     set({ user: updated });
   },
 
-  updateBalances: (balanceUsd, trialCreditUsd) => {
+  updateBalances: (balanceUsd, trialCreditUsd, credits?: { paid?: number; trial?: number; gift?: number; total?: number }) => {
     const user = get().user;
     if (!user) return;
     const nextBalance = balanceUsd != null ? String(balanceUsd) : user.balance_usd;
     const nextTrial = trialCreditUsd != null ? String(trialCreditUsd) : user.trial_credit_usd;
-    if (user.balance_usd === nextBalance && user.trial_credit_usd === nextTrial) return;
-    const updated = { ...user, balance_usd: nextBalance, trial_credit_usd: nextTrial };
+    const paid = credits?.paid ?? user.paid_credits ?? 0;
+    const trial = credits?.trial ?? user.trial_credits ?? 0;
+    const gift = credits?.gift ?? user.gift_credits ?? 0;
+    const total = credits?.total ?? (paid + trial + gift);
+    if (
+      user.balance_usd === nextBalance && user.trial_credit_usd === nextTrial
+      && user.paid_credits === paid && user.trial_credits === trial
+      && user.gift_credits === gift && user.total_credits === total
+    ) return;
+    const updated = { ...user, balance_usd: nextBalance, trial_credit_usd: nextTrial, paid_credits: paid, trial_credits: trial, gift_credits: gift, total_credits: total };
     localStorage.setItem('cy_user', JSON.stringify(updated));
     set({ user: updated });
   },

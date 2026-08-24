@@ -1,13 +1,14 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuthStore } from '../store/useAuthStore';
 import { useSettingsStore } from '../store/useSettingsStore';
-import { serverApi, type ServerModel, type PayLimits, type UserOrder, type UsageRecord, type PackagesResponse, type RuntimeTokenStatus } from '../services/serverApi';
+import { serverApi, type ServerModel, type UserOrder, type UsageRecord, type PackagesResponse, type RuntimeTokenStatus } from '../services/serverApi';
 import { useServerModelStore } from '../store/useServerModelStore';
 import { api } from '../services/api';
 import { setAsAvatarFromPath, clearAvatar } from '../services/avatarService';
 import { clearRuntimeConfig, loadRuntimeConfig } from '../services/runtimeTokenService';
 import { toastError, toastSuccess } from '../components/Toast';
 import AccountUsagePanel from '../components/AccountUsagePanel';
+import AccountLedgerPanel from '../components/AccountLedgerPanel';
 import { explainError } from '../utils/errors';
 import './Account.css';
 
@@ -123,6 +124,7 @@ export default function Account() {
         group: o.group ?? '',
         amount_usd: Number(o.amount_usd ?? o.total_usd ?? 0),
         amount_cny: Number(o.amount_cny ?? o.total_cny ?? 0),
+        credits_granted: o.credits_granted ?? null,
         total_usd: Number(o.total_usd ?? o.amount_usd ?? 0),
         total_cny: Number(o.total_cny ?? o.amount_cny ?? 0),
         exchange_rate: o.exchange_rate ?? null,
@@ -235,16 +237,17 @@ export default function Account() {
     }
   }
 
+  // CY Credits：兑换率与充值档位全部来自服务端（¥1 = credits_per_cny 点）
+  const creditsPerCny = pkg?.credits_per_cny ?? 100;
   const exchangeRate = pkg?.exchange_rate || 0;
-  const payLimits: PayLimits | null = pkg?.limits ?? null;
-  const minUsdTotal = payLimits?.min_total_usd ?? 1;
-  const maxUsdTotal = payLimits?.max_total_usd ?? 1000;
-  const modelPrice = pkg?.model?.price_per_call_usd
-    ? `$${Number(pkg.model.price_per_call_usd).toFixed(4)}/次`
-    : '';
+  const exchangeRateSource = pkg?.exchange_rate_source ?? '';
+  const minCnyTotal = pkg?.limits?.min_cny ?? 1;
+  const maxCnyTotal = pkg?.limits?.max_cny ?? 5000;
+  const unitCredits = pkg?.unit_credits ?? null;
+  const modelPrice = unitCredits != null ? `${unitCredits} 点/次` : '';
 
   const amountValue = parseFloat(amount) || 0;
-  const totalCny = exchangeRate ? amountValue * exchangeRate : 0;
+  const estimatedCredits = Math.floor(amountValue * creditsPerCny);
 
   function setAmountInput(value: string) {
     if (!/^\d{0,4}(\.\d{0,2})?$/.test(value) && value !== '') return;
@@ -256,12 +259,12 @@ export default function Account() {
   }
 
   function openRechargeConfirm() {
-    if (amountValue < minUsdTotal) {
-      toastError(`充值金额需至少 $${minUsdTotal.toFixed(2)}，当前 $${amountValue.toFixed(2)}`);
+    if (amountValue < minCnyTotal) {
+      toastError(`充值金额需至少 ¥${minCnyTotal}，当前 ¥${amountValue.toFixed(2)}`);
       return;
     }
-    if (amountValue > maxUsdTotal) {
-      toastError(`充值金额不能超过 $${maxUsdTotal.toFixed(2)}`);
+    if (amountValue > maxCnyTotal) {
+      toastError(`充值金额不能超过 ¥${maxCnyTotal}`);
       return;
     }
     setRechargeConfirmOpen(true);
@@ -272,7 +275,7 @@ export default function Account() {
     setOrdering(true);
     setStatusMsg('正在创建订单...');
     try {
-      const r = await serverApi.createOrder(amountValue);
+      const r = await serverApi.createOrderCny(amountValue);
       const newOrders: PendingOrder[] = [{
         out_trade_no: r.out_trade_no,
         amount_usd: r.amount_usd,
@@ -365,11 +368,12 @@ export default function Account() {
         clearRuntimeConfig();
         loadRuntimeToken();
         try { await loadRuntimeConfig(); } catch {}
-        const credited = polledOrders
-          .map(o => o.amount_usd)
+        const creditedCny = polledOrders
+          .map(o => o.amount_cny)
           .filter((v, i, a) => a.indexOf(v) === i)
           .reduce((s, v) => s + v, 0);
-        toastSuccess(`充值成功，$${credited.toFixed(2)} 已到账`);
+        const creditedCredits = Math.floor(creditedCny * creditsPerCny);
+        toastSuccess(`充值成功，+${creditedCredits.toLocaleString()} 点已到账`);
         setTimeout(() => {
           setPendingOrders([]);
           setAllocMap({});
@@ -412,9 +416,10 @@ export default function Account() {
   async function handleApplyTrial() {
     setTrialLoading(true);
     try {
-      await upgradeTrial();
+      // Trial Entitlement V1：一次性领取（同邮箱一生一次，服务端 claim ledger 判定）
+      const res = await serverApi.claimTrial();
       await refreshUser();
-      toastSuccess('试用额度已开通');
+      toastSuccess(`试用点数已开通：+${res.grant_credits} 点`);
     } catch (e: any) {
       toastError(explainError(e));
     } finally {
@@ -433,8 +438,11 @@ export default function Account() {
   }
 
   const trialExpired = user?.trial_expired;
-  const balanceUsd = parseFloat(user?.balance_usd ?? '0') || 0;
-  const trialCreditUsd = parseFloat(user?.trial_credit_usd ?? '0') || 0;
+  const paidCredits = user?.paid_credits ?? 0;
+  const trialCredits = user?.trial_credits ?? 0;
+  const giftCredits = user?.gift_credits ?? 0;
+  const totalCredits = user?.total_credits ?? (paidCredits + trialCredits + giftCredits);
+  const trialAvailable = user?.trial_available ?? false;
 
   // 未登录：显示登录入口
   if (!isLoggedIn || !user) {
@@ -474,7 +482,7 @@ export default function Account() {
     failed:     { label: '退款失败',   cls: 'refund_change' },
   };
 
-  const presets = [5, 10, 20, 50];
+  const presets = [10, 20, 50, 100];
 
   return (
     <div className="page account-page">
@@ -516,20 +524,28 @@ export default function Account() {
             </span>
           )}
           <div className="account-balances">
-            <div className="account-balance-item">
-              <span className="account-balance-label">💰 现金余额</span>
-              <span className="account-balance-value">${balanceUsd.toFixed(2)}</span>
+            <div className="account-balance-item primary">
+              <span className="account-balance-label">可用点数</span>
+              <span className="account-balance-value">{totalCredits.toLocaleString()} 点</span>
             </div>
             <div className="account-balance-item">
-              <span className="account-balance-label">🎁 试用额度</span>
-              <span className="account-balance-value">${trialCreditUsd.toFixed(2)}</span>
+              <span className="account-balance-label">正式点数</span>
+              <span className="account-balance-value">{paidCredits.toLocaleString()}</span>
+            </div>
+            <div className="account-balance-item">
+              <span className="account-balance-label">试用点数</span>
+              <span className="account-balance-value">{trialCredits.toLocaleString()}</span>
+            </div>
+            <div className="account-balance-item">
+              <span className="account-balance-label">赠送点数</span>
+              <span className="account-balance-value">{giftCredits.toLocaleString()}</span>
             </div>
           </div>
         </div>
         <div className="account-actions">
-          {user.account_type === 'normal' && (
+          {user.account_type === 'normal' && trialAvailable && (
             <button className="upgrade-trial-btn" onClick={handleApplyTrial} disabled={trialLoading}>
-              {trialLoading ? '申请中...' : '申请试用'}
+              {trialLoading ? '申请中...' : '申请免费试用'}
             </button>
           )}
           <button className="logout-btn" onClick={logout}>退出登录</button>
@@ -576,21 +592,21 @@ export default function Account() {
         </div>
       </div>
 
-      {/* 充值面板：单一余额充值（Image2 按次计费） */}
+      {/* 充值面板：CY 点数直购（¥1 = credits_per_cny 点，兑换率由服务端统一下发） */}
       <div className="account-section">
-        <h3>余额充值</h3>
+        <h3>点数充值</h3>
         <div className="recharge-grid">
           <div className="recharge-card highlight">
             <div className="recharge-card-header">
               <span className="recharge-card-icon">🎨</span>
-              <span className="recharge-card-title">Image2 生成额度</span>
+              <span className="recharge-card-title">Image2 生成点数</span>
               <button className="recharge-card-info-btn" title="查看扣费标准" onClick={() => setShowPricingDialog(true)}>
                 !
               </button>
             </div>
             <p className="recharge-card-desc">
               用于文生图、图生图等全部图片生成任务。
-              {modelPrice && <>当前单价 <strong>{modelPrice}</strong>（消费时试用额度优先扣除）。</>}
+              {modelPrice && <>当前单张 <strong>{modelPrice}</strong>（消费时试用点数优先扣除）。</>}
             </p>
             <div className="recharge-card-body">
               <div className="recharge-card-row">
@@ -601,14 +617,14 @@ export default function Account() {
                       className={`recharge-preset-btn ${amountValue === v ? 'active' : ''}`}
                       onClick={() => setPresetAmount(v)}
                     >
-                      ${v}
+                      ¥{v}
                     </button>
                   ))}
                 </div>
                 <div className="recharge-card-input">
                   <span className="recharge-card-input-label">自定义</span>
                   <div className="recharge-input-wrap">
-                    <span className="recharge-currency">$</span>
+                    <span className="recharge-currency">¥</span>
                     <input
                       type="number"
                       min="0"
@@ -624,20 +640,21 @@ export default function Account() {
             <div className="recharge-summary">
               <div className="recharge-summary-row">
                 <span className="recharge-summary-total">
-                  合计 <strong>${amountValue.toFixed(2)}</strong>{exchangeRate > 0 && <> ≈ ¥{totalCny.toFixed(2)}</>}
+                  支付 <strong>¥{amountValue.toFixed(2)}</strong>
+                  {amountValue > 0 && <> → 预计获得 <strong>{estimatedCredits.toLocaleString()} 点</strong></>}
                 </span>
-                {exchangeRate > 0 && <span className="recharge-summary-rate">汇率 {exchangeRate.toFixed(2)}</span>}
+                <span className="recharge-summary-rate">¥1 = {creditsPerCny} 点</span>
               </div>
               <div className="recharge-summary-hint">
-                {amountValue > 0 && amountValue < minUsdTotal
-                  ? `还差 $${(minUsdTotal - amountValue).toFixed(2)} 可发起支付`
-                  : `最低充值 ${minUsdTotal.toFixed(2)} · 单笔上限 ${maxUsdTotal.toFixed(0)}`}
+                {amountValue > 0 && amountValue < minCnyTotal
+                  ? `还差 ¥${(minCnyTotal - amountValue).toFixed(2)} 可发起支付`
+                  : `最低充值 ¥${minCnyTotal} · 单笔上限 ¥${maxCnyTotal}`}
               </div>
               <div className="recharge-summary-actions">
                 <span className="recharge-pay-label">仅支持微信支付</span>
                 <button
                   className="buy-btn"
-                  disabled={ordering || polling || amountValue < minUsdTotal || amountValue > maxUsdTotal}
+                  disabled={ordering || polling || amountValue < minCnyTotal || amountValue > maxCnyTotal}
                   onClick={openRechargeConfirm}
                 >
                   {ordering ? '下单中...' : polling ? '等待支付...' : '立即充值'}
@@ -688,7 +705,7 @@ export default function Account() {
                 return (
                   <div key={o.out_trade_no} className="alloc-order-row">
                     <span className="alloc-order-info">
-                      余额充值 · ${o.amount_usd.toFixed(2)}（¥{o.amount_cny.toFixed(2)}）
+                      点数充值 · ¥{o.amount_cny.toFixed(2)}（+{Math.floor(o.amount_cny * creditsPerCny).toLocaleString()} 点）
                     </span>
                     <span className={`alloc-tag alloc-tag-${st}`}>{tagText}</span>
                   </div>
@@ -697,6 +714,12 @@ export default function Account() {
             </div>
           </div>
         )}
+      </div>
+
+      {/* 点数流水：充值 / 消费 / 释放 / 退款 / 试用 / 赠送（Wallet / Ledger Pattern） */}
+      <div className="account-section">
+        <h3>点数流水</h3>
+        <AccountLedgerPanel />
       </div>
 
       {/* 用量统计：趋势 / 模型 / 明细（数据全部来自服务器 usage 聚合接口） */}
@@ -709,6 +732,8 @@ export default function Account() {
       {showPricingDialog && (
         <PricingDialog
           models={models}
+          unitCredits={unitCredits}
+          creditsPerCny={creditsPerCny}
           usageRecords={usageRecords}
           onLoadRecords={async () => {
             try {
@@ -760,7 +785,7 @@ export default function Account() {
                     <td>{o.created_at?.replace('T', ' ').slice(0, 16) || '-'}</td>
                     <td>{o.paid_at?.replace('T', ' ').slice(0, 16) || '-'}</td>
                     <td>¥{Number(payCny).toFixed(2)}</td>
-                    <td>${Number(gotUsd).toFixed(2)}</td>
+                    <td>{o.credits_granted != null ? `${o.credits_granted.toLocaleString()} 点` : `$${Number(gotUsd).toFixed(2)}`}</td>
                     <td>
                       <span className={`order-item-tag ${sm.cls}`}>{sm.label}</span>
                       {rsm && <span className={`order-item-tag ${rsm.cls}`} style={{ marginLeft: 4 }}>{rsm.label}</span>}
@@ -796,23 +821,21 @@ export default function Account() {
             <h3>充值确认</h3>
             <div className="recharge-confirm-rows">
               <div className="recharge-confirm-row">
-                <span>充值金额</span>
-                <strong>${amountValue.toFixed(2)}</strong>
+                <span>支付金额</span>
+                <strong>¥{amountValue.toFixed(2)}</strong>
+              </div>
+              <div className="recharge-confirm-row">
+                <span>预计获得</span>
+                <strong>{estimatedCredits.toLocaleString()} CY 点</strong>
               </div>
               <div className="recharge-confirm-row">
                 <span>支付方式</span>
                 <strong>微信支付</strong>
               </div>
-              <div className="recharge-confirm-row">
-                <span>预计支付</span>
-                <strong>{exchangeRate > 0 ? `¥${totalCny.toFixed(2)}` : '以下单汇率为准'}</strong>
+              <div className="recharge-confirm-row muted">
+                <span>兑换率</span>
+                <span>¥1 = {creditsPerCny} 点（到账点数以下单快照为准）</span>
               </div>
-              {exchangeRate > 0 && (
-                <div className="recharge-confirm-row muted">
-                  <span>汇率</span>
-                  <span>1 USD ≈ {exchangeRate.toFixed(2)} CNY（以下单时服务端快照为准）</span>
-                </div>
-              )}
             </div>
             <div className="refund-confirm-actions">
               <button className="refund-confirm-cancel" onClick={() => setRechargeConfirmOpen(false)}>取消</button>
@@ -821,7 +844,7 @@ export default function Account() {
                 disabled={ordering}
                 onClick={handleBuy}
               >
-                {ordering ? '创建订单中...' : '确认充值'}
+                {ordering ? '创建订单中...' : `确认充值 · ${estimatedCredits.toLocaleString()} 点`}
               </button>
             </div>
           </div>
@@ -881,12 +904,14 @@ export default function Account() {
 /* ─── 扣费标准弹窗 ─── */
 interface PricingDialogProps {
   models: ServerModel[];
+  unitCredits: number | null;
+  creditsPerCny: number;
   usageRecords: UsageRecord[];
   onLoadRecords: () => Promise<UsageRecord[]>;
   onClose: () => void;
 }
 
-function PricingDialog({ models, usageRecords, onLoadRecords, onClose }: PricingDialogProps) {
+function PricingDialog({ models, unitCredits, creditsPerCny, usageRecords, onLoadRecords, onClose }: PricingDialogProps) {
   const [showRecords, setShowRecords] = useState(false);
   const [recordsLoading, setRecordsLoading] = useState(false);
   const [records, setRecords] = useState(usageRecords);
@@ -930,11 +955,11 @@ function PricingDialog({ models, usageRecords, onLoadRecords, onClose }: Pricing
                 <td>{m.display_name || m.name}</td>
                 <td>{m.provider}</td>
                 <td>图片</td>
-                <td>按次计费</td>
+                <td>按张计费</td>
                 <td>
-                  {m.billing_type === 'per_call'
-                    ? (m.price_per_call ? `$${m.price_per_call}/次` : '-')
-                    : '-'}
+                  {unitCredits != null
+                    ? `${unitCredits} 点/张（约 ¥${(unitCredits / creditsPerCny).toFixed(2)}）`
+                    : (m.price_per_call ? `$${m.price_per_call}/次` : '-')}
                 </td>
               </tr>
             ))}
@@ -967,7 +992,7 @@ function PricingDialog({ models, usageRecords, onLoadRecords, onClose }: Pricing
                   <td>{r.model}</td>
                   <td>{isImage ? '图片' : '其他'}</td>
                   <td>{isImage ? `${qty} 张` : '-'}</td>
-                  <td>${Number(r.cost_usd).toFixed(4)}</td>
+                  <td>{r.cost_credits != null ? `${r.cost_credits} 点` : `$${Number(r.cost_usd).toFixed(4)}`}</td>
                   <td>{r.created_at?.replace('T', ' ').slice(0, 16)}</td>
                 </tr>
                 );

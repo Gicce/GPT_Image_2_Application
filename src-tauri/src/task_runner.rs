@@ -3,9 +3,13 @@ use std::path::Path;
 
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::models::{ImageRecord, RuntimeAuthConfig, Task};
+use crate::models::{ImageRecord, RuntimeAuthConfig, SubTaskErrorDetail, Task};
 use crate::reconciliation::{fail_task_in_place, finalize_task_in_place};
 use crate::storage;
+use crate::task_failure::{
+    build_local_failure_detail, build_send_failure_detail, build_upstream_failure_detail,
+    TaskFailure,
+};
 use crate::RuntimeAuthState;
 
 #[derive(Debug, serde::Deserialize)]
@@ -32,7 +36,7 @@ struct ApiResponse {
     data: Vec<ApiResponseImage>,
 }
 
-fn extract_error_parts(text: &str) -> (Option<String>, Option<String>) {
+fn extract_error_parts(text: &str) -> (Option<String>, Option<String>, Option<String>) {
     let parsed = serde_json::from_str::<serde_json::Value>(text).ok();
     if let Some(value) = parsed {
         let detail = value
@@ -60,32 +64,47 @@ fn extract_error_parts(text: &str) -> (Option<String>, Option<String>) {
             .map(str::trim)
             .filter(|v| !v.is_empty())
             .map(str::to_string);
-        return (detail, code);
+        let request_id = value
+            .get("request_id")
+            .or_else(|| value.get("requestId"))
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_string)
+            .or_else(|| {
+                // packyapi 把 request id 埋在 body 文本里（无独立字段）
+                crate::task_failure::extract_request_id(text)
+            });
+        return (detail, code, request_id);
     }
 
     let trimmed = text.trim();
     if trimmed.is_empty() {
-        (None, None)
+        (None, None, None)
     } else {
-        (Some(trimmed.to_string()), None)
+        (
+            Some(trimmed.to_string()),
+            None,
+            crate::task_failure::extract_request_id(trimmed),
+        )
     }
 }
 
-fn format_upstream_image_error(status: reqwest::StatusCode, text: &str, url: &str) -> String {
-    let (detail, code) = extract_error_parts(text);
-    let primary = detail
-        .clone()
-        .or_else(|| code.clone())
-        .unwrap_or_else(|| "上游图片接口失败".to_string());
+fn format_upstream_image_error_parts(
+    status: reqwest::StatusCode,
+    primary: &str,
+    code: &Option<String>,
+    url: &str,
+) -> String {
     let mut message = if primary == "openai_error" {
         "上游图片接口失败：openai_error".to_string()
     } else if primary.starts_with("上游图片接口失败") {
-        primary
+        primary.to_string()
     } else {
         format!("上游图片接口失败：{primary}")
     };
     if let Some(code_value) = code {
-        if !message.contains(&code_value) {
+        if !message.contains(code_value) {
             message.push_str(&format!(" [code: {code_value}]"));
         }
     }
@@ -93,6 +112,33 @@ fn format_upstream_image_error(status: reqwest::StatusCode, text: &str, url: &st
     // 「文生图接口失败」与「图生图接口失败」，不再泛化成同一句能力不匹配。
     message.push_str(&format!(" [endpoint: {url}] (HTTP {})", status.as_u16()));
     message
+}
+
+fn format_upstream_image_error(status: reqwest::StatusCode, text: &str, url: &str) -> String {
+    let (detail, code, _) = extract_error_parts(text);
+    let primary = detail
+        .clone()
+        .or_else(|| code.clone())
+        .unwrap_or_else(|| "上游图片接口失败".to_string());
+    format_upstream_image_error_parts(status, &primary, &code, url)
+}
+
+/// 上游非 2xx 失败 → 稳定展示文案 + 结构化快照（V4.1 canonical failure model）。
+fn upstream_image_failure(status: reqwest::StatusCode, text: &str, url: &str) -> TaskFailure {
+    let (detail, code, request_id) = extract_error_parts(text);
+    let primary = detail
+        .clone()
+        .or_else(|| code.clone())
+        .unwrap_or_else(|| "上游图片接口失败".to_string());
+    let message = format_upstream_image_error_parts(status, &primary, &code, url);
+    let snapshot = build_upstream_failure_detail(
+        status.as_u16(),
+        code.as_deref(),
+        &primary,
+        request_id.as_deref(),
+        url,
+    );
+    TaskFailure { message, detail: Some(snapshot) }
 }
 
 /// Translate a reqwest send error into a friendly, classified message for the task queue.
@@ -130,15 +176,22 @@ fn jitter_millis() -> u64 {
         .unwrap_or(0)
 }
 
+/// 发送层最终失败载体：message 是稳定展示文案，detail 是结构化快照
+/// （V4.1 canonical failure model；视觉模块用 detail.category 替代文案关键词还原）。
+pub(crate) struct SendFailure {
+    pub message: String,
+    pub detail: SubTaskErrorDetail,
+}
+
 /// 发送 + 瞬时错误有限自动重试（最多补 2 次，500ms / 1500ms + 抖动退避）。
 /// build_request 每次重试重建请求（RequestBuilder 一次性消费；client 由闭包捕获复用）；
-/// 最终失败返回分类后的错误文案。
+/// 最终失败返回分类后的错误文案 + 结构化快照。
 /// V4.0.6 起公开（pub(crate)）：视觉理解模块复用同一瞬时重试策略
 /// （全项目仅此一份实现，禁止出现第二套 retry）。
 pub(crate) async fn send_with_transient_retry(
     url: &str,
     build_request: impl Fn() -> reqwest::RequestBuilder,
-) -> Result<reqwest::Response, String> {
+) -> Result<reqwest::Response, SendFailure> {
     const MAX_RETRIES: u32 = 2;
     let mut attempt: u32 = 0;
     loop {
@@ -155,11 +208,21 @@ pub(crate) async fn send_with_transient_retry(
                     .await;
                     continue;
                 }
+                let kind = if err.is_timeout() {
+                    "timeout"
+                } else if err.is_connect() {
+                    "connect"
+                } else if err.is_request() {
+                    "request"
+                } else {
+                    "network"
+                };
                 let mut message = format_send_error(&err, url);
                 if attempt > 0 {
                     message.push_str(&format!("（已自动重试 {attempt} 次仍失败）"));
                 }
-                return Err(message);
+                let detail = build_send_failure_detail(kind, url, err.is_timeout());
+                return Err(SendFailure { message, detail });
             }
         }
     }
@@ -533,6 +596,7 @@ pub async fn process_next_task(app: &AppHandle) {
                             t.sub_tasks[i].status = "completed".to_string();
                             t.sub_tasks[i].image_id = Some(image_record.id.clone());
                             t.sub_tasks[i].error = None;
+                            t.sub_tasks[i].error_detail = None;
                         }
                         t.success_count = success_count;
                     }
@@ -542,18 +606,25 @@ pub async fn process_next_task(app: &AppHandle) {
                     images.push(image_record);
                 });
             }
-            Err(e) => {
+            Err(f) => {
                 failed_count += 1;
                 storage::with_tasks(app, |tasks| {
                     if let Some(t) = tasks.iter_mut().find(|t| t.id == task.id) {
                         if i < t.sub_tasks.len() {
                             let st = &mut t.sub_tasks[i];
                             st.status = "failed".to_string();
-                            st.error = Some(e.clone());
+                            st.error = Some(f.message.clone());
+                            st.error_detail = f.detail.clone();
                             // attempt 历史：最近在后，封顶 5 条（重试成功后 error 清空、历史保留）
-                            st.attempt_errors.push(e.clone());
+                            st.attempt_errors.push(f.message.clone());
                             if st.attempt_errors.len() > 5 {
                                 st.attempt_errors.remove(0);
+                            }
+                            if let Some(d) = &f.detail {
+                                st.attempt_details.push(d.clone());
+                                if st.attempt_details.len() > 5 {
+                                    st.attempt_details.remove(0);
+                                }
                             }
                         }
                         t.failed_count = failed_count;
@@ -580,7 +651,7 @@ async fn generate_single_image(
     base_url: &str,
     task: &Task,
     index: usize,
-) -> Result<ImageRecord, String> {
+) -> Result<ImageRecord, TaskFailure> {
     let body = serde_json::json!({
         "model": "gpt-image-2",
         "prompt": compose_model_instruction(
@@ -603,31 +674,32 @@ async fn generate_single_image(
             .header("Authorization", format!("Bearer {}", token))
             .json(&body)
     })
-    .await?;
+    .await
+    .map_err(|f| TaskFailure { message: f.message, detail: Some(f.detail) })?;
 
     if !response.status().is_success() {
         let status = response.status();
         let text = response.text().await.unwrap_or_default();
-        return Err(format_upstream_image_error(status, &text, &url));
+        return Err(upstream_image_failure(status, &text, &url));
     }
 
     let api_response: ApiResponse = response
         .json()
         .await
-        .map_err(|e| format!("解析响应失败: {}", e))?;
+        .map_err(|e| TaskFailure::processing(format!("解析响应失败: {}", e)))?;
 
     let image_data = api_response
         .data
         .into_iter()
         .next()
-        .ok_or_else(|| "API 未返回图片数据".to_string())?;
+        .ok_or_else(|| TaskFailure::processing("API 未返回图片数据".to_string()))?;
 
     let b64 = image_data
         .b64_json
-        .ok_or_else(|| "响应中缺少 base64 数据".to_string())?;
+        .ok_or_else(|| TaskFailure::processing("响应中缺少 base64 数据".to_string()))?;
 
     let image_bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &b64)
-        .map_err(|e| format!("Base64 解码失败: {}", e))?;
+        .map_err(|e| TaskFailure::processing(format!("Base64 解码失败: {}", e)))?;
 
     let now = chrono::Local::now();
     let timestamp = now.format("%Y%m%d_%H%M%S");
@@ -635,7 +707,8 @@ async fn generate_single_image(
     let file_name = format!("{}_{}.{}", timestamp, index + 1, ext);
 
     let file_path = Path::new(&task.output_dir).join(&file_name);
-    fs::write(&file_path, &image_bytes).map_err(|e| format!("保存图片失败: {}", e))?;
+    fs::write(&file_path, &image_bytes)
+        .map_err(|e| TaskFailure::local_file(format!("保存图片失败: {}", e)))?;
 
     let image_id = uuid::Uuid::new_v4().to_string();
 
@@ -670,23 +743,28 @@ async fn remove_background_single_image(
     settings: &crate::models::Settings,
     task: &Task,
     index: usize,
-) -> Result<ImageRecord, String> {
+) -> Result<ImageRecord, TaskFailure> {
     let api_key = settings.removebg_api_key.trim();
     if api_key.is_empty() {
-        return Err("请先在设置中配置 remove.bg API Key".to_string());
+        let message = "请先在设置中配置 remove.bg API Key".to_string();
+        return Err(TaskFailure {
+            detail: Some(build_local_failure_detail("auth", &message, false)),
+            message,
+        });
     }
 
     let source_path = task
         .source_images
         .get(index)
         .or_else(|| task.source_images.first())
-        .ok_or_else(|| "去背景任务缺少源图".to_string())?;
+        .ok_or_else(|| TaskFailure::local_file("去背景任务缺少源图".to_string()))?;
     let path = Path::new(source_path);
     if !path.exists() {
-        return Err(format!("源图不存在: {}", source_path));
+        return Err(TaskFailure::local_file(format!("源图不存在: {}", source_path)));
     }
 
-    let bytes = fs::read(path).map_err(|e| format!("读取源图失败: {}", e))?;
+    let bytes = fs::read(path)
+        .map_err(|e| TaskFailure::local_file(format!("读取源图失败: {}", e)))?;
     let file_name = path
         .file_name()
         .and_then(|n| n.to_str())
@@ -695,7 +773,7 @@ async fn remove_background_single_image(
     let part = reqwest::multipart::Part::bytes(bytes)
         .file_name(file_name)
         .mime_str(mime_for_path(path))
-        .map_err(|e| format!("构建上传文件失败: {}", e))?;
+        .map_err(|e| TaskFailure::processing(format!("构建上传文件失败: {}", e)))?;
     let form = reqwest::multipart::Form::new()
         .part("image_file", part)
         .text("size", "auto");
@@ -706,16 +784,20 @@ async fn remove_background_single_image(
         .multipart(form)
         .send()
         .await
-        .map_err(|e| format!("remove.bg 请求失败: {}", e))?;
+        .map_err(|e| TaskFailure::unclassified(format!("remove.bg 请求失败: {}", e)))?;
 
     if !resp.status().is_success() {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
-        return Err(format!("remove.bg 错误 {}: {}", status, text));
+        return Err(TaskFailure::unclassified(format!(
+            "remove.bg 错误 {}: {}",
+            status, text
+        )));
     }
 
     let transparent_dir = Path::new(&task.output_dir).join("transparent");
-    fs::create_dir_all(&transparent_dir).map_err(|e| format!("创建透明图目录失败: {}", e))?;
+    fs::create_dir_all(&transparent_dir)
+        .map_err(|e| TaskFailure::local_file(format!("创建透明图目录失败: {}", e)))?;
 
     let now = chrono::Local::now();
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("image");
@@ -724,8 +806,9 @@ async fn remove_background_single_image(
     let image_bytes = resp
         .bytes()
         .await
-        .map_err(|e| format!("读取 remove.bg 响应失败: {}", e))?;
-    fs::write(&filepath, &image_bytes).map_err(|e| format!("保存透明图失败: {}", e))?;
+        .map_err(|e| TaskFailure::processing(format!("读取 remove.bg 响应失败: {}", e)))?;
+    fs::write(&filepath, &image_bytes)
+        .map_err(|e| TaskFailure::local_file(format!("保存透明图失败: {}", e)))?;
 
     Ok(ImageRecord {
         id: uuid::Uuid::new_v4().to_string(),
@@ -752,22 +835,22 @@ async fn edit_single_image(
     base_url: &str,
     task: &Task,
     index: usize,
-) -> Result<ImageRecord, String> {
+) -> Result<ImageRecord, TaskFailure> {
     // ===== 源图前置校验（图生图执行的硬边界）=====
     // 空源图 / 源图文件不存在时必须在本地立即失败，给出明确错误；
     // 绝不把无源图 / 坏路径的 edit 请求发给上游，也绝不静默 fallback 到其它图片。
     let source_images = effective_source_images(task, index);
     if source_images.is_empty() {
-        return Err(
+        return Err(TaskFailure::local_file(
             "图生图任务缺少源图片，请在任务卡中重新绑定源图片后再执行。".to_string(),
-        );
+        ));
     }
     for img_path in &source_images {
         if !Path::new(img_path).exists() {
-            return Err(format!(
+            return Err(TaskFailure::local_file(format!(
                 "源图片不存在：{}。该任务引用的源图可能已被删除或移动，请在任务卡中切换源图片后重试。",
                 img_path
-            ));
+            )));
         }
     }
 
@@ -775,8 +858,8 @@ async fn edit_single_image(
     let mut image_parts: Vec<(String, Vec<u8>, &'static str)> = Vec::new();
     for img_path in &source_images {
         let path = Path::new(img_path);
-        let file_bytes =
-            fs::read(path).map_err(|e| format!("无法读取源图片 {}: {}", img_path, e))?;
+        let file_bytes = fs::read(path)
+            .map_err(|e| TaskFailure::local_file(format!("无法读取源图片 {}: {}", img_path, e)))?;
         let file_name = path
             .file_name()
             .and_then(|n| n.to_str())
@@ -789,6 +872,24 @@ async fn edit_single_image(
         &effective_negative_prompt(task, index),
     );
     let size_text = task.size.clone();
+
+    // 区域替换 mask（视觉项目 Region V1）：真实进入 edits 请求的 `mask` 部件。
+    // 与源图同级硬校验 —— 声明了 mask 但文件缺失 / 读取失败必须本地失败，
+    // 绝不静默降级成「无 mask 全图重绘」（那会让区域约束悄悄失效）。
+    let mask_bytes: Option<Vec<u8>> = match &task.mask_image {
+        Some(mask_path) if !mask_path.trim().is_empty() => {
+            let path = Path::new(mask_path);
+            if !path.exists() {
+                return Err(TaskFailure::local_file(format!(
+                    "区域 mask 文件不存在：{}。该任务引用的 mask 可能已被删除，请重新编辑区域后重试。",
+                    mask_path
+                )));
+            }
+            Some(fs::read(path)
+                .map_err(|e| TaskFailure::local_file(format!("无法读取区域 mask {}: {}", mask_path, e)))?)
+        }
+        _ => None,
+    };
 
     let build_form = || {
         let mut form = reqwest::multipart::Form::new()
@@ -804,6 +905,13 @@ async fn edit_single_image(
                 .unwrap();
             form = form.part("image[]", part);
         }
+        if let Some(bytes) = &mask_bytes {
+            let part = reqwest::multipart::Part::bytes(bytes.clone())
+                .file_name("mask.png")
+                .mime_str("image/png")
+                .unwrap();
+            form = form.part("mask", part);
+        }
         form
     };
 
@@ -815,30 +923,31 @@ async fn edit_single_image(
             .header("Authorization", format!("Bearer {}", token))
             .multipart(build_form())
     })
-    .await?;
+    .await
+    .map_err(|f| TaskFailure { message: f.message, detail: Some(f.detail) })?;
 
     if !response.status().is_success() {
         let status = response.status();
         let text = response.text().await.unwrap_or_default();
-        return Err(format_upstream_image_error(status, &text, &url));
+        return Err(upstream_image_failure(status, &text, &url));
     }
 
     let api_response: ApiResponse = response
         .json()
         .await
-        .map_err(|e| format!("解析响应失败: {}", e))?;
+        .map_err(|e| TaskFailure::processing(format!("解析响应失败: {}", e)))?;
 
     let image_data = api_response
         .data
         .into_iter()
         .next()
-        .ok_or_else(|| "API 未返回图片数据".to_string())?;
+        .ok_or_else(|| TaskFailure::processing("API 未返回图片数据".to_string()))?;
 
     let image_bytes = if let Some(b64) = image_data.b64_json {
         base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &b64)
-            .map_err(|e| format!("Base64 解码失败: {}", e))?
+            .map_err(|e| TaskFailure::processing(format!("Base64 解码失败: {}", e)))?
     } else {
-        return Err("响应中缺少 b64_json 数据".to_string());
+        return Err(TaskFailure::processing("响应中缺少 b64_json 数据".to_string()));
     };
 
     let now = chrono::Local::now();
@@ -847,7 +956,8 @@ async fn edit_single_image(
     let file_name = format!("{}_{}_edit.{}", timestamp, index + 1, ext);
 
     let file_path = Path::new(&task.output_dir).join(&file_name);
-    fs::write(&file_path, &image_bytes).map_err(|e| format!("保存图片失败: {}", e))?;
+    fs::write(&file_path, &image_bytes)
+        .map_err(|e| TaskFailure::local_file(format!("保存图片失败: {}", e)))?;
 
     let image_id = uuid::Uuid::new_v4().to_string();
 
@@ -909,9 +1019,12 @@ mod tests {
                 label: None,
                 retry_count: 0,
                 attempt_errors: Vec::new(),
+                error_detail: None,
+                attempt_details: Vec::new(),
             }],
             task_type: task_type.to_string(),
             source_images: Vec::new(),
+            mask_image: None,
             execution_mode: "single".to_string(),
             batch_strategy: String::new(),
             task_plan_summary: String::new(),
@@ -925,6 +1038,7 @@ mod tests {
             source_request_id: String::new(),
             source_context: None,
             pose_batch: None,
+            provenance: None,
         }
     }
 

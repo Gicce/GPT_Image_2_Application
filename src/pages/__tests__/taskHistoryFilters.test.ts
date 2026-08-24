@@ -53,8 +53,8 @@ describe('筛选条（类型 + 状态组合）', () => {
     }
   });
 
-  test('状态筛选：全部 / 等待中 / 执行中 / 已完成 / 失败（任务队列启用第二行）', () => {
-    for (const label of ['等待中', '执行中', '已完成', '失败']) {
+  test('状态筛选：全部 / 等待中 / 生成中 / 已完成 / 失败（任务队列启用第二行）', () => {
+    for (const label of ['等待中', '生成中', '已完成', '失败']) {
       expect(categorySrc).toContain(`label: '${label}'`);
     }
     expect(queueSrc).toContain('activeStatus={activeStatus}');

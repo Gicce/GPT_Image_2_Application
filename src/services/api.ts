@@ -27,6 +27,7 @@ import type {
 } from '../types';
 import { invalidateAgentTemplateCache } from '../utils/agent/templateCache';
 import type { EvaluateImageOutcome, EvaluateImageRequestPayload, ImageEvaluation } from '../features/evaluation/types';
+import type { VisualProjectSummary } from '../features/vision/project/types';
 
 export const api = {
   getSettings: (): Promise<Settings> => invoke('get_settings'),
@@ -95,6 +96,33 @@ export const api = {
   /** V4.0.6 批量重做：基于源任务选中子项创建全新任务（源任务不可变；计费在 store 层授权） */
   createBatchRedoTask: (request: CreateBatchRedoRequest): Promise<Task> =>
     invoke('create_batch_redo_task', { request }),
+  /** V4.1 Visual Project：项目文档 CRUD（schema 由前端维护，Rust JSON 透传） */
+  listVisualProjects: (): Promise<VisualProjectSummary[]> => invoke('list_visual_projects'),
+  loadVisualProject: (id: string): Promise<string | null> => invoke('load_visual_project', { id }),
+  saveVisualProject: (input: {
+    id: string;
+    name: string;
+    status: string;
+    revision: number;
+    coverPath?: string | null;
+    dataJson: string;
+    lastOpenedAt?: string | null;
+  }): Promise<void> =>
+    invoke('save_visual_project', {
+      id: input.id,
+      name: input.name,
+      status: input.status,
+      revision: input.revision,
+      coverPath: input.coverPath ?? null,
+      dataJson: input.dataJson,
+      lastOpenedAt: input.lastOpenedAt ?? null,
+    }),
+  renameVisualProject: (id: string, name: string): Promise<void> =>
+    invoke('rename_visual_project', { id, name }),
+  deleteVisualProject: (id: string): Promise<void> => invoke('delete_visual_project', { id }),
+  /** 区域 mask PNG 落盘（返回绝对路径写入 region.maskPath） */
+  saveVisualProjectMask: (projectId: string, regionId: string, pngBase64: string): Promise<string> =>
+    invoke('save_visual_project_mask', { projectId, regionId, pngBase64 }),
   /** V4.0.6 视觉理解：单图结构化分析（BYOK 视觉模型，OpenAI 兼容 chat completions） */
   visionAnalyzeImage: (request: {
     imagePath: string;

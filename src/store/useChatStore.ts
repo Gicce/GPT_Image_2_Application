@@ -1630,6 +1630,8 @@ async function interpretAgentRequest(input: {
 
   const result = await api.runAgentRequest({
     mode: 'interpret',
+    role: 'agent_planner',
+    feature: 'agent-chat-interpret',
     base_url: input.baseUrl,
     token: input.token,
     model: input.model,
@@ -4074,6 +4076,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
       const runResult = await api.runAgentRequest({
         mode: 'chat',
+        role: 'assistant_chat',
+        feature: 'agent-chat',
         base_url: agentBaseURL,
         token: agentToken,
         model: agentModel,

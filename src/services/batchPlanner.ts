@@ -15,12 +15,13 @@
  */
 
 import { api } from './api';
-import { resolveByokConfigForUse, type ByokAgentConfig } from '../features/aiProviders/store';
 import { buildProviderError, providerErrorCompact } from '../features/aiProviders/providerError';
+import { resolveModelForRole, recordAiRoleUsage, type AiRoleConnection } from '../features/aiRouting/resolveModelForRole';
+import { logAiTransport } from '../features/aiRouting/aiRoutingLog';
 import { cleanReply } from './promptOptimizer';
 import { MAX_PLAN_TAGS } from '../utils/batchPlans';
 
-type ResolvedOptimizer = Extract<ByokAgentConfig, { ok: true }>;
+type ResolvedOptimizer = AiRoleConnection;
 
 export interface ParsedAiPlan {
   title: string;
@@ -183,11 +184,13 @@ interface RunPlannerArgs {
   userContent: string;
 }
 
-/** 调用用户配置的 prompt_optimizer 模型；传输失败归因为 ProviderError 体系。 */
+/** 调用批量规划模型（role=batch_planner，默认跟随图片 Prompt 优化模型）；传输失败归因 ProviderError。 */
 async function runPlanner(byok: ResolvedOptimizer, args: RunPlannerArgs): Promise<{ ok: true; reply: string } | { ok: false; error: string }> {
   try {
     const runResult = await api.runAgentRequest({
       mode: 'chat',
+      role: 'batch_planner',
+      feature: 'image-studio-batch-plan',
       base_url: byok.baseUrl,
       token: byok.token,
       model: byok.model,
@@ -219,9 +222,13 @@ async function runPlanner(byok: ResolvedOptimizer, args: RunPlannerArgs): Promis
 }
 
 function resolveOptimizerOrError() {
-  const byok = resolveByokConfigForUse('prompt_optimizer');
-  if (!byok.ok) return { ok: false as const, error: byok.error };
-  return { ok: true as const, byok };
+  const resolution = resolveModelForRole('batch_planner');
+  if (!resolution.ok || !resolution.connection) {
+    return { ok: false as const, error: resolution.ok ? '该功能没有可用的模型连接。' : resolution.error };
+  }
+  recordAiRoleUsage(resolution.resolved);
+  logAiTransport(resolution.resolved, 'image-studio-batch-plan');
+  return { ok: true as const, byok: resolution.connection };
 }
 
 /**

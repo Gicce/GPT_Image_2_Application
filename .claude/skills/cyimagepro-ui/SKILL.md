@@ -7,7 +7,7 @@ description: CyImagePro UI Design System（cyimagepro-ui）——本仓库所有
 
 ```text
 Skill ID:       cyimagepro-ui
-Skill Version:  6.0.0
+Skill Version:  13.0.0
 UI System Version: 1.2.0
 Last Updated:   2026-08-24
 Owner Code:     src/App.css（Token 定义唯一事实源）
@@ -42,6 +42,7 @@ Dark Workspace · Indigo/Violet 品牌主色 · 左侧主导航 · 对话式工�
 | 08 Golden Samples | 现有优秀组件索引 + Compliance Check | examples.md |
 | 09 Visual Workflow | 视觉理解复刻工作流（FinalPromptEditor / Diff / 维度锁定 / 评价） | visual-workflow.md |
 | 10 Image Viewer | 内置图片查看器（遮罩关闭/视口滚轮缩放/锚点/平移/多图/复制/另存为） | image-viewer.md |
+| 11 AI Model Routing | AI 模型路由（Model Role / Resolver / Follow / Fallback / 设置页「AI 模型使用」/ Provenance） | ai-model-routing.md |
 
 ## 3. 开发工作流（强制）
 
@@ -73,6 +74,18 @@ Token → Primitive Component → Business Component → Page
 9. **弹窗**：确认类用现有 Dialog 组件（DeleteConvDialog 等）；禁止页面内手写 overlay div 结构。
 10. **渐进迁移**：新代码必须遵守；修改到的旧组件顺带治理；未涉及页面不做无意义大改。
 11. **View State 与 Semantic State 分离（V4.1 铁律）**：Collapse / Expand / Tab / Viewer / Selection-only actions are view state. They MUST NOT change semantic revision or Prompt provenance. 折叠 / Tab / 查看类状态放专用 view store（如 `useVisionViewStore`），禁止塞进业务对象（RecreationPlan / Prompt Provenance / GenerationCarry）；需要「已修改待优化」类语义判定时一律用派生修订比较（semanticRevision !== optimizedRevision），禁止粘滞 dirty 标记。详见 visual-workflow.md §1e-1f。
+12. **AI Model Routing（V4.1 铁律）**：No AI feature may silently inherit an unrelated global model（任何 AI 功能不得静默继承无关功能的全局默认模型）；Every AI model invocation must have an explicit model role；Displayed model MUST equal resolved runtime model（显示的模型 = 执行的模型，除非 UI 明确显示 fallback）。所有 AI 功能取模型一律走 `resolveModelForRole`（features/aiRouting），禁止组件内 `selectedModel || defaultModel`、禁止硬编码模型 fallback。详见 ai-model-routing.md。
+13. **AI 结构化响应错误呈现（V4.0.9 铁律）**：Internal transport / parser / schema errors MUST NEVER be exposed directly in user-facing UI（serde / JSON / schema / invalid type 类细节只进开发日志）；Hiding an error message is NOT error recovery —— 必须先在数据层完成 normalize → validate → 最多一次结构修复，UI 层只做错误映射与技术信息拦截（视觉理解实例 `src/features/vision/visionErrors.ts`）；失败保留旧成功结果，失败后重试入口立即可用。详见 visual-workflow.md §0 与 patterns.md §8。
+14. **Image Mention 与人物替换双图角色（V4.0.9 铁律）**：In Vision Workflow, @image mentions MUST resolve from current task/conversation images first（候选唯一来源 `buildVisionContextImages`，绝不串其它对话图片）；mention 必须绑定真实图片（assetId/path/role 侧车表），禁止纯文本补全 / 只把路径拼进 Prompt；Person Replacement is a first-class business action, not a weak advanced form section（业务卡 + 画面模板 / 替换人物双区）；When a task involves "replace the person in image A with the person from image B", the system must preserve the semantic roles of both images（A = template/style/composition reference，B = person replacement reference；面板显式选择 > 明确 Mention > 自然语言推断，绝不偷偷覆盖）。@ 输入必须是原生 textarea（IME 安全）。详见 visual-workflow.md §1c/§1g 与 patterns.md §19。
+15. **三层 Provenance 与服装状态不变量（V4.0.9.1 铁律）**：User instruction, structured modification plan, and final execution prompt are three distinct provenance layers and MUST NOT be conflated（用户原话 / 修改方案 / 最终执行 Prompt 三层溯源严禁混淆；生成任务冻结 `GenerationProvenanceSnapshot`，历史「用户要求」只读快照，禁止用 final_prompt 伪造）。**clothingPolicy=preserve_original and clothing=modified is an invalid semantic state**（`clothing ∈ activeDimensions ⇔ clothingPolicy ≠ 'preserve_original'`，唯一归一入口 `normalizeModificationState`，UI 事件只调 domain action，禁止组件自行展开赋值）。详见 visual-workflow.md §1d/§1h。
+16. **Creative Workflow MUST use Adaptive Workbench Layout（V4.1 Workbench V2 铁律）**：视觉理解等创作型工作流页面必须使用自适应工作台布局（`.vision-workbench` 双栏：主工作区 `minmax(0,1fr)` + Context Rail 340–390px，≥1600 宽 `min(100%,1520px)`；1440–1599 rail 320px；<1440 单列摘要卡）。禁止窄容器（旧 `max-width: 960px` 已删除，禁止回归）；设置类表单页仍走 Narrow Layout，两类页面禁止互抄。CTA（优化 / 确认生成）唯一渲染处 = Context Rail。
+17. **Visual Project Pattern（V4.1 Workbench V2 铁律）**：视觉理解是项目化工作台（VisualProject：TemplateSnapshot 冻结基线 + ModificationContract overlay + Regions + RenderingContract + revision）。Template 是 baseline，用户修改绝不写回模板维度；项目语义修订（revision）只由语义事件驱动（updateActive / updateActiveDebounced 白名单 reason），折叠 / Tab / Viewer / hover 是视图操作绝不加修订；打开项目 = 本地恢复，绝不重新调用视觉分析 API；Effective Plan（`buildEffectiveVisualPlan`）是 Rail / 确认弹层 / Compiler / 溯源的唯一合成视图。详见 visual-workflow.md §7。
+18. **Identity != RenderingMode（V4.1 铁律）**：人物参考决定「是谁」，Rendering Contract 决定「怎么画」。person reference 绝不自动决定媒介；overall style 修改（如赛博朋克）绝不改写任何媒介层 renderingMode（Style != Rendering Mode）；动漫对应角色 identityRelation=same_as_primary（= 主体人物的动漫化版本）；只有用户显式统一媒介（applyUniformRenderingMode）才允许改写。混合媒介模板必须保持分层。详见 visual-workflow.md §8。
+19. **Region Editing Contract（V4.1 铁律）**：区域坐标一律归一化 0..1（禁止 CSS pixel 入状态）；mask 以文件路径引用（PNG 经 Rust 命令落盘），bitmap 绝不进 store；区域编辑器是全屏工作模式（禁止塞 Modal）；区域合同经项目语义通道写入（revision +1），展开区域卡 = 视图操作。详见 visual-workflow.md §9。
+20. **Prompt Optimizer 无合同裁决权（V4.1 铁律）**：HARD CONTRACT values are immutable——人物是否替换 / 服装来源 / 区域是否应用 / 媒介结构 / 用户显式维度是用户已确认事实，优化器只负责表达（`buildOptimizerHardContractLines` → 优化请求【硬性合同】块；系统提示词规则 0），禁止推翻 / 省略 / 软化 / 重新决定。Prompt Compiler（`mergeFinalGenerationPrompt`）把全部合同层确定性编译进最终 Prompt。详见 visual-workflow.md §10。
+21. **Task Failure UX（V4.1 铁律）**：Friendly error summary MUST be separated from technical diagnostics（友好摘要与技术诊断分层；raw error 只进「技术详情」折叠区且必须保留，绝不删除）；TaskQueue is operational status UI, History is full audit UI（任务队列只做状态 / 重试 / 时间，完整审计进历史记录详情，禁止第二套 Task Detail——深链 `openTaskDetailFromQueue`）；Terminal tasks MUST expose a terminal timestamp（终态任务必须显示真实结束时间，唯一入口 `resolveTaskFinishedAt`（completed_at），缺失显示「—」，禁止 Date.now() 伪值）；Native browser/system alerts MUST NOT be used for task retry feedback（重试反馈一律应用内 Toast）。主任务状态聚合唯一入口 `deriveTaskState(task)`（sub_tasks 事实派生六态，页面禁止自猜 task.status）；失败分类唯一入口 `classifyGenerationFailure`（canonical failure model：Rust 结构化 `error_detail` 优先、旧 string 回落解析；禁止各页面 substring 自分类）。详见 patterns.md §20 与 copy.md §13。
+
+22. **Generation Quote & Pricing Transparency（V4.2 铁律）**：All paid image generation entries MUST obtain a server quote and show the QuoteConfirmDialog before authorize（所有付费生成入口提交前必须取服务端报价并弹确认层：单张/预计/余额/剩余）；Client MUST NEVER compute 数量×单价 by itself（报价与按钮价格标注一律来自服务端）；用户生成前 MUST 知道预计点数、生成后 MUST 看到实际点数、失败释放 MUST 在点数流水中可见；采购成本/毛利率/Provider 内部定价 MUST NOT 出现在普通用户界面。详见 patterns.md §21-§24。
 
 ## 5. 版本与升级
 

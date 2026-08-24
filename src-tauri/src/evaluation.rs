@@ -425,6 +425,10 @@ pub async fn evaluate_image(
     app: AppHandle,
     request: EvaluateImageRequest,
 ) -> Result<EvaluateImageResult, String> {
+    println!(
+        "[AITransport] role=image_evaluation feature=image-evaluation model={}",
+        request.model
+    );
     if request.model.trim().is_empty() || request.base_url.trim().is_empty() || request.token.trim().is_empty() {
         return Ok(EvaluateImageResult {
             ok: false,

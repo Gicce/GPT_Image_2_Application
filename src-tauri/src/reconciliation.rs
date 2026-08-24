@@ -129,6 +129,7 @@ pub fn reset_failed_subtasks_for_retry(task: &mut Task, indexes: Option<&[usize]
         let st = &mut task.sub_tasks[i];
         st.status = "pending".to_string();
         st.error = None;
+        st.error_detail = None;
         st.retry_count += 1;
     }
     task.status = "pending".to_string();
@@ -215,6 +216,7 @@ mod tests {
             failed_count: 0,
             task_type: "generate".into(),
             source_images: Vec::new(),
+            mask_image: None,
             execution_mode: "single".into(),
             batch_strategy: String::new(),
             task_plan_summary: String::new(),
@@ -228,6 +230,7 @@ mod tests {
             source_request_id: String::new(),
             source_context: None,
             pose_batch: None,
+            provenance: None,
             sub_tasks: sub
                 .iter()
                 .enumerate()
@@ -239,6 +242,8 @@ mod tests {
                     label: None,
                     retry_count: 0,
                     attempt_errors: Vec::new(),
+                    error_detail: None,
+                    attempt_details: Vec::new(),
                 })
                 .collect(),
         }

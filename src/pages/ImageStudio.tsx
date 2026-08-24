@@ -683,6 +683,8 @@ export default function ImageStudio() {
   // V4.0.7：携带来源视觉理解任务 id 与已优化标记 —— 提交时冻结快照，绝不再执行一次 AI 优化。
   // V4.0.8：生成方式不再强制文生图 —— 有原图默认图生图，原图直接作为参考图（复用素材不重复导入）。
   const [visionCarryMeta, setVisionCarryMeta] = useState<VisionCarryDraft | null>(null);
+  // V4.1 Region V1：区域合成 mask（随视觉方案带入；提交时真实进入 create_task.mask_image）
+  const [carryMaskImagePath, setCarryMaskImagePath] = useState<string | null>(null);
   useEffect(() => {
     const carry = useDraftStore.getState().consumeVisionCarry();
     if (!carry?.prompt?.trim()) return;
@@ -698,7 +700,15 @@ export default function ImageStudio() {
     }
     if (patch.size) setSize(patch.size);
     if (patch.quality) setQuality(patch.quality);
-    if (carry.sourceVisionTaskId || carry.optimization) setVisionCarryMeta(carry);
+    setCarryMaskImagePath(patch.maskImagePath?.trim() || null);
+    if (carry.sourceVisionTaskId || carry.optimization || carry.provenance) {
+      // i2i 负面词取 patch 侧值（含「模板图原人物脸部身份」排斥追加项；随任务冻结可审计）
+      setVisionCarryMeta(
+        patch.generationType === 'i2i' && patch.i2iNegative !== carry.negativePrompt
+          ? { ...carry, negativePrompt: patch.i2iNegative }
+          : carry,
+      );
+    }
   }, []);
 
   useEffect(() => { void loadTasks(); }, [loadTasks]);
@@ -889,18 +899,23 @@ export default function ImageStudio() {
         output_dir: outputDir,
         task_type: isEdit ? 'edit' : 'generate',
         source_images: isEdit ? i2iSources.map(item => item.path) : [],
+        ...(isEdit && carryMaskImagePath ? { mask_image: carryMaskImagePath } : {}),
         execution_mode: 'single',
-        task_source: 'manual',
+        // 任务来源两维度并存：生成方式（图生图）是「怎么生成」，任务来源（视觉复刻 / 手动）
+        // 是「从哪个功能发起」——视觉复刻链路绝不 fallback 成「手动」
+        task_source: visionCarryMeta ? 'vision_recreation' : 'manual',
         ...(visionCarryMeta?.sourceVisionTaskId ? {
           source_task_id: visionCarryMeta.sourceVisionTaskId,
           source_task_kind: 'vision_understanding',
         } : {}),
         ...(visionCarryMeta?.taskPlanSummary ? { task_plan_summary: visionCarryMeta.taskPlanSummary } : {}),
+        ...(visionCarryMeta?.provenance ? { provenance: visionCarryMeta.provenance } : {}),
       });
       if (billingRequestId) registerTaskAuthorization(created.id, billingRequestId);
       toastSuccess(`已提交生成任务（${count} 张），可在任务队列查看进度`);
       // 保持原单张页面行为：提交成功后清空本次输入（视觉理解草稿一次性消费，同步清除）
       setVisionCarryMeta(null);
+      setCarryMaskImagePath(null);
       if (isEdit) {
         setI2iPrompt('');
         updateI2iSources([]);

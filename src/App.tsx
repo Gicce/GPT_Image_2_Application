@@ -4,6 +4,7 @@ import UpdateNotification from './components/UpdateNotification';
 import MarqueeNotice from './components/MarqueeNotice';
 import ImageViewer from './components/ImageViewer';
 import { ToastHost } from './components/Toast';
+import QuoteConfirmDialog from './components/QuoteConfirmDialog';
 import { useSettingsStore } from './store/useSettingsStore';
 import { useUpdateStore } from './store/useUpdateStore';
 import { useAuthStore } from './store/useAuthStore';
@@ -170,7 +171,9 @@ export default function App() {
     const handler = (event: Event) => {
       const detail = (event as CustomEvent).detail as { page: PageType; section?: string; focusTaskId?: string } | undefined;
       if (!detail?.page) return;
-      if (detail.focusTaskId) {
+      // focusTaskId 只在目标页是任务队列时写队列焦点键；
+      // History 深链（查看任务详情）由 taskNavigation.ts 写专用键，History 自己消费
+      if (detail.focusTaskId && detail.page === 'queue') {
         localStorage.setItem('cy_taskqueue_focus_id', detail.focusTaskId);
       }
       if (detail.page === 'settings' && detail.section) {
@@ -214,6 +217,7 @@ export default function App() {
         </Suspense>
       )}
       <ImageViewer />
+      <QuoteConfirmDialog />
       <ToastHost />
     </div>
   );

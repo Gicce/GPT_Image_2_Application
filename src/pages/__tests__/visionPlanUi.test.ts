@@ -42,16 +42,18 @@ describe('复刻方案主状态栏样式', () => {
 describe('统一「调整要求」输入框（替代替换人物 / 自由微调弹窗）', () => {
   const css = readFileSync(resolve(__dirname, '../VisionUnderstanding.css'), 'utf-8');
 
-  test('页面不再渲染「替换人物」「自由微调」按钮与弹窗', () => {
-    expect(pageSrc).not.toContain('替换人物');
+  test('页面不再渲染「替换人物」「自由微调」旧按钮与弹窗', () => {
+    // V4.0.9 起人物替换是结构化业务卡（PersonReplacementPanel），旧的独立按钮 / 弹窗入口绝不允许回归
+    expect(pageSrc).not.toContain('>替换人物<');
     expect(pageSrc).not.toContain('自由微调');
     expect(pageSrc).not.toContain('replaceOpen');
     expect(pageSrc).not.toContain('freeEditOpen');
   });
 
-  test('统一输入框结构存在（标题 + 说明 + textarea + 优化按钮）', () => {
+  test('统一输入框结构存在（标题 + 说明 + mention 输入 + 优化按钮）', () => {
     expect(pageSrc).toContain('ADJUST_INPUT');
-    expect(pageSrc).toContain('vision-adjust-textarea');
+    expect(pageSrc).toContain('IntentMentionInput');
+    expect(readFileSync(resolve(__dirname, '../../features/vision/IntentMentionInput.tsx'), 'utf8')).toContain('vision-adjust-textarea');
     expect(pageSrc).toContain('onFreeTextChange');
     expect(pageSrc).toContain('优化复刻 Prompt');
     expect(css).toContain('.vision-adjust-box');

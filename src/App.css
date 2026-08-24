@@ -473,3 +473,113 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--scrollbar-thumb-hover);
 }
+
+/* ─── QuoteConfirmDialog（生成前报价确认，全局唯一弹层） ─── */
+.quote-confirm-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  animation: fade-in 0.12s ease;
+}
+
+.quote-confirm-dialog {
+  width: min(400px, calc(100vw - 48px));
+  background: var(--bg-surface, #1e1e2e);
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));
+  border-radius: var(--radius-lg, 12px);
+  padding: 20px 22px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45);
+}
+
+.quote-confirm-dialog h3 {
+  margin: 0 0 14px;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary, #e5e7eb);
+}
+
+.quote-confirm-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.quote-confirm-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+  color: var(--text-secondary, #9ca3af);
+}
+
+.quote-confirm-row strong {
+  color: var(--text-primary, #e5e7eb);
+  font-family: var(--font-mono, monospace);
+  font-weight: 600;
+}
+
+.quote-confirm-row.emphasize strong {
+  color: var(--accent-primary, #6366f1);
+  font-size: 15px;
+}
+
+.quote-confirm-row.danger strong {
+  color: var(--danger, #ef4444);
+}
+
+.quote-confirm-row.muted span:last-child {
+  font-size: 12px;
+}
+
+.quote-confirm-warn {
+  font-size: 12px;
+  color: var(--danger, #ef4444);
+  background: rgba(239, 68, 68, 0.1);
+  border-radius: 6px;
+  padding: 6px 10px;
+}
+
+.quote-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.quote-confirm-cancel {
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.12));
+  background: transparent;
+  color: var(--text-secondary, #9ca3af);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.quote-confirm-cancel:hover {
+  color: var(--text-primary, #e5e7eb);
+}
+
+.quote-confirm-ok {
+  padding: 8px 18px;
+  border-radius: 8px;
+  border: none;
+  background: var(--accent-primary, #6366f1);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.quote-confirm-ok:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.quote-confirm-ok:not(:disabled):hover {
+  filter: brightness(1.1);
+}

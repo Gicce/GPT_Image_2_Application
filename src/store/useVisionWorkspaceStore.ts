@@ -22,6 +22,7 @@ import type { RecreationIterationRecord, VisionMode } from '../features/vision/s
 import {
   EMPTY_MODIFICATION_DRAFT,
   migrateModificationDraft,
+  normalizeModificationState,
   type ModificationDraft,
 } from '../features/vision/modificationIntent';
 
@@ -315,7 +316,9 @@ export const useVisionWorkspaceStore = create<VisionWorkspaceState>((set, get) =
   },
 
   setModificationDraft: (draft, opts) => {
-    setAndPersist({ modificationDraft: draft }, opts?.debounce === true)(set, get);
+    // 服装策略状态不变量的最终收口：任何写入路径（含页面直接展开 {...current}）
+    // 都不可能把「修改服装 + 原图服装」矛盾态留进 store / 持久化
+    setAndPersist({ modificationDraft: normalizeModificationState(draft) }, opts?.debounce === true)(set, get);
   },
 
   setRecreation: (next, opts) => {

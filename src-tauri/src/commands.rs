@@ -119,6 +119,13 @@ pub struct AgentRunPayload {
     pub token: String,
     #[serde(default)]
     pub model: String,
+    /// AI Model Role（V4.1 路由可见性）：前端每次 AI 调用显式携带，
+    /// 仅用于诊断日志（[AITransport] role=… feature=…），不参与任何路由判定。
+    #[serde(default)]
+    pub role: String,
+    /// 发起调用的功能标识（如 vision-recreation / image-studio-optimize）。
+    #[serde(default)]
+    pub feature: String,
     /// Provider 连接的使用方式（如 glm_official 的 api / coding_plan）。
     /// 仅用于诊断日志与错误归因 —— 实际请求地址始终使用 base_url（前端经
     /// resolveProviderBaseUrl 解析后传入），Rust 侧不猜测、不重写。
@@ -3148,7 +3155,9 @@ pub async fn run_agent_request(payload: AgentRunPayload) -> Result<AgentRunResul
     let prefer_responses = model_prefer_responses_transport(&payload.model);
 
     println!(
-        "[ChatTransport] mode={} model={} billing_mode={:?} prefer_responses={} resolved_order={:?}",
+        "[AITransport] role={} feature={} mode={} model={} billing_mode={:?} prefer_responses={} resolved_order={:?}",
+        if payload.role.is_empty() { "unspecified" } else { &payload.role },
+        if payload.feature.is_empty() { "-" } else { &payload.feature },
         payload.mode,
         payload.model,
         payload.billing_mode,
@@ -4730,6 +4739,7 @@ pub fn create_task(app: tauri::AppHandle, params: CreateTaskParams) -> Result<Ta
         failed_count: 0,
         task_type,
         source_images: params.source_images.clone(),
+        mask_image: params.mask_image.clone(),
         execution_mode,
         batch_strategy: params.batch_strategy.clone(),
         task_plan_summary: params.task_plan_summary.clone(),
@@ -4743,6 +4753,7 @@ pub fn create_task(app: tauri::AppHandle, params: CreateTaskParams) -> Result<Ta
         source_request_id: String::new(),
         source_context: None,
         pose_batch: None,
+        provenance: params.provenance.clone(),
         sub_tasks: (0..count)
             .map(|i| SubTask {
                 index: i,
@@ -4756,6 +4767,8 @@ pub fn create_task(app: tauri::AppHandle, params: CreateTaskParams) -> Result<Ta
                 },
                 retry_count: 0,
                 attempt_errors: Vec::new(),
+                error_detail: None,
+                attempt_details: Vec::new(),
             })
             .collect(),
     };
@@ -4925,6 +4938,7 @@ pub fn retry_task(app: tauri::AppHandle, task_id: String) -> Result<Task, String
             failed_count: 0,
             task_type,
             source_images: original.source_images.clone(),
+            mask_image: original.mask_image.clone(),
             execution_mode: original.execution_mode.clone(),
             batch_strategy: original.batch_strategy.clone(),
             task_plan_summary: original.task_plan_summary.clone(),
@@ -4938,6 +4952,7 @@ pub fn retry_task(app: tauri::AppHandle, task_id: String) -> Result<Task, String
             source_context: original.source_context.clone(),
             // 动作白膜批：整批重提克隆保留批元数据（来源继承；batchId 查找仍命中原任务）
             pose_batch: original.pose_batch.clone(),
+            provenance: original.provenance.clone(),
             stage_note: String::new(),
             sub_tasks: (0..original.count)
                 .map(|i| SubTask {
@@ -4948,6 +4963,8 @@ pub fn retry_task(app: tauri::AppHandle, task_id: String) -> Result<Task, String
                     label: original.batch_items.get(i).map(|item| item.label.clone()),
                     retry_count: 0,
                     attempt_errors: Vec::new(),
+                    error_detail: None,
+                    attempt_details: Vec::new(),
                 })
                 .collect(),
         };
@@ -8553,9 +8570,12 @@ mod tests {
                 label: Some("视觉分析".to_string()),
                 retry_count: 0,
                 attempt_errors: Vec::new(),
+                error_detail: None,
+                attempt_details: Vec::new(),
             }],
             task_type: "vision_understanding".to_string(),
             source_images: vec!["D:/ref.jpg".to_string()],
+            mask_image: None,
             execution_mode: "single".to_string(),
             batch_strategy: String::new(),
             task_plan_summary: String::new(),
@@ -8569,6 +8589,7 @@ mod tests {
             source_request_id: String::new(),
             source_context: None,
             pose_batch: None,
+            provenance: None,
         }
     }
 

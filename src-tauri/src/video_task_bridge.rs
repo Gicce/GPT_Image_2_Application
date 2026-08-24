@@ -300,10 +300,13 @@ fn handle_create(
                 label: None,
                 retry_count: 0,
                 attempt_errors: Vec::new(),
+                error_detail: None,
+                attempt_details: Vec::new(),
             })
             .collect(),
         task_type,
         source_images: req.source_images.clone(),
+        mask_image: None,
         execution_mode: "single".to_string(),
         batch_strategy: String::new(),
         task_plan_summary: source_ctx
@@ -321,6 +324,7 @@ fn handle_create(
         source_request_id: req.request_id.clone(),
         source_context: Some(source_ctx),
         pose_batch: None,
+        provenance: None,
     };
     let task_id = task.id.clone();
     storage::with_tasks(app, |tasks| {

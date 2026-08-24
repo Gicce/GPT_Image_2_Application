@@ -29,6 +29,25 @@
   video_studio_executable: string;
 }
 
+/**
+ * 子任务失败结构化快照（V4.1 canonical failure model；Rust task_failure.rs 写入）。
+ * 旧 tasks.json 无此字段 —— TS 侧 classifyGenerationFailure 回落解析 error 字符串。
+ */
+export interface SubTaskErrorDetail {
+  /** 失败发生时间（本地 rfc3339）。 */
+  timestamp: string;
+  /** 失败类别（与 FailureCategory 一致）。 */
+  category: string;
+  /** 该类失败是否建议重试。 */
+  retryable: boolean;
+  http_status?: number | null;
+  provider_code?: string | null;
+  request_id?: string | null;
+  endpoint?: string | null;
+  /** 上游 body 原始 primary 文案（rawMessage）。 */
+  message?: string | null;
+}
+
 export interface SubTask {
   index: number;
   status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
@@ -39,10 +58,131 @@ export interface SubTask {
   retry_count?: number;
   /** 历史 attempt 失败原因（最近在后，最多 5 条；成功后 error 清空但历史保留） */
   attempt_errors?: string[];
+  /** 最近一次失败的结构化快照（新数据；旧任务缺失 = 仅 string error） */
+  error_detail?: SubTaskErrorDetail | null;
+  /** 历史 attempt 的结构化快照（与 attempt_errors 尾部对齐；旧任务缺失） */
+  attempt_details?: SubTaskErrorDetail[];
 }
 
 export type TaskExecutionMode = 'single' | 'batch';
 export type TaskBatchStrategy = 'repeat_same' | 'variant_set' | 'multi_input';
+
+/**
+ * 生成参考图业务角色（V4.0.9.1 人物强替换）：单值事实源，
+ * 优化器 payload、生成 carry、溯源快照、History 展示共用。
+ */
+export type GenerationImageRole =
+  | 'template'
+  | 'person_reference'
+  | 'background_reference'
+  | 'style_reference'
+  | 'generic_reference';
+
+/** 一张带角色的生成参考图（顺序 = 最终提交 gpt-image-2 的图片顺序）。 */
+export interface GenerationImageReference {
+  assetId?: string;
+  path: string;
+  label: string;
+  role: GenerationImageRole;
+}
+
+/**
+ * 生成溯源快照（Generation Provenance Snapshot，V4.0.9）——
+ * 「确认生成图片」时冻结的真实执行上下文：用户原话、结构化修改方案、
+ * 参考图角色、服装策略、各环节模型。任务创建时随 Task 持久化（Rust 侧 JSON 透传），
+ * 历史详情只读这份快照；旧任务缺失时按「未保存」如实展示，禁止用 final_prompt /
+ * optimizedPrompt 伪造用户要求。schema 由前端 TS 单一维护（自包含、无反向依赖）。
+ */
+export interface GenerationProvenanceSnapshot {
+  schemaVersion: 1;
+  /** 发起功能（目前唯一来源：视觉理解复刻工作流）。 */
+  feature: 'vision_recreation';
+  /** 用户真实输入的自然语言要求（@token 已解析为 @label 的人类可读版）。 */
+  userInstruction?: string;
+  /** 底层原文（含 @token；与 mentionBindings 配合可回溯内部 id）。 */
+  userInstructionRaw?: string;
+  /** @图片引用绑定（token → 真实图片；追踪用，展示层用 label）。 */
+  mentionBindings?: Array<{ token: string; label: string; path: string; assetId?: string }>;
+  modificationIntent?: {
+    /** 用户显式启用的修改维度（subject / pose / scene / camera / style / clothing）。 */
+    activeDimensions: string[];
+    /** AI 优化判定实际修改的维度（最近一次成功优化落位；未优化时缺省）。 */
+    changedDimensions?: string[];
+    personReplacement?: {
+      enabled: boolean;
+      /** gallery | local | description */
+      source?: string;
+      label?: string;
+      hasReferenceImage: boolean;
+      /**
+       * 替换强度（V4.0.9.1）：strict_identity_replace = 携带参考图的强制身份替换
+       * （人物参考 = 主体身份唯一主来源，模板人物身份不保留）；
+       * description_replace = 文字描述人物（无参考图，按描述重建人物）。
+       */
+      replacementMode?: 'strict_identity_replace' | 'description_replace';
+      /** 人物参考图路径 / 素材 id（hasReferenceImage 时必有 path）。 */
+      personReferencePath?: string;
+      personReferenceAssetId?: string;
+    };
+    /** preserve_original | use_subject_reference | custom */
+    clothingPolicy?: string;
+    customClothing?: string;
+    replicationBoost?: boolean;
+  };
+  /** 参考图片与各自业务角色（顺序 = 生成时提交顺序）。 */
+  imageRoles?: Array<{
+    assetId?: string;
+    path: string;
+    label: string;
+    role: GenerationImageRole;
+  }>;
+  models?: {
+    visionAnalysis?: { modelId?: string; displayName?: string; providerName?: string };
+    promptOptimizer?: { modelId?: string; displayName?: string; providerName?: string; source?: string };
+    imageGeneration?: { modelId?: string; displayName?: string };
+    imageEvaluation?: { modelId?: string; displayName?: string; providerName?: string };
+  };
+  // ===== V4.1 Visual Project Workbench V2（可选；旧任务缺省 = 无项目，禁止伪造）=====
+  /** 来源视觉项目 id（项目化链路冻结；旧任务无此字段 = 非项目生成）。 */
+  projectId?: string;
+  projectName?: string;
+  /** 生成时刻的项目语义修订（§20：之后项目改版不影响本快照）。 */
+  projectRevision?: number;
+  /** 人物替换合同 V2（strength / replaceScope / applyIdentityTo；旧快照缺省）。 */
+  personContract?: {
+    strength: 'natural' | 'balanced' | 'strict';
+    replaceScope: 'whole_person' | 'face' | 'upper_body' | 'custom_region';
+    targetRegionId?: string;
+    applyIdentityTo: 'primary_subject_only' | 'all_corresponding_subjects';
+    preserveTemplateIdentity: false;
+  };
+  /** 区域替换合同快照（V1：用途 / 范围 / 约束 / 归一化几何 / mask 路径）。 */
+  regions?: Array<{
+    id: string;
+    name: string;
+    replaceType: 'person' | 'background' | 'object' | 'custom';
+    constraintStrength: 'natural' | 'balanced' | 'strict';
+    replaceScope?: 'face' | 'upper_body' | 'whole_person';
+    personReferenceLabel?: string;
+    prompt?: string;
+    rect?: { x: number; y: number; w: number; h: number };
+    brush?: { strokes: number; naturalWidth: number; naturalHeight: number };
+    maskPath?: string;
+  }>;
+  /** 媒介结构合同快照（混合媒介模板的层清单；单一媒介只存模式）。 */
+  renderingContract?: {
+    overallMode: 'single_media' | 'mixed_media';
+    singleMode?: string;
+    preserveTemplateMediaStructure: boolean;
+    regions?: Array<{
+      id: string;
+      label: string;
+      semanticRole: string;
+      renderingMode: string;
+      identityRelation: string;
+    }>;
+  };
+}
 
 /**
  * 提示词优化结构化快照 —— 任务创建时冻结，历史记录只读这里，
@@ -93,7 +233,7 @@ export interface Task {
   /** 结构化优化快照；旧任务可能缺失（由 UI 兼容映射）。 */
   prompt_optimization?: PromptOptimizationSnapshot | null;
   agent_intent?: string;
-  task_source?: 'manual' | 'agent' | 'cy-video-studio';
+  task_source?: 'manual' | 'agent' | 'cy-video-studio' | 'vision_recreation';
   size: string;
   quality: string;
   output_format: string;
@@ -110,6 +250,7 @@ export interface Task {
   sub_tasks: SubTask[];
   task_type: 'generate' | 'edit' | 'remove_background' | 'vision_understanding' | '';
   source_images: string[];
+  mask_image?: string;
   execution_mode?: TaskExecutionMode;
   batch_strategy?: TaskBatchStrategy;
   task_plan_summary?: string;
@@ -134,6 +275,8 @@ export interface Task {
   stage_note?: string;
   /** 动作白膜批元数据（cy-video-studio Pose Batch；普通任务 / 旧数据缺失）。 */
   pose_batch?: PoseBatchMeta;
+  /** 生成溯源快照（视觉复刻等链路创建时冻结；旧任务缺失）。 */
+  provenance?: GenerationProvenanceSnapshot | null;
 }
 
 /** 动作白膜批槽位语义（与 sub_tasks / batch_items 按 sub_index 对齐）。 */
@@ -225,7 +368,7 @@ export interface CreateTaskParams {
   prompt_optimized?: boolean;
   prompt_optimization?: PromptOptimizationSnapshot | null;
   agent_intent?: string;
-  task_source?: 'manual' | 'agent' | 'cy-video-studio';
+  task_source?: 'manual' | 'agent' | 'cy-video-studio' | 'vision_recreation';
   size: string;
   quality: string;
   output_format: string;
@@ -233,6 +376,7 @@ export interface CreateTaskParams {
   output_dir: string;
   task_type: 'generate' | 'edit' | 'remove_background' | 'vision_understanding' | '';
   source_images: string[];
+  mask_image?: string;
   execution_mode?: TaskExecutionMode;
   batch_strategy?: TaskBatchStrategy;
   task_plan_summary?: string;
@@ -245,6 +389,8 @@ export interface CreateTaskParams {
   source_task_id?: string;
   /** 来源任务类型快照（vision_understanding）。 */
   source_task_kind?: string;
+  /** 生成溯源快照（视觉复刻链路冻结；Rust 侧 JSON 透传）。 */
+  provenance?: GenerationProvenanceSnapshot | null;
 }
 
 /** 单张复合构图布局（一张图内部的分格结构）。 */
@@ -1169,6 +1315,18 @@ export interface VisionAnalysis {
   lighting: LightingAnalysis;
   colors: ColorAnalysis;
   style: StyleAnalysis;
+  /** V4.1 媒介结构（可选；旧模型 / 单一媒介缺省，前端按 style 兜底推断，绝不强行判混合）。 */
+  media_structure?: {
+    overall_mode?: string;
+    preserve_template_media_structure?: boolean;
+    regions?: Array<{
+      label?: string;
+      semantic_role?: string;
+      rendering_mode?: string;
+      identity_relation?: string;
+      description?: string;
+    }>;
+  };
   text_elements: TextElement[];
   fine_details: string[];
   generation_risks: string[];

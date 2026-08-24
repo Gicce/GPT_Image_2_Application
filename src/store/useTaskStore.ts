@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type { CreateBatchRedoRequest, CreateTaskParams, Task, TaskStage } from '../types';
 import { TERMINAL_TASK_STATUSES } from '../types';
 import { api } from '../services/api';
+import { deriveTaskState } from '../utils/taskState';
 import { useAuthStore } from './useAuthStore';
 import { isAuthError } from '../utils/errors';
 import {
@@ -104,9 +105,12 @@ export function mapTaskToStage(task: Task): TaskStage {
   if (task.status === 'cancelled') return 'cancelled';
   if (task.status === 'pending') return 'queued';
   if (task.status === 'running') {
-    const total = task.count || 1;
-    const done = task.success_count + task.failed_count;
-    if (done >= total && task.success_count === 0) return 'running';
+    // 后端 finalize 事件丢失 / 刷新失败时 parent 可能仍停在 running：
+    // 用 sub_tasks 事实派生终态，子任务全部终态绝不再显示「正在生成」
+    const derived = deriveTaskState(task);
+    if (derived === 'completed') return 'success';
+    if (derived === 'failed' || derived === 'partial') return 'failed';
+    if (derived === 'cancelled') return 'cancelled';
     return 'running';
   }
   return 'queued';

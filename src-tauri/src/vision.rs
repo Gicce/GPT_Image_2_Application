@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::task_runner::mime_for_path;
+use crate::vision_normalize::{self, VisionNormalReport};
 
 // ======================= 数据结构（与 TS 侧镜像，snake_case） =======================
 
@@ -167,10 +168,40 @@ pub struct TextElement {
     pub style: String,
 }
 
+/// 媒介结构（V4.1 混合媒介契约；旧模型缺失 = None，前端按 style 兜底推断）
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MediaStructureRegion {
+    #[serde(default)]
+    pub label: String,
+    #[serde(default)]
+    pub semantic_role: String,
+    #[serde(default)]
+    pub rendering_mode: String,
+    #[serde(default)]
+    pub identity_relation: String,
+    #[serde(default)]
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MediaStructure {
+    /// single_media | mixed_media
+    #[serde(default)]
+    pub overall_mode: String,
+    #[serde(default)]
+    pub preserve_template_media_structure: Option<bool>,
+    #[serde(default)]
+    pub regions: Vec<MediaStructureRegion>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct VisionAnalysis {
     #[serde(default)]
     pub summary: String,
+    /// V4.1 媒介结构（可选：仅当图片确实为混合媒介 / 模型能判定时返回；
+    /// 纯照片 / 纯动漫等单一媒介可不返回，由前端按 style 推断，绝不强行判混合）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_structure: Option<MediaStructure>,
     #[serde(default)]
     pub subjects: Vec<VisionSubject>,
     #[serde(default)]
@@ -356,36 +387,121 @@ fn extract_json_object_text(text: &str) -> Option<&str> {
     None
 }
 
-/// 分析 JSON 解析：优先顶层，其次常见包裹键（analysis / result）。
-fn parse_analysis_text(text: &str) -> Result<VisionAnalysis, String> {
-    let json_text = extract_json_object_text(text)
-        .ok_or_else(|| "视觉模型未返回 JSON 对象".to_string())?;
-    let value: serde_json::Value = serde_json::from_str(json_text)
-        .map_err(|e| format!("视觉分析 JSON 解析失败：{}", e))?;
-    let target = if value.get("analysis").is_some() {
-        value.get("analysis").cloned().unwrap_or(value)
-    } else if value.get("result").is_some() && value.get("summary").is_none() {
-        value.get("result").cloned().unwrap_or(value)
-    } else {
-        value
-    };
-    serde_json::from_value::<VisionAnalysis>(target)
-        .map_err(|e| format!("视觉分析结构不符合约定：{}", e))
+// ======================= 容错解析管线（extract → normalize → validate） =======================
+
+/// 结构化解析失败（开发诊断专用；detail 绝不进入用户 UI）。
+#[derive(Debug)]
+pub(crate) struct SchemaParseFailure {
+    /// 失败阶段：json_extract（无 JSON / 语法错误）/ validate（规范化后仍不合法）/ empty（内容为空）
+    pub stage: &'static str,
+    /// 技术细节（serde 错误等）——只写开发日志
+    pub detail: String,
+    /// 模型修复输入：原始 JSON 文本
+    pub repair_input: String,
+    /// 是否值得发起一次模型修复（完全没有内容时不再浪费第二次请求）
+    pub repairable: bool,
 }
 
-fn parse_comparison_text(text: &str) -> Result<VisionComparison, String> {
-    let json_text = extract_json_object_text(text)
-        .ok_or_else(|| "视觉模型未返回 JSON 对象".to_string())?;
-    let value: serde_json::Value = serde_json::from_str(json_text)
-        .map_err(|e| format!("双图比较 JSON 解析失败：{}", e))?;
-    let target = if value.get("comparison").is_some() {
-        value.get("comparison").cloned().unwrap_or(value)
-    } else {
-        value
+fn schema_failure(stage: &'static str, detail: String, repair_input: &str, repairable: bool) -> SchemaParseFailure {
+    SchemaParseFailure {
+        stage,
+        detail,
+        repair_input: repair_input.trim().to_string(),
+        repairable,
+    }
+}
+
+fn log_normal_report(role: &str, report: &VisionNormalReport) {
+    for entry in report.repaired.iter() {
+        println!("[VisionSchema] role={} stage=normalize {}", role, entry);
+    }
+    for entry in report.dropped.iter() {
+        println!("[VisionSchema] role={} stage=normalize {}", role, entry);
+    }
+}
+
+/// 常见包裹键解包：analysis / result（顶层已有 summary 时视为本体，不进 result）。
+fn unwrap_analysis_target_mut<'a>(value: &'a mut serde_json::Value) -> &'a mut serde_json::Value {
+    let use_analysis = value.get("analysis").map_or(false, |v| v.is_object());
+    if use_analysis {
+        return value.get_mut("analysis").expect("checked above");
+    }
+    let use_result = value.get("summary").is_none()
+        && value.get("result").map_or(false, |v| v.is_object());
+    if use_result {
+        return value.get_mut("result").expect("checked above");
+    }
+    value
+}
+
+fn unwrap_comparison_target_mut<'a>(value: &'a mut serde_json::Value) -> &'a mut serde_json::Value {
+    let use_comparison = value.get("comparison").map_or(false, |v| v.is_object());
+    if use_comparison {
+        return value.get_mut("comparison").expect("checked above");
+    }
+    value
+}
+
+fn analysis_is_meaningful(analysis: &VisionAnalysis) -> bool {
+    !analysis.summary.trim().is_empty()
+        || !analysis.subjects.is_empty()
+        || !analysis.scene.environment.trim().is_empty()
+}
+
+/// 分析解析管线：剥围栏 → 解包 → 规范化 → 严格反序列化 → 内容校验。
+/// 合理的类型漂移（array/object/null 替代 string 等）在规范化层自动恢复；
+/// 只有规范化后仍不合法 / 内容为空才返回失败（由命令层决定是否修复一次）。
+fn try_parse_analysis(text: &str) -> Result<VisionAnalysis, SchemaParseFailure> {
+    let Some(json_text) = extract_json_object_text(text) else {
+        return Err(schema_failure(
+            "json_extract",
+            "未找到 JSON 对象".to_string(),
+            text,
+            !text.trim().is_empty(),
+        ));
     };
-    let raw: VisionComparison = serde_json::from_value(target)
-        .map_err(|e| format!("双图比较结构不符合约定：{}", e))?;
-    Ok(normalize_comparison(raw))
+    let mut value: serde_json::Value = serde_json::from_str(json_text).map_err(|e| {
+        schema_failure("json_extract", format!("JSON 语法错误：{}", e), json_text, true)
+    })?;
+    let target = unwrap_analysis_target_mut(&mut value);
+    let report = vision_normalize::normalize_vision_analysis(target);
+    log_normal_report("vision_analysis", &report);
+    serde_json::from_value::<VisionAnalysis>(target.clone())
+        .map_err(|e| schema_failure("validate", e.to_string(), json_text, true))
+        .and_then(|analysis| {
+            if analysis_is_meaningful(&analysis) {
+                Ok(analysis)
+            } else {
+                let repairable = vision_normalize::value_has_text_content(target);
+                Err(schema_failure(
+                    "empty",
+                    "规范化后无有效内容".to_string(),
+                    json_text,
+                    repairable,
+                ))
+            }
+        })
+}
+
+/// 双图比较解析管线：规范化（分数字符串→数字、字符串→字符串数组）+ clamp。
+fn try_parse_comparison(text: &str) -> Result<VisionComparison, SchemaParseFailure> {
+    let Some(json_text) = extract_json_object_text(text) else {
+        return Err(schema_failure(
+            "json_extract",
+            "未找到 JSON 对象".to_string(),
+            text,
+            !text.trim().is_empty(),
+        ));
+    };
+    let mut value: serde_json::Value = serde_json::from_str(json_text).map_err(|e| {
+        schema_failure("json_extract", format!("JSON 语法错误：{}", e), json_text, true)
+    })?;
+    let target = unwrap_comparison_target_mut(&mut value);
+    let report = vision_normalize::normalize_vision_comparison(target);
+    log_normal_report("vision_comparison", &report);
+    serde_json::from_value::<VisionComparison>(target.clone())
+        .map_err(|e| schema_failure("validate", e.to_string(), json_text, true))
+        .map(normalize_comparison)
 }
 
 // ======================= 图片编码（本地，含降采样） =======================
@@ -555,16 +671,16 @@ pub(crate) async fn call_vision_model(
             .json(&body)
     })
     .await
-    .map_err(|err_message| VisionCallError {
-        // send_with_transient_retry 返回中文分类文案；kind 从文案关键词还原
-        kind: if err_message.contains("timeout") {
+    .map_err(|failure| VisionCallError {
+        // 结构化 detail.category 是权威分类；connect/其它网络异常细分从文案还原
+        kind: if failure.detail.category == "timeout" {
             "timeout".to_string()
-        } else if err_message.contains("connect") {
+        } else if failure.message.contains("connect") {
             "connect".to_string()
         } else {
             "network".to_string()
         },
-        message: err_message,
+        message: failure.message,
         status: None,
     })?;
 
@@ -589,7 +705,9 @@ const ANALYSIS_SYSTEM_PROMPT: &str = r##"你是一名「生成式图像复现工
 1. 只描述画面内可观察的事实；不确定的信息标注 (estimated)，绝不编造画面外内容。
 2. 位置一律用归一化坐标语言（x/y/width/height 均为 0~1 的小数，相对整幅画面，x 向右、y 向下）。
 3. 使用可生成的视觉语言（主体、数量、姿势、构图、景别、镜头、光源、色温、材质、风格），不堆砌 "4K / masterpiece / 高清" 之类的空洞关键词。
-4. 严格只输出一个 JSON 对象，不要输出任何解释、Markdown 围栏或多余文本。
+4. 字段类型必须严格遵守：除 appearance / clothing / relations / attributes / dominant_palette / fine_details / generation_risks 是字符串数组、count 是整数、rule_of_thirds 是布尔值外，其余字段一律输出单个 JSON 字符串（多个特征合并成一句描述，禁止返回数组，禁止返回对象）。
+5. media_structure 只在能判定时返回：画面确实由多种媒介构成（如真人摄影主体 + 动漫角色 + 涂鸦版式拼贴）才输出 overall_mode="mixed_media" 并给出每层 regions 清单（identity_relation 用于动漫对应角色时用 same_as_primary）；纯照片 / 纯动漫 / 纯 3D 等单一媒介输出 overall_mode="single_media"（regions 可省）或省略整个字段——绝不强行把单一媒介判成混合媒介。
+6. 严格只输出一个 JSON 对象，不要输出任何解释、Markdown 围栏或多余文本。
 
 JSON 结构（字段可省略但不能改名；数组元素用中文短语）：
 {
@@ -602,6 +720,7 @@ JSON 结构（字段可省略但不能改名；数组元素用中文短语）：
   "lighting": { "source": "光源", "direction": "方向", "softness": "软硬", "key_fill_rim": "主/辅/轮廓光", "contrast": "光比", "time_of_day": "时段", "exposure": "曝光" },
   "colors": { "dominant_palette": ["#RRGGBB"], "temperature": "色温倾向", "saturation": "饱和度倾向", "contrast": "色彩对比" },
   "style": { "category": "realistic / illustration / cinematic / 3d / flat 等其一", "medium": "媒介", "texture": "纹理质感", "rendering": "渲染特征", "photographic_characteristics": "摄影特征（非照片则描述对应媒介特征）" },
+  "media_structure": { "overall_mode": "single_media 或 mixed_media", "regions": [{ "label": "层名（如 真人主体 / 动漫角色 / 涂鸦版式）", "semantic_role": "primary_subject / secondary_subject / anime_counterpart / detail_insert / background / graphic_decoration", "rendering_mode": "photorealistic / anime_illustration / illustration / 3d_render / graphic_design", "identity_relation": "template_identity / person_reference / same_as_primary / none", "description": "该层内容" }] },
   "text_elements": [{ "content": "画面文字原文", "position": { "x": 0.5, "y": 0.1, "width": 0.4, "height": 0.05 }, "style": "字体样式" }],
   "fine_details": ["对复刻重要的细节"],
   "generation_risks": ["反向生成难以还原的点（如小字、Logo、人脸身份等）"]
@@ -615,7 +734,8 @@ const COMPARE_SYSTEM_PROMPT: &str = r#"你是「图像复刻相似度评审器�
 2. 第 1 张图中不存在明显文字时，"text" 返回 null；没有可比较对象时 "objects" 返回 null。绝不为不存在的维度硬造 0 分。
 3. differences 数组用具体、可执行的中文描述（位置 / 大小 / 数量 / 朝向 / 色偏等），不要写"不太像"这种模糊结论。
 4. prompt_corrections 给出可以直接补进生成提示词的修正指令（中文短语数组），只针对真实差异，不要推翻原有描述。
-5. 严格只输出一个 JSON 对象，不要任何解释或 Markdown。
+5. 分数必须是 0.0~1.0 的 JSON 小数（禁止百分数、禁止字符串）；所有 differences 与 prompt_corrections 必须是字符串数组。
+6. 严格只输出一个 JSON 对象，不要任何解释或 Markdown。
 
 JSON 结构：
 {
@@ -631,12 +751,72 @@ JSON 结构：
 }
 "#;
 
+// ======================= 结构修复（最多一次；同一模型，不切换路由） =======================
+
+const REPAIR_SYSTEM_PROMPT: &str = r#"你是 JSON 结构修复器。用户会给你一段本应服从固定 Schema 的模型原始输出与校验错误。你的唯一任务：修正 JSON 结构、字段名和字段类型，使其严格符合给定 Schema。
+
+硬性规则：
+1. 禁止修改、扩写、删减或重新解释任何视觉内容——只做结构 / 字段名 / 字段类型修正，原文语义一字不改。
+2. 字符串字段（string）输出单个 JSON 字符串：数组按原顺序用「；」连接成一句；对象只取 description / text / value / name / summary / content / label 之一的值。
+3. 字符串数组字段（string[]）输出字符串数组：单个字符串包成一元素数组，对象取其全部字符串值。
+4. 严格只输出修复后的一个 JSON 对象，不要任何解释或 Markdown。"#;
+
+const ANALYSIS_SCHEMA_SUMMARY: &str = r#"{
+  "summary": string,
+  "subjects": [{ "label": string, "count": int, "appearance": string[], "pose": string, "action": string, "position": { "x": number, "y": number, "width": number, "height": number }, "orientation": string, "clothing": string[], "relations": string[] }],
+  "objects": [{ "label": string, "count": int, "position": { "x": number, "y": number, "width": number, "height": number }, "attributes": string[] }],
+  "scene": { "environment": string, "location": string, "time_of_day": string, "weather": string, "background": string, "foreground": string },
+  "composition": { "subject_placement": string, "symmetry": string, "rule_of_thirds": bool, "horizon": string, "negative_space": string, "crop": string, "depth_layers": string },
+  "camera": { "shot_type": string, "focal_length_estimate": string, "perspective": string, "angle": string, "depth_of_field": string, "lens_characteristics": string },
+  "lighting": { "source": string, "direction": string, "softness": string, "key_fill_rim": string, "contrast": string, "time_of_day": string, "exposure": string },
+  "colors": { "dominant_palette": string[], "temperature": string, "saturation": string, "contrast": string },
+  "style": { "category": string, "medium": string, "texture": string, "rendering": string, "photographic_characteristics": string },
+  "media_structure"?: { "overall_mode": "single_media 或 mixed_media", "preserve_template_media_structure"?: bool, "regions": [{ "label": string, "semantic_role": string, "rendering_mode": string, "identity_relation": string, "description": string }] },
+  "text_elements": [{ "content": string, "position": { "x": number, "y": number, "width": number, "height": number }, "style": string }],
+  "fine_details": string[],
+  "generation_risks": string[]
+}"#;
+
+const COMPARISON_SCHEMA_SUMMARY: &str = r#"{
+  "subject": number, "composition": number, "style": number, "lighting": number, "color": number,
+  "objects": number, "text": null,
+  "missing_elements": string[], "extra_elements": string[], "layout_differences": string[],
+  "style_differences": string[], "lighting_differences": string[], "color_differences": string[],
+  "prompt_corrections": string[]
+}"#;
+
+/// 修复输入只带必要内容：目标 Schema + 原始输出 + 校验错误（不重发图片与大量上下文）。
+fn build_repair_user_text(schema_summary: &str, failure: &SchemaParseFailure) -> String {
+    let clipped: String = failure.repair_input.chars().take(8000).collect();
+    format!(
+        "请把下面的模型原始输出修复为严格符合 Schema 的单个 JSON 对象。\n\n目标 Schema（字段可省略，类型必须正确）：\n{schema_summary}\n\n模型原始输出：\n{clipped}\n\n校验错误：{detail}\n\n只输出修复后的 JSON 对象。",
+        schema_summary = schema_summary,
+        clipped = clipped,
+        detail = failure.detail
+    )
+}
+
+/// 规范化 + 校验失败后的最终用户文案（产品级；技术细节只进开发日志）。
+fn schema_error_result(message: &str) -> VisionAnalyzeResult {
+    VisionAnalyzeResult {
+        ok: false,
+        analysis: None,
+        error_kind: Some("schema_error".into()),
+        error_message: Some(message.to_string()),
+        status: None,
+    }
+}
+
 // ======================= Tauri 命令 =======================
 
 #[tauri::command]
 pub async fn vision_analyze_image(
     request: VisionAnalyzeRequest,
 ) -> Result<VisionAnalyzeResult, String> {
+    println!(
+        "[AITransport] role=vision_analysis feature=vision-analyze mode={} model={}",
+        request.mode, request.model
+    );
     if request.model.trim().is_empty() {
         return Ok(VisionAnalyzeResult {
             ok: false, analysis: None,
@@ -669,11 +849,12 @@ pub async fn vision_analyze_image(
         format!("{}\n附加要求：{}", user_text, request.extra_instructions.trim())
     };
     let max_tokens: u32 = if quick_mode { 1500 } else { 4000 };
+    let model = request.model.trim().to_string();
 
-    match call_vision_model(
+    let text = match call_vision_model(
         &request.base_url,
         &request.token,
-        request.model.trim(),
+        &model,
         ANALYSIS_SYSTEM_PROMPT,
         &user_text,
         &[data_url],
@@ -681,37 +862,83 @@ pub async fn vision_analyze_image(
     )
     .await
     {
-        Ok(text) => match parse_analysis_text(&text) {
-            Ok(analysis) => {
-                if analysis.summary.trim().is_empty()
-                    && analysis.subjects.is_empty()
-                    && analysis.scene.environment.trim().is_empty()
-                {
-                    return Ok(VisionAnalyzeResult {
-                        ok: false, analysis: None,
-                        error_kind: Some("invalid_response".into()),
-                        error_message: Some("结构化分析返回内容为空".into()),
-                        status: None,
-                    });
-                }
-                Ok(VisionAnalyzeResult {
-                    ok: true, analysis: Some(analysis),
-                    error_kind: None, error_message: None, status: None,
-                })
-            }
-            Err(message) => Ok(VisionAnalyzeResult {
-                ok: false, analysis: None,
-                error_kind: Some("invalid_response".into()),
-                error_message: Some(format!("结构化分析返回格式无效：{}", message)),
-                status: None,
-            }),
-        },
-        Err(error) => Ok(VisionAnalyzeResult {
-            ok: false, analysis: None,
-            error_kind: Some(error.kind),
-            error_message: Some(error.message),
-            status: error.status,
+        Ok(text) => text,
+        Err(error) => {
+            return Ok(VisionAnalyzeResult {
+                ok: false,
+                analysis: None,
+                error_kind: Some(error.kind),
+                error_message: Some(error.message),
+                status: error.status,
+            });
+        }
+    };
+
+    match try_parse_analysis(&text) {
+        Ok(analysis) => Ok(VisionAnalyzeResult {
+            ok: true,
+            analysis: Some(analysis),
+            error_kind: None,
+            error_message: None,
+            status: None,
         }),
+        Err(failure) => {
+            println!(
+                "[VisionSchema] role=vision_analysis model={} stage={} outcome=parse_failed detail={}",
+                model, failure.stage, failure.detail
+            );
+            if !failure.repairable {
+                return Ok(schema_error_result(
+                    "图片理解没有完成，AI 返回的分析结果为空，图片与当前工作区内容已保留，可以重新尝试理解。",
+                ));
+            }
+            // 最多一次模型修复：同一 Provider / 同一模型（schema 漂移不是模型不可用，绝不触发模型 fallback）
+            println!("[VisionSchema] role=vision_analysis model={} repair_attempt=1", model);
+            match call_vision_model(
+                &request.base_url,
+                &request.token,
+                &model,
+                REPAIR_SYSTEM_PROMPT,
+                &build_repair_user_text(ANALYSIS_SCHEMA_SUMMARY, &failure),
+                &[],
+                4000,
+            )
+            .await
+            {
+                Ok(repair_text) => match try_parse_analysis(&repair_text) {
+                    Ok(analysis) => {
+                        println!(
+                            "[VisionSchema] role=vision_analysis repair_attempt=1 validation=success"
+                        );
+                        Ok(VisionAnalyzeResult {
+                            ok: true,
+                            analysis: Some(analysis),
+                            error_kind: None,
+                            error_message: None,
+                            status: None,
+                        })
+                    }
+                    Err(second) => {
+                        println!(
+                            "[VisionSchema] role=vision_analysis repair_attempt=1 validation=failed stage={} detail={}",
+                            second.stage, second.detail
+                        );
+                        Ok(schema_error_result(
+                            "图片理解没有完成，AI 返回的分析结果不完整，图片与当前工作区内容已保留，可以重新尝试理解。",
+                        ))
+                    }
+                },
+                Err(transport) => {
+                    println!(
+                        "[VisionSchema] role=vision_analysis repair_attempt=1 transport_failed kind={}",
+                        transport.kind
+                    );
+                    Ok(schema_error_result(
+                        "图片理解没有完成，AI 返回的分析结果不完整，图片与当前工作区内容已保留，可以重新尝试理解。",
+                    ))
+                }
+            }
+        }
     }
 }
 
@@ -719,6 +946,10 @@ pub async fn vision_analyze_image(
 pub async fn vision_compare_images(
     request: VisionCompareRequest,
 ) -> Result<VisionCompareResult, String> {
+    println!(
+        "[AITransport] role=vision_analysis feature=vision-compare model={}",
+        request.model
+    );
     if request.model.trim().is_empty() {
         return Ok(VisionCompareResult {
             ok: false, comparison: None,
@@ -751,10 +982,11 @@ pub async fn vision_compare_images(
     };
 
     let user_text = "第 1 张是参考原图（source），第 2 张是生成候选图（candidate）。请按维度评审相似度。";
-    match call_vision_model(
+    let model = request.model.trim().to_string();
+    let text = match call_vision_model(
         &request.base_url,
         &request.token,
-        request.model.trim(),
+        &model,
         COMPARE_SYSTEM_PROMPT,
         user_text,
         &[source_url, candidate_url],
@@ -762,24 +994,84 @@ pub async fn vision_compare_images(
     )
     .await
     {
-        Ok(text) => match parse_comparison_text(&text) {
-            Ok(comparison) => Ok(VisionCompareResult {
-                ok: true, comparison: Some(comparison),
-                error_kind: None, error_message: None, status: None,
-            }),
-            Err(message) => Ok(VisionCompareResult {
-                ok: false, comparison: None,
-                error_kind: Some("invalid_response".into()),
-                error_message: Some(format!("双图比较返回格式无效：{}", message)),
-                status: None,
-            }),
-        },
-        Err(error) => Ok(VisionCompareResult {
-            ok: false, comparison: None,
-            error_kind: Some(error.kind),
-            error_message: Some(error.message),
-            status: error.status,
+        Ok(text) => text,
+        Err(error) => {
+            return Ok(VisionCompareResult {
+                ok: false,
+                comparison: None,
+                error_kind: Some(error.kind),
+                error_message: Some(error.message),
+                status: error.status,
+            });
+        }
+    };
+
+    let comparison_schema_error = || VisionCompareResult {
+        ok: false,
+        comparison: None,
+        error_kind: Some("schema_error".into()),
+        error_message: Some("双图比较没有完成，AI 返回的评审结果不完整，请重新尝试。".into()),
+        status: None,
+    };
+
+    match try_parse_comparison(&text) {
+        Ok(comparison) => Ok(VisionCompareResult {
+            ok: true,
+            comparison: Some(comparison),
+            error_kind: None,
+            error_message: None,
+            status: None,
         }),
+        Err(failure) => {
+            println!(
+                "[VisionSchema] role=vision_comparison model={} stage={} outcome=parse_failed detail={}",
+                model, failure.stage, failure.detail
+            );
+            if !failure.repairable {
+                return Ok(comparison_schema_error());
+            }
+            println!("[VisionSchema] role=vision_comparison model={} repair_attempt=1", model);
+            match call_vision_model(
+                &request.base_url,
+                &request.token,
+                &model,
+                REPAIR_SYSTEM_PROMPT,
+                &build_repair_user_text(COMPARISON_SCHEMA_SUMMARY, &failure),
+                &[],
+                2500,
+            )
+            .await
+            {
+                Ok(repair_text) => match try_parse_comparison(&repair_text) {
+                    Ok(comparison) => {
+                        println!(
+                            "[VisionSchema] role=vision_comparison repair_attempt=1 validation=success"
+                        );
+                        Ok(VisionCompareResult {
+                            ok: true,
+                            comparison: Some(comparison),
+                            error_kind: None,
+                            error_message: None,
+                            status: None,
+                        })
+                    }
+                    Err(second) => {
+                        println!(
+                            "[VisionSchema] role=vision_comparison repair_attempt=1 validation=failed stage={} detail={}",
+                            second.stage, second.detail
+                        );
+                        Ok(comparison_schema_error())
+                    }
+                },
+                Err(transport) => {
+                    println!(
+                        "[VisionSchema] role=vision_comparison repair_attempt=1 transport_failed kind={}",
+                        transport.kind
+                    );
+                    Ok(comparison_schema_error())
+                }
+            }
+        }
     }
 }
 
@@ -944,7 +1236,7 @@ mod tests {
     #[test]
     fn parse_analysis_valid_json() {
         let text = r##"{"summary":"红底产品图","subjects":[{"label":"保温杯","count":1,"appearance":["金属拉丝"],"position":{"x":0.5,"y":0.5,"width":0.3,"height":0.5}}],"colors":{"dominant_palette":["#AA2222"],"temperature":"暖色"},"text_elements":[{"content":"SALE","position":{"x":0.5,"y":0.08,"width":0.3,"height":0.05}}]}"##;
-        let analysis = parse_analysis_text(text).unwrap();
+        let analysis = try_parse_analysis(text).unwrap();
         assert_eq!(analysis.summary, "红底产品图");
         assert_eq!(analysis.subjects.len(), 1);
         assert_eq!(analysis.subjects[0].label, "保温杯");
@@ -958,31 +1250,176 @@ mod tests {
     #[test]
     fn parse_analysis_with_markdown_fence() {
         let text = "好的，以下是分析：\n```json\n{\"summary\":\"风景照\",\"subjects\":[]}\n```\n";
-        let analysis = parse_analysis_text(text).unwrap();
+        let analysis = try_parse_analysis(text).unwrap();
         assert_eq!(analysis.summary, "风景照");
     }
 
     #[test]
     fn parse_analysis_wrapped_key() {
         let text = r#"{"analysis":{"summary":"插画","style":{"category":"illustration"}}}"#;
-        let analysis = parse_analysis_text(text).unwrap();
+        let analysis = try_parse_analysis(text).unwrap();
         assert_eq!(analysis.summary, "插画");
         assert_eq!(analysis.style.category, "illustration");
     }
 
     #[test]
     fn parse_analysis_invalid_json_rejected() {
-        assert!(parse_analysis_text("这不是 JSON").is_err());
-        assert!(parse_analysis_text("{\"summary\": \"未闭合").is_err());
-        // 空对象（summary 为空且无主体）允许解析（serde default），由命令层空校验兜底
-        let empty = parse_analysis_text("{}").unwrap();
-        assert_eq!(empty.summary, "");
+        let prose = try_parse_analysis("这不是 JSON").unwrap_err();
+        assert_eq!(prose.stage, "json_extract");
+        assert!(prose.repairable, "非空散文输出值得一次模型修复");
+        let unclosed = try_parse_analysis("{\"summary\": \"未闭合").unwrap_err();
+        assert_eq!(unclosed.stage, "json_extract");
+        // 完全空对象：无任何可恢复内容 → 直接失败，不发起修复
+        let empty = try_parse_analysis("{}").unwrap_err();
+        assert_eq!(empty.stage, "empty");
+        assert!(!empty.repairable);
+        // 部分字段缺失但有意义 → 成功（serde default 兜缺失）
+        let partial = try_parse_analysis("{\"summary\":\"风景\"}").unwrap();
+        assert_eq!(partial.summary, "风景");
+        assert!(partial.subjects.is_empty());
+    }
+
+    /// Fixture A：完全规范的完整响应 → 直接成功。
+    #[test]
+    fn fixture_a_canonical_full_response() {
+        let text = r##"{
+            "summary": "一名银发少女站在城市夜景街头，回头看向镜头",
+            "subjects": [{
+                "label": "少女", "count": 1,
+                "appearance": ["银白色短发", "红色眼睛"],
+                "pose": "站立，身体微微前倾",
+                "action": "回头看镜头",
+                "position": {"x": 0.5, "y": 0.4, "width": 0.3, "height": 0.6},
+                "orientation": "面向镜头",
+                "clothing": ["黑色连帽外套", "深色百褶裙"],
+                "relations": []
+            }],
+            "objects": [{"label": "霓虹招牌", "count": 3, "attributes": ["发光", "英文"]}],
+            "scene": {"environment": "城市街道", "location": "十字路口", "time_of_day": "夜晚", "weather": "晴", "background": "霓虹灯林立", "foreground": "路面积水"},
+            "composition": {"subject_placement": "居中偏左", "symmetry": "近似对称", "rule_of_thirds": true, "horizon": null, "negative_space": "上部留白", "crop": "无裁切", "depth_layers": "三层"},
+            "camera": {"shot_type": "中景", "focal_length_estimate": "50mm (estimated)", "perspective": "平视", "angle": "微仰", "depth_of_field": "浅", "lens_characteristics": "标准镜头"},
+            "lighting": {"source": "霓虹灯", "direction": "逆光", "softness": "柔光", "key_fill_rim": "轮廓光", "contrast": "中高", "time_of_day": "夜晚", "exposure": "略欠曝"},
+            "colors": {"dominant_palette": ["#221133", "#33FFCC"], "temperature": "冷色", "saturation": "高", "contrast": "强"},
+            "style": {"category": "illustration", "medium": "数字插画", "texture": "厚涂", "rendering": "高完成度", "photographic_characteristics": "无"},
+            "text_elements": [{"content": "NEON", "position": {"x": 0.5, "y": 0.1, "width": 0.3, "height": 0.06}, "style": "发光无衬线"}],
+            "fine_details": ["发梢泛蓝光"],
+            "generation_risks": ["招牌小字"]
+        }"##;
+        let analysis = try_parse_analysis(text).expect("canonical response must parse");
+        assert_eq!(analysis.subjects[0].clothing.len(), 2);
+        assert_eq!(analysis.composition.rule_of_thirds, Some(true));
+        assert_eq!(analysis.composition.horizon, None);
+    }
+
+    /// Fixture B：GLM 常见漂移（多个 string 字段返回 array、Optional=null、object 带
+    /// description、clothing 对象、布尔字符串、数字字符串）→ 全部自动恢复，理解完整成功。
+    #[test]
+    fn fixture_b_glm_common_drift_recovers() {
+        let text = r##"{
+            "summary": "一名银发少女站在城市夜景街头",
+            "subjects": [{
+                "label": "少女",
+                "count": "1",
+                "appearance": ["银白色短发", "侧马尾"],
+                "pose": ["站立", "身体微微前倾"],
+                "action": "回头看镜头",
+                "position": {"x": "0.5", "y": 0.4, "width": 0.3, "height": 0.6},
+                "clothing": {"description": "黑色连帽外套", "details": ["深色百褶裙"]},
+                "relations": null
+            }],
+            "scene": {"environment": ["城市街道", "夜晚"], "time_of_day": null},
+            "composition": {"rule_of_thirds": "true", "horizon": null},
+            "camera": {"shot_type": ["中景"]},
+            "lighting": {"source": ["霓虹灯", "路灯"]},
+            "colors": {"dominant_palette": "#221133", "temperature": ["冷色"]},
+            "style": {"category": "illustration"},
+            "fine_details": "发梢泛蓝光"
+        }"##;
+        let analysis = try_parse_analysis(text).expect("drifted response must auto-recover");
+        assert_eq!(analysis.subjects[0].count, Some(1));
+        assert_eq!(analysis.subjects[0].pose.as_deref(), Some("站立；身体微微前倾"));
+        assert_eq!(analysis.subjects[0].clothing, vec!["黑色连帽外套", "深色百褶裙"]);
+        assert_eq!(analysis.subjects[0].relations, Vec::<String>::new());
+        assert_eq!(analysis.subjects[0].position.as_ref().unwrap().x, 0.5);
+        assert_eq!(analysis.scene.environment, "城市街道；夜晚");
+        assert_eq!(analysis.scene.time_of_day, "");
+        assert_eq!(analysis.composition.rule_of_thirds, Some(true));
+        assert_eq!(analysis.composition.horizon, None);
+        assert_eq!(analysis.camera.shot_type, "中景");
+        assert_eq!(analysis.lighting.source, "霓虹灯；路灯");
+        assert_eq!(analysis.colors.dominant_palette, vec!["#221133".to_string()]);
+        assert_eq!(analysis.colors.temperature, "冷色");
+        assert_eq!(analysis.fine_details, vec!["发梢泛蓝光".to_string()]);
+    }
+
+    /// Fixture C：严重结构异常（纯散文 / 顶层是数组 / 主体字段全漂移到无法恢复）→
+    /// 进入修复判定（repairable），不产生半截 VisionAnalysis。
+    #[test]
+    fn fixture_c_severe_anomaly_routes_to_repair() {
+        let prose = try_parse_analysis("这张图片里有一位少女站在夜晚的街头，画面整体偏冷色调。").unwrap_err();
+        assert_eq!(prose.stage, "json_extract");
+        assert!(prose.repairable);
+        // 只有无法映射的内容（未知键 + 无文本）→ empty 且不值得修复
+        let no_content = try_parse_analysis(r#"{"foo":1}"#).unwrap_err();
+        assert_eq!(no_content.stage, "empty");
+        assert!(!no_content.repairable);
+        // 主体字段全为不可恢复标量：字段级丢弃，summary 仍在 → 整体仍可成功
+        let partial = try_parse_analysis(
+            r#"{"summary":"夜景人像","subjects":"一个女孩","objects":42}"#,
+        )
+        .unwrap();
+        assert!(partial.subjects.is_empty());
+        assert_eq!(partial.summary, "夜景人像");
+    }
+
+    #[test]
+    fn repair_user_text_contains_schema_raw_and_errors_only() {
+        let failure = schema_failure(
+            "validate",
+            "invalid type: sequence, expected a string".to_string(),
+            r#"{"summary":"x","pose":["a"]}"#,
+            true,
+        );
+        let user_text = build_repair_user_text(ANALYSIS_SCHEMA_SUMMARY, &failure);
+        assert!(user_text.contains("目标 Schema"));
+        assert!(user_text.contains("\"summary\": string"));
+        assert!(user_text.contains(r#""pose":["a"]"#));
+        assert!(user_text.contains("invalid type: sequence, expected a string"));
+        // 超长原始输出截断（不无界膨胀修复请求）
+        let long_raw = format!("{}{}", "{\"summary\":\"", "x".repeat(20_000));
+        let long_failure = schema_failure("json_extract", "syntax".into(), &long_raw, true);
+        let long_text = build_repair_user_text(ANALYSIS_SCHEMA_SUMMARY, &long_failure);
+        assert!(long_text.chars().count() < 10_000);
+    }
+
+    #[test]
+    fn extract_chat_content_supports_string_and_parts_forms() {
+        let string_form = json!({
+            "choices": [{"message": {"role": "assistant", "content": "{\"summary\":\"图\"}"}}]
+        });
+        assert_eq!(extract_chat_content(&string_form).as_deref(), Some("{\"summary\":\"图\"}"));
+        let parts_form = json!({
+            "choices": [{"message": {"role": "assistant", "content": [
+                {"type": "text", "text": "{\"summary\":"},
+                {"type": "text", "text": "\"图\"}"}
+            ]}}]
+        });
+        // 两种形态最终得到完全相同的文本
+        assert_eq!(extract_chat_content(&parts_form).as_deref(), Some("{\"summary\":\"图\"}"));
+        // 非 text part（如图片回显）被忽略
+        let mixed = json!({
+            "choices": [{"message": {"content": [{"type": "image_url", "image_url": {"url": "data:..."}}, {"type": "text", "text": "OK"}]}}]
+        });
+        assert_eq!(extract_chat_content(&mixed).as_deref(), Some("OK"));
+        // 缺 content / 空数组 parts → None（content_extract 层错误）
+        assert!(extract_chat_content(&json!({"choices": [{"message": {"content": null}}]})).is_none());
+        assert!(extract_chat_content(&json!({"choices": [{"message": {"content": []}}]})).is_none());
     }
 
     #[test]
     fn parse_comparison_clamps_scores() {
         let text = r#"{"subject":0.94,"composition":87,"style":1.2,"lighting":-0.3,"color":0.91,"objects":95,"text":null,"missing_elements":["招牌"],"prompt_corrections":["放大主体占比"]}"#;
-        let comparison = parse_comparison_text(text).unwrap();
+        let comparison = try_parse_comparison(text).unwrap();
         assert!((comparison.subject - 0.94).abs() < 1e-6);
         // 87 视为百分制 → 0.87
         assert!((comparison.composition - 0.87).abs() < 1e-6);
@@ -996,11 +1433,21 @@ mod tests {
         assert_eq!(comparison.prompt_corrections, vec!["放大主体占比".to_string()]);
     }
 
+    /// GLM 常见比较漂移：分数字符串 / 差异数组变字符串 → 规范化 + clamp 全恢复。
+    #[test]
+    fn parse_comparison_string_drift_recovers() {
+        let text = r#"{"subject":"0.94","composition":"87","style":1.2,"lighting":0.8,"color":0.91,"objects":95,"text":null,"missing_elements":"霓虹招牌","prompt_corrections":["放大主体占比"]}"#;
+        let comparison = try_parse_comparison(text).expect("drifted comparison must recover");
+        assert!((comparison.subject - 0.94).abs() < 1e-6);
+        assert!((comparison.composition - 0.87).abs() < 1e-6);
+        assert_eq!(comparison.missing_elements, vec!["霓虹招牌".to_string()]);
+    }
+
     #[test]
     fn parse_comparison_missing_required_fields_rejected() {
         // 完全无关的 JSON：结构体全 default 可解析 —— 但分数全 0 属于无效评审，
         // 命令层不额外拦截（模型极少出现；权交给上层非零校验）
-        let comparison = parse_comparison_text("{\"foo\":1}").unwrap();
+        let comparison = try_parse_comparison("{\"foo\":1}").unwrap();
         assert_eq!(comparison.subject, 0.0);
     }
 

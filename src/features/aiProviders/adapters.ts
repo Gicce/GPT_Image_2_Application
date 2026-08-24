@@ -134,6 +134,8 @@ abstract class OpenAICompatibleAdapterBase implements ProviderAdapter {
     try {
       const result = await api.runAgentRequest({
         mode: 'chat',
+        role: 'model_test',
+        feature: 'model-center-deep-test',
         base_url: base,
         token,
         model: modelId,

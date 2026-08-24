@@ -13,7 +13,7 @@
  *  - 构建「带入图片生成」的草稿（含来源视觉理解任务 id、生成参数与优化快照，禁止二次优化）。
  */
 
-import type { VisionAnalysis } from '../../types';
+import type { GenerationImageReference, GenerationProvenanceSnapshot, VisionAnalysis } from '../../types';
 
 export type RecreationFieldKey =
   | 'subject'
@@ -259,6 +259,11 @@ export interface RecreationState {
   optimizedAt?: string;
   providerName?: string;
   modelName?: string;
+  /** V4.1 Optimizer Provenance：执行时模型快照（之后换模型不影响历史展示）。 */
+  optimizerModelId?: string;
+  optimizerProviderId?: string;
+  optimizerSource?: 'manual' | 'follow' | 'default' | 'fallback';
+  optimizerFallbackReason?: string;
 }
 
 /** 初始状态：分析完成即 ready（未修改不强制空跑优化）。 */
@@ -525,6 +530,11 @@ export function applyOptimizationResult(
     summary: string;
     providerName?: string;
     modelName?: string;
+    /** V4.1 Optimizer Provenance：执行时模型快照。 */
+    optimizerModelId?: string;
+    optimizerProviderId?: string;
+    optimizerSource?: 'manual' | 'follow' | 'default' | 'fallback';
+    optimizerFallbackReason?: string;
     /** V4.1：AI 判定的本轮需修改维度（存在即同步落位锁定来源，空缺 = 保持现锁定结构）。 */
     changedDimensions?: RecreationFieldKey[];
     /** V4.1：AI 重建后的各维度值（维度 Diff 的「新」侧；只对非 user_override 字段生效）。 */
@@ -547,6 +557,10 @@ export function applyOptimizationResult(
     optimizedAt: new Date().toISOString(),
     providerName: result.providerName,
     modelName: result.modelName,
+    optimizerModelId: result.optimizerModelId,
+    optimizerProviderId: result.optimizerProviderId,
+    optimizerSource: result.optimizerSource,
+    optimizerFallbackReason: result.optimizerFallbackReason,
   };
 }
 
@@ -569,10 +583,31 @@ export interface GenerationCarryMeta {
   sourceAssetId?: string;
   /** V4.1 人物替换参考图（i2i 时作为第二张参考图；身份 / 脸部 / 发型 / 体型）。 */
   personReferencePath?: string;
+  /** V4.0.9.1 带角色的生成参考图（顺序 = 最终提交 gpt-image-2 的图片顺序）。 */
+  imageReferences?: GenerationImageReference[];
+  /** V4.0.9.1 人物替换语义（驱动确定性图片使用说明指令编译）。 */
+  personReplacement?: {
+    enabled: boolean;
+    clothingPolicy?: string;
+    customClothing?: string;
+  };
+  /** V4.0.9 生成溯源快照：用户原话 / 修改方案 / 参考图角色 / 服装策略 / 模型记录。 */
+  provenance?: GenerationProvenanceSnapshot;
+  /** V4.1 Prompt Compiler：prompt 已分层编译（carryApply 不再前置图片使用说明）。 */
+  promptCompiled?: boolean;
+  /** V4.1 Region V1：区域合成 mask 路径（真实进入 create_task.mask_image → edits mask 部件）。 */
+  maskImagePath?: string;
+  /** V4.1 Visual Project 来源（任务冻结项目 id / 名称 / 修订）。 */
+  projectId?: string;
+  projectName?: string;
+  projectRevision?: number;
   /** 已优化标记：ImageStudio 提交时冻结快照，绝不再执行一次 AI 优化。 */
   optimization?: {
     providerName?: string;
     modelName?: string;
+    /** V4.1 Provenance：执行时优化器模型 id 与路由来源。 */
+    modelId?: string;
+    source?: 'manual' | 'follow' | 'default' | 'fallback';
     originalPrompt: string;
     optimizedAt: string;
   };
@@ -593,6 +628,24 @@ export function buildGenerationCarry(
     sourceAssetId?: string;
     /** V4.1 人物替换参考图路径（i2i 时作为第二张参考图带入图片工作室）。 */
     personReferencePath?: string;
+    /** V4.0.9.1 带角色的生成参考图（顺序 = 提交顺序；写入 carry.imageReferences）。 */
+    imageReferences?: GenerationImageReference[];
+    /** V4.0.9.1 人物替换语义（写入 carry.personReplacement）。 */
+    personReplacement?: {
+      enabled: boolean;
+      clothingPolicy?: string;
+      customClothing?: string;
+    };
+    /** V4.0.9 生成溯源快照（页面在生成时刻构建，随 Task 冻结落库）。 */
+    provenance?: GenerationProvenanceSnapshot;
+    /** V4.1 Prompt Compiler：prompt 已分层编译（carryApply 不再前置图片使用说明）。 */
+    promptCompiled?: boolean;
+    /** V4.1 Region V1：区域合成 mask 路径（真实进入 create_task.mask_image）。 */
+    maskImagePath?: string;
+    /** V4.1 Visual Project 来源（任务冻结项目 id / 名称 / 修订）。 */
+    projectId?: string;
+    projectName?: string;
+    projectRevision?: number;
   },
 ): GenerationCarryMeta {
   const instruction = state.adjustInstruction.trim();
@@ -612,9 +665,19 @@ export function buildGenerationCarry(
     sourceImagePath: extra.sourceImagePath,
     sourceAssetId: extra.sourceAssetId,
     personReferencePath: extra.personReferencePath,
+    imageReferences: extra.imageReferences,
+    personReplacement: extra.personReplacement,
+    provenance: extra.provenance,
+    promptCompiled: extra.promptCompiled,
+    maskImagePath: extra.maskImagePath,
+    projectId: extra.projectId,
+    projectName: extra.projectName,
+    projectRevision: extra.projectRevision,
     optimization: {
       providerName: state.providerName,
       modelName: state.modelName,
+      modelId: state.optimizerModelId,
+      source: state.optimizerSource,
       originalPrompt: state.originalPrompt,
       optimizedAt: state.optimizedAt || new Date().toISOString(),
     },

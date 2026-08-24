@@ -7,6 +7,8 @@ import {
   EVALUATION_COPY,
   GENERATE_DIALOG,
   GENERATION_PARAMS,
+  IMAGE_MENTION,
+  MENTION_SUGGESTION,
   MODIFICATION_CHIPS,
   NO_USABLE_VISION_MODEL,
   OPTIMIZE_TOAST,
@@ -22,13 +24,13 @@ import { MODIFICATION_CHIP_DEFS } from '../modificationIntent';
 describe('统一「你想怎么修改这张图片？」意图输入区文案（V4.1 结构化维度选择器）', () => {
   it('标题以用户意图为核心（不再是技术化的「调整要求」）', () => {
     expect(ADJUST_INPUT.title).toBe('你想怎么修改这张图片？');
-    expect(ADJUST_INPUT.desc).toContain('大白话');
-    expect(ADJUST_INPUT.desc).toContain('再次点击取消');
+    expect(ADJUST_INPUT.desc).toContain('点击快捷按钮');
+    expect(ADJUST_INPUT.desc).toContain('@');
   });
 
-  it('placeholder 提供大白话示例（引导保持/修改语义）', () => {
-    expect(ADJUST_INPUT.placeholder).toContain('保持人物、服装和背景不变');
-    expect(ADJUST_INPUT.placeholder).toContain('背景不要动');
+  it('placeholder 传达 @ 图片引用能力（V4.0.9）', () => {
+    expect(ADJUST_INPUT.placeholder).toContain('输入 @ 引用当前任务图片');
+    expect(ADJUST_INPUT.desc).toContain('把 @图二 的人物换成 @图三');
   });
 
   it('快捷 Chip 是结构化维度选择器（toggle，绝不向 textarea 追加文本）', () => {
@@ -133,21 +135,44 @@ describe('重新优化 / 重新开始 / 无可用视觉模型文案（V4.0.7）'
   });
 });
 
-describe('人物替换 / 服装处理 / 分析阶段文案（V4.1）', () => {
-  it('人物来源三种固定叫法（图片库人物 / 本地导入 / 文字描述）', () => {
-    expect(PERSON_REPLACEMENT.sourceGallery).toBe('图片库人物');
+describe('人物替换 / 服装来源 / 分析阶段文案（V4.1 视觉映射口径）', () => {
+  it('人物来源三种固定叫法（图片库 / 本地导入 / 文字描述，Segmented Control 短标签）', () => {
+    expect(PERSON_REPLACEMENT.sourceGallery).toBe('图片库');
     expect(PERSON_REPLACEMENT.sourceLocal).toBe('本地导入');
     expect(PERSON_REPLACEMENT.sourceDescription).toBe('文字描述');
     expect(PERSON_REPLACEMENT.removeButton).toBe('移除人物替换');
     expect(PERSON_REPLACEMENT.changeButton).toBe('更换人物');
   });
 
-  it('服装处理三种策略 + 自定义输入（严格单选文案）', () => {
-    expect(CLOTHING_POLICY.sectionLabel).toBe('服装处理');
-    expect(CLOTHING_POLICY.preserveOriginal).toBe('沿用原图服装（推荐）');
-    expect(CLOTHING_POLICY.useSubjectReference).toBe('使用参考人物服装');
-    expect(CLOTHING_POLICY.custom).toBe('自定义服装');
-    expect(CLOTHING_POLICY.customInputLabel).toBe('描述新的服装 / 造型');
+  it('业务卡文案：人物替换是高优先级业务动作，区分画面模板与替换人物', () => {
+    expect(PERSON_REPLACEMENT.businessBadge).toBe('已启用');
+    expect(PERSON_REPLACEMENT.businessDesc).toContain('沿用原图');
+    expect(PERSON_REPLACEMENT.templateLabel).toBe('画面模板');
+    expect(PERSON_REPLACEMENT.templateUseHint).toContain('构图');
+    expect(PERSON_REPLACEMENT.personBlockLabel).toBe('替换人物');
+    expect(PERSON_REPLACEMENT.personUseHint).toContain('身份');
+    expect(PERSON_REPLACEMENT.templateChangeButton).toBe('更换模板');
+    expect(PERSON_REPLACEMENT.templateToken).toBe('原图');
+    expect(PERSON_REPLACEMENT.personCardTitle).toBe('人物参考');
+  });
+
+  it('服装来源三种策略 + 自定义输入（Segmented Control 短标签；默认值语义不变）', () => {
+    expect(CLOTHING_POLICY.sectionLabel).toBe('服装来源');
+    expect(CLOTHING_POLICY.preserveOriginal).toBe('原图服装');
+    expect(CLOTHING_POLICY.preserveOriginalHint).toContain('沿用原图服装');
+    expect(CLOTHING_POLICY.useSubjectReference).toBe('人物服装');
+    expect(CLOTHING_POLICY.useSubjectReferenceHint).toContain('以人物参考图为准');
+    expect(CLOTHING_POLICY.custom).toBe('自定义');
+    expect(CLOTHING_POLICY.customInputLabel).toBe('服装描述');
+  });
+
+  it('@图片引用与建议条文案（V4.0.9）', () => {
+    expect(IMAGE_MENTION.popupTitle).toBe('引用图片');
+    expect(IMAGE_MENTION.popupSectionTask).toBe('当前任务');
+    expect(IMAGE_MENTION.popupPickGallery).toContain('图片库');
+    expect(MENTION_SUGGESTION.apply).toBe('应用到人物替换');
+    expect(MENTION_SUGGESTION.templateLabel).toBe('模板图');
+    expect(MENTION_SUGGESTION.personLabel).toBe('替换人物');
   });
 
   it('分析阶段文案池非空且取值函数越界安全（确定性顺序，非随机）', () => {

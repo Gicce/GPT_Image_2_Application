@@ -19,10 +19,15 @@ const resultSrc = readFileSync(
 );
 
 describe('Prompt Provenance：显示值 === 提交值', () => {
-  test('finalPrompt 唯一来源 = promptDraft（与 generateFromPlan 提交值同源）', () => {
+  test('finalPrompt 唯一来源 = promptDraft（提交侧分层：非项目 = 原文；项目 = Compiler 编译）', () => {
     expect(pageSrc).toMatch(/const finalPrompt = promptDraft\.trim\(\)/);
-    // 提交侧：buildGenerationCarry 收到 optimizedPrompt: promptDraft.trim()
-    expect(pageSrc).toMatch(/optimizedPrompt: promptDraft\.trim\(\)/);
+    // V4.1 Workbench V2：项目化链路经 Prompt Compiler 编译后提交（finalPromptText），
+    // 非项目链路（无 activeProject）保持 promptDraft.trim() 原文直提 —— 两种路径
+    // 都从同一 finalDescription（promptDraft）出发，绝不引入第二个人工编辑源。
+    expect(pageSrc).toMatch(/let finalPromptText = promptDraft\.trim\(\)/);
+    expect(pageSrc).toMatch(/finalDescription: promptDraft\.trim\(\)/);
+    expect(pageSrc).toMatch(/optimizedPrompt: finalPromptText/);
+    expect(pageSrc).toContain('promptCompiled');
   });
 
   test('FinalPromptEditor 存在（标题 / 状态 / 最终版本 / 修改对比 / 复制）', () => {

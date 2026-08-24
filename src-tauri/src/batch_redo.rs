@@ -192,6 +192,8 @@ pub fn build_batch_redo_task(
                 label: new_items.get(i).map(|item| item.label.clone()),
                 retry_count: 0,
                 attempt_errors: Vec::new(),
+                error_detail: None,
+                attempt_details: Vec::new(),
             })
             .collect(),
         task_type: if source.task_type.is_empty() {
@@ -200,6 +202,7 @@ pub fn build_batch_redo_task(
             source.task_type.clone()
         },
         source_images: source.source_images.clone(),
+        mask_image: source.mask_image.clone(),
         execution_mode: "batch".to_string(),
         batch_strategy: source.batch_strategy.clone(),
         task_plan_summary: redo_summary,
@@ -214,6 +217,7 @@ pub fn build_batch_redo_task(
         stage_note: String::new(),
         // 动作白膜批：批量重做克隆保留批元数据（来源继承；batchId 查找仍命中原任务）
         pose_batch: source.pose_batch.clone(),
+        provenance: source.provenance.clone(),
     })
 }
 
@@ -246,13 +250,14 @@ mod tests {
             success_count: 1,
             failed_count: 2,
             sub_tasks: vec![
-                SubTask { index: 0, status: "completed".to_string(), image_id: Some("img-1".to_string()), error: None, label: Some("方案一".to_string()), retry_count: 0, attempt_errors: vec![] },
-                SubTask { index: 1, status: "failed".to_string(), image_id: None, error: Some("网络错误".to_string()), label: Some("方案二".to_string()), retry_count: 1, attempt_errors: vec!["网络错误".to_string()] },
-                SubTask { index: 2, status: "failed".to_string(), image_id: None, error: Some("上游失败".to_string()), label: Some("方案三".to_string()), retry_count: 0, attempt_errors: vec![] },
+                SubTask { index: 0, status: "completed".to_string(), image_id: Some("img-1".to_string()), error: None, label: Some("方案一".to_string()), retry_count: 0, attempt_errors: vec![], error_detail: None, attempt_details: vec![] },
+                SubTask { index: 1, status: "failed".to_string(), image_id: None, error: Some("网络错误".to_string()), label: Some("方案二".to_string()), retry_count: 1, attempt_errors: vec!["网络错误".to_string()], error_detail: None, attempt_details: vec![] },
+                SubTask { index: 2, status: "failed".to_string(), image_id: None, error: Some("上游失败".to_string()), label: Some("方案三".to_string()), retry_count: 0, attempt_errors: vec![], error_detail: None, attempt_details: vec![] },
             ],
             task_type: "generate".to_string(),
             source_images: vec![],
             execution_mode: "batch".to_string(),
+            mask_image: None,
             batch_strategy: "variant_set".to_string(),
             task_plan_summary: "三个产品方案".to_string(),
             batch_items: vec![
@@ -269,6 +274,7 @@ mod tests {
             source_request_id: String::new(),
             source_context: None,
             pose_batch: None,
+            provenance: None,
         };
         base
     }

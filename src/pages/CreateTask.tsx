@@ -4,7 +4,8 @@ import { useTaskStore } from '../store/useTaskStore';
 import { useDraftStore } from '../store/useDraftStore';
 import { useAuthStore } from '../store/useAuthStore';
 import { api } from '../services/api';
-import { authorizeImageTask, settleImageTask, createRequestId, registerTaskAuthorization } from '../services/billingService';
+import { serverApi } from '../services/serverApi';
+import { authorizeImageTask, settleImageTask, createRequestId, registerTaskAuthorization, isQuoteCancelled } from '../services/billingService';
 import { SIZES, QUALITIES, QUALITY_LABELS, FORMATS } from '../types';
 import SuccessDialog from '../components/SuccessDialog';
 import './CreateTask.css';
@@ -28,6 +29,8 @@ export default function CreateTask() {
   const [submitting, setSubmitting] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
   const [submittedCount, setSubmittedCount] = useState(0);
+  // 生成按钮价格展示（§9）：单张点数来自服务端权益，客户端不自行计价
+  const [unitCredits, setUnitCredits] = useState<number | null>(null);
 
   useEffect(() => {
     setSize(settings.default_size);
@@ -35,6 +38,14 @@ export default function CreateTask() {
     setFormat(settings.default_format);
     if (settings.default_output_dir) setOutputDir(settings.default_output_dir);
   }, [settings]);
+
+  useEffect(() => {
+    let alive = true;
+    serverApi.getAccountEntitlements()
+      .then(e => { if (alive) setUnitCredits(e.unit_credits ?? null); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
 
   const handleSelectDir = async () => {
     const dir = await api.selectDirectory();
@@ -57,7 +68,7 @@ export default function CreateTask() {
       return;
     }
 
-    // 生成前预占额度（server billing mode）：余额不足在此阻断，不会调用上游
+    // 生成前报价确认 + 预占额度（server billing mode）：报价弹层取消 / 点数不足在此阻断
     const { isLoggedIn } = useAuthStore.getState();
     let billingRequestId: string | undefined;
     if (isLoggedIn) {
@@ -65,7 +76,9 @@ export default function CreateTask() {
         billingRequestId = createRequestId('task');
         await authorizeImageTask(billingRequestId, count);
       } catch (err: any) {
-        setError(err?.message || '余额不足，请充值后继续使用');
+        if (!isQuoteCancelled(err)) {
+          setError(err?.message || '点数不足，请充值后继续使用');
+        }
         return;
       }
     }
@@ -210,10 +223,13 @@ export default function CreateTask() {
             onClick={handleSubmit}
             disabled={submitting}
           >
-            {submitting ? '创建中...' : `开始生成 ${count} 张图片`}
+            {submitting
+              ? '创建中...'
+              : `开始生成 ${count} 张图片${unitCredits != null ? ` · 预计 ${unitCredits * count} 点` : ''}`}
           </button>
           <p className="summary-note">
-            系统将为每张图片单独调用 API，确保稳定性。可在「任务队列」中查看实时进度。
+            系统将为每张图片单独调用 API，确保稳定性。可在「任务队列」中查看实时进度；
+            提交前会显示本次预计消耗的点数，按实际成功张数结算。
           </p>
         </div>
       </div>

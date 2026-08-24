@@ -1,5 +1,31 @@
 # Changelog
 
+## v4.2.0（2026-08-24）
+
+### Added（CY Credits Billing V1）
+
+- **CY 点数计费体系**：用户侧计费单位统一为 CY 点（¥1 = 100 点，兑换率由服务端统一下发）；钱包三类点数（正式 / 试用 / 赠送）分列展示，消费顺序 试用 → 赠送 → 正式由服务端唯一裁决；旧美元余额仅作兼容镜像，不再作为主展示口径
+- **生成前报价确认（Generation Quote）**：所有付费图片生成入口（批量创建 / 图生图 / 图片编辑 / Image Studio / 视觉复刻 / 聊天生图）提交前必须先取服务端报价，全局报价确认弹层展示 模式 / 数量 / 单张 / 预计消耗 / 当前余额 / 生成后预计剩余；「确认生成 · N 点」后按报价冻结价计费（10 分钟有效期）；点数不足时确认按钮禁用并引导充值；客户端全面禁止自行「数量 × 单价」计价
+- **生成按钮价格展示**：批量创建页生成按钮显示「开始生成 N 张图片 · 预计 M 点」（数据来自服务端权益接口）
+- **任务计费列**：任务卡显示 预计 N 点 → 实际 M 点（部分成功自动显示退回 K 点）；失败释放全链路可见
+- **点数充值（人民币直购）**：充值档位 ¥10 / ¥20 / ¥50 / ¥100 + 自定义人民币金额，实时显示「预计获得 N 点」；微信扫码支付到账 +N 点；订单查询显示到账点数
+- **点数流水**：我的账户新增「点数流水」——充值 / 图片生成 / 生成退款 / 充值退款 / 试用赠送 / 余额迁移，方向一目了然（正 = 入账、负 = 消费）
+- **新用户试用一次性领取（Trial Entitlement）**：入口仅当服务端 trial_available=true 时显示；同邮箱一生仅可领取一次（服务端 claim ledger 判定，删除账号重注册不可重复领取）；成功即到账试用点数
+- **扣费标准点数化**：扣费标准弹窗与费目明细全部以点数展示（旧美元口径仅历史数据回退显示）
+
+### Compatibility
+
+- V4.0.x 旧客户端继续可用：USD 充值入口与余额镜像由服务端兼容窗口保障
+- 版本 4.0.9 → 4.2.0（内含未发布的 V4.1 视觉工作流全部改进，随本版一并发布）
+
+### Technical
+
+- 新增 useQuoteStore（报价确认全局弹层状态）/ useTaskBillingStore（任务计费展示侧车，localStorage 持久化）/ QuoteConfirmDialog / AccountLedgerPanel / TaskBillingBadge
+- serverApi 新增：billing/quote、billing/wallet、billing/ledger、trial/status、trial/claim、pay/create_order_cny；authorize 携 quote_id 冻结报价
+- cyimagepro-ui Skill 13.0.0 → 14.0.0：新增规则 22（Generation Quote & Pricing Transparency 铁律）与 patterns §21-§24（Credits Billing / Trial Entitlement / Generation Quote / Wallet-Ledger / Pricing Transparency）
+- 测试：Vitest 1152 → 1165（新增报价 store / 计费侧车 / 流水方向契约）
+
+
 ## v4.0.9（2026-08-24）
 
 ### Added

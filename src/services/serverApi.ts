@@ -70,6 +70,14 @@ export interface UserInfo {
   balance_usd: string;
   /** 试用额度（字符串，同上） */
   trial_credit_usd: string;
+  // CY Credits（V4.2 起业务真相；旧服务端缺失时回退 0/100）
+  paid_credits?: number;
+  trial_credits?: number;
+  gift_credits?: number;
+  total_credits?: number;
+  credits_per_cny?: number;
+  /** 试用申请入口是否开放（Trial Entitlement V1 服务端判定） */
+  trial_available?: boolean;
 }
 
 export interface RuntimeGroupConfig {
@@ -99,6 +107,8 @@ export interface OrderResult {
   code_url: string;
   amount_usd: number;
   amount_cny: number;
+  /** V4.2：本单到账 CY 点数 */
+  credits_granted?: number;
   exchange_rate: number;
   status: string;
   dev_mode?: boolean;
@@ -143,6 +153,8 @@ export interface UserOrder {
   group?: string;
   amount_usd: number;
   amount_cny: number;
+  /** V4.2：本单到账 CY 点数（历史订单为 null） */
+  credits_granted?: number | null;
   total_usd?: number;
   total_cny?: number;
   exchange_rate: number | null;
@@ -169,6 +181,9 @@ export interface UsageRecord {
   /** 报告时点的每次单价（后端写入；历史记录可能为 null） */
   unit_price?: string | null;
   cost_usd: string;
+  /** V4.2 CY Credits（历史记录可能为 null/0，展示时回退 cost_usd） */
+  unit_credits?: number | null;
+  cost_credits?: number | null;
   created_at: string | null;
   /** V4 两阶段计费：该笔用量对应的客户端 request_id */
   request_id?: string | null;
@@ -223,13 +238,19 @@ export interface RuntimeTokenStatus {
 export interface PackagesResponse {
   exchange_rate: number;
   currency?: string;
-  /** V4：单模型（Image2）按次计费，不再有 groups 数组 */
+  /** V4.2：汇率来源语义（realtime_cached/realtime_fresh/fallback_fixed），UI 按规则标注文案 */
+  exchange_rate_source?: string;
+  exchange_rate_updated_at?: string | null;
+  /** V4.2：CY Credits 兑换与售价（¥1 = credits_per_cny 点） */
+  credits_per_cny?: number;
+  unit_credits?: number | null;
+  presets_cny?: number[];
   model: {
     name: string;
     display_name: string;
     price_per_call_usd: number | string;
   };
-  limits?: PayLimits;
+  limits?: PayLimits & { min_cny?: number; max_cny?: number };
 }
 
 export interface ServerModel {
@@ -266,6 +287,14 @@ export interface UsageAuthorizeResult {
   billing_source: string;
   balance_usd: string;
   trial_credit_usd: string;
+  // CY Credits（V4.2）
+  unit_credits?: number | null;
+  amount_credits?: number;
+  quote_id?: string | null;
+  paid_credits?: number;
+  trial_credits?: number;
+  gift_credits?: number;
+  total_credits?: number;
 }
 
 /** POST /api/usage/settle 200 响应 */
@@ -275,6 +304,64 @@ export interface UsageSettleResult {
   amount_usd: string;
   balance_usd: string;
   trial_credit_usd: string;
+  // CY Credits（V4.2）
+  amount_credits?: number;
+  paid_credits?: number;
+  trial_credits?: number;
+  gift_credits?: number;
+  total_credits?: number;
+}
+
+// ── CY Credits Billing V1：报价 / 钱包 / 流水 / 试用 ──
+
+/** POST /api/billing/quote 响应（10 分钟冻结） */
+export interface BillingQuote {
+  quote_id: string | null;
+  feature: string;
+  model: string;
+  unit_credits: number;
+  quantity: number;
+  estimated_credits: number;
+  pricing_rule_id: string | null;
+  pricing_rule_version: number | null;
+  expires_at: string;
+  frozen: boolean;
+  balance_snapshot?: {
+    paid_credits: number;
+    trial_credits: number;
+    gift_credits: number;
+    total_credits: number;
+    credits_per_cny: number;
+    sufficient: boolean;
+    remaining_after: number;
+  };
+}
+
+export interface LedgerRecord {
+  id: string;
+  type: string;
+  type_label: string;
+  status: string;
+  amount_credits: number;
+  trial_credits_part: number;
+  gift_credits_part: number;
+  paid_credits_part: number;
+  unit_credits: number | null;
+  image_count: number;
+  request_id: string | null;
+  related_order_id: string | null;
+  failure_reason: string | null;
+  remark: string | null;
+  created_at: string | null;
+}
+
+export interface TrialStatus {
+  trial_available: boolean;
+  reason: string;
+  already_claimed: boolean;
+  claimed_at: string | null;
+  grant_credits: number;
+  campaign_version: number;
 }
 
 /**
@@ -487,6 +574,12 @@ function normalizeUser(raw: any): UserInfo {
     trial_expired: raw.trial_expired ?? false,
     balance_usd: raw.balance_usd != null ? String(raw.balance_usd) : '0',
     trial_credit_usd: raw.trial_credit_usd != null ? String(raw.trial_credit_usd) : '0',
+    paid_credits: raw.paid_credits ?? 0,
+    trial_credits: raw.trial_credits ?? 0,
+    gift_credits: raw.gift_credits ?? 0,
+    total_credits: raw.total_credits ?? ((raw.paid_credits ?? 0) + (raw.trial_credits ?? 0) + (raw.gift_credits ?? 0)),
+    credits_per_cny: raw.credits_per_cny ?? 100,
+    trial_available: raw.trial_available ?? false,
   };
 }
 
@@ -509,6 +602,13 @@ function normalizeAuthorize(raw: any): UsageAuthorizeResult {
     billing_source: raw.billing_source ?? '',
     balance_usd: raw.balance_usd != null ? String(raw.balance_usd) : '0',
     trial_credit_usd: raw.trial_credit_usd != null ? String(raw.trial_credit_usd) : '0',
+    unit_credits: raw.unit_credits ?? null,
+    amount_credits: raw.amount_credits ?? 0,
+    quote_id: raw.quote_id ?? null,
+    paid_credits: raw.paid_credits,
+    trial_credits: raw.trial_credits,
+    gift_credits: raw.gift_credits,
+    total_credits: raw.total_credits,
   };
 }
 
@@ -529,6 +629,14 @@ export interface AccountEntitlements {
   total_credit_usd: string;
   enabled_features: Record<string, boolean>;  // { "image": true }
   enabled_models: string[];  // ["gpt-image-2"]
+  // CY Credits（V4.2）
+  paid_credits?: number;
+  trial_credits?: number;
+  gift_credits?: number;
+  total_credits?: number;
+  credits_per_cny?: number;
+  unit_credits?: number | null;
+  trial_available?: boolean;
   image2?: {
     enabled: boolean;
     trial_allowed: boolean;
@@ -582,13 +690,18 @@ export const serverApi = {
     request<any[]>('/api/users/me/usage', {}, true),
 
   // ── V4 两阶段计费（Image2 单模型 + 统一余额）──
-  // 生成前预占额度：402 = QUOTA_EXHAUSTED（余额不足，请充值后继续使用）；403 = IMAGE2_DISABLED
-  authorizeImage2: (requestId: string, imageCount: number) =>
-    request<any>(
+  // 生成前预占额度：402 = QUOTA_EXHAUSTED（点数不足，请充值后继续使用）；403 = IMAGE2_DISABLED
+  // quoteId（V4.2）：携带 /api/billing/quote 返回的报价 ID，按报价冻结价计费
+  authorizeImage2: (requestId: string, imageCount: number, quoteId?: string | null, feature?: string) => {
+    const body: Record<string, unknown> = { request_id: requestId, image_count: imageCount };
+    if (quoteId) body.quote_id = quoteId;
+    if (feature) body.feature = feature;
+    return request<any>(
       '/api/usage/authorize',
-      { method: 'POST', body: JSON.stringify({ request_id: requestId, image_count: imageCount }) },
+      { method: 'POST', body: JSON.stringify(body) },
       true
-    ).then(normalizeAuthorize),
+    ).then(normalizeAuthorize);
+  },
 
   // 生成后结算（幂等；服务端对超时未 settle 的预占有 2 小时自动释放兜底）
   settleImage2: (requestId: string, success: boolean, imageCount?: number, failureReason?: string) => {
@@ -611,6 +724,50 @@ export const serverApi = {
     request<OrderResult>(
       '/api/pay/create_order',
       { method: 'POST', body: JSON.stringify({ amount_usd: amountUsd }) },
+      true
+    ),
+
+  // V4.2：人民币直购（¥N → N × credits_per_cny 点），客户端标准充值入口
+  createOrderCny: (amountCny: number) =>
+    request<OrderResult>(
+      '/api/pay/create_order_cny',
+      { method: 'POST', body: JSON.stringify({ amount_cny: amountCny }) },
+      true
+    ),
+
+  // ── CY Credits Billing V1 ──
+  createQuote: (feature: string, imageCount: number) =>
+    request<BillingQuote>(
+      '/api/billing/quote',
+      { method: 'POST', body: JSON.stringify({ feature, image_count: imageCount }) },
+      true
+    ),
+
+  getWallet: () =>
+    request<{ paid_credits: number; trial_credits: number; gift_credits: number; total_credits: number; credits_per_cny: number }>(
+      '/api/billing/wallet',
+      {},
+      true
+    ),
+
+  getLedger: (page: number = 1, pageSize: number = 20, type?: string) => {
+    const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
+    if (type) params.set('type', type);
+    return request<{ total: number; page: number; page_size: number; records: LedgerRecord[] }>(
+      `/api/billing/ledger?${params.toString()}`,
+      {},
+      true
+    );
+  },
+
+  // ── Trial Entitlement V1 ──
+  getTrialStatus: () =>
+    request<TrialStatus>('/api/trial/status', {}, true),
+
+  claimTrial: () =>
+    request<{ granted: boolean; grant_credits: number; claim_id: string; campaign_version: number }>(
+      '/api/trial/claim',
+      { method: 'POST' },
       true
     ),
 

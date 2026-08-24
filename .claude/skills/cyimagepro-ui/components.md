@@ -23,7 +23,7 @@
 |---|---|---|
 | `Toast.tsx`（toastSuccess/toastError） | 全局轻提示 | 操作反馈一律用它，禁止 alert()（存量 alert 为债务） |
 | `BillingBadge.tsx` | 计费方式唯一展示形态（API 按量计费 / Coding Plan 套餐） | 禁止任何地方手写计费文案 span |
-| `ModelPicker.tsx` | AI 智能体模型选择器（搜索/分组/更多模型） | 模型选择场景唯一入口，见 model-selector.md |
+| `ModelPicker.tsx` | AI 智能体模型选择器（搜索/分组/更多模型） | 模型选择场景唯一入口，见 model-selector.md；「AI 模型使用」按 role 能力过滤分组（roleModelFilter.buildRolePickerGroups），见 ai-model-routing.md |
 | `ModelCapabilityBadges.tsx` | 模型能力标签组 | 模型能力展示复用 |
 | `ProviderLogo.tsx` | Provider 品牌 Logo（本地资产 + 首字母回退） | 禁止外链 logo |
 | `ContextMeter.tsx` | 上下文余量指示条 | Chat 头部 |
@@ -53,9 +53,12 @@
 | WorkflowStatusBanner | pages/VisionUnderstanding.tsx（vision-status-row / vision-status-bar） | 状态点 + 标签 + 引导语五 tone；CTA 在 Banner 外，见 visual-workflow.md |
 | VisualAnalysisProgress | features/vision/VisualAnalysisProgress.tsx | 视觉理解「正在分析」阶段反馈（参考图缩略图 + 创意文案轮播 `getVisualAnalysisMessage` + 扫描线/呼吸描边 + reduced-motion 降级）；只在真实 analyzing 阶段渲染，见 visual-workflow.md §1a |
 | ModificationChip 行（ModificationChips） | features/vision/ModificationChips.tsx | 快捷修改维度结构化选择器（toggle / 同维度唯一槽位 / aria-pressed / ✓ 前缀 + Brand Soft 选中态 / 提高复刻度独立虚线 Chip）；定义单一来源 modificationIntent.ts，见 visual-workflow.md §1b |
-| PersonReplacementPanel | features/vision/PersonReplacementPanel.tsx | 人物替换输入器（图片库人物 / 本地导入 / 文字描述 三来源 tab + ClothingPolicy radiogroup + 自定义服装输入 + 缩略图进 ImageViewer）；语义边界：Tab 切换是视图，人物数据才是语义，见 visual-workflow.md §1c-1d |
+| PersonReplacementPanel | features/vision/PersonReplacementPanel.tsx | 人物替换**业务卡**（V4.0.9：👤 卡头「已启用」徽章 + A 区画面模板（缩略图 + 当前使用 @标签 + 更换模板图）+ B 区替换人物（图片库人物 / 本地导入 / 文字描述 三来源 tab）+ C 区 ClothingPolicy radiogroup；缩略图进 ImageViewer）；语义边界：Tab 切换是视图，人物数据才是语义，见 visual-workflow.md §1c-1d |
+| IntentMentionInput | features/vision/IntentMentionInput.tsx | 修改意图输入框的 @图片引用能力（V4.0.9）：原生 textarea（IME 安全）+ 背景高亮层（@token pill）+ @ 弹层（当前任务图片池候选）+ 引用 chips 行（hover 看图 / 点击进 ImageViewer / × 移除）；弹层开关 / 上下选择 / Esc 是纯视图操作（组件不写 store），见 visual-workflow.md §1g |
+| imageMention.ts | features/vision/imageMention.ts | @图片引用纯函数层（V4.0.9）：当前任务图片池 buildVisionContextImages（唯一 selector，路径去重 + 业务角色标签）+ mention token 插入/定位/清理 + 双图角色解析 resolveImageMentionRoles（模板图 / 人物替换来源；面板显式选择 > 明确 Mention > 自然语言推断） |
 | useVisionViewStore | store/useVisionViewStore.ts | 视觉页 View State 唯一载体（dimensionsCollapsed / advancedCollapsed / analysisDetailCollapsed / promptView；进程内不持久化）；禁止塞进业务对象，见 visual-workflow.md §1e |
-| modificationIntent.ts | features/vision/modificationIntent.ts | 修改意图纯函数层（ModificationDraft / toggle 唯一槽位 / buildModificationInstruction 合成指令 / ClothingPolicy 指令文本 / 持久化迁移） |
+| modificationIntent.ts | features/vision/modificationIntent.ts | 修改意图纯函数层（ModificationDraft（含 mentions / extraImageRefs）/ toggle 唯一槽位 / buildModificationInstruction 合成指令（含双图角色行）/ ClothingPolicy 指令文本 / 持久化迁移；V4.0.9.1 服装状态不变量唯一归一入口 normalizeModificationState + setClothingPolicy + clothingReadinessError） |
+| generationProvenance.ts | features/vision/generationProvenance.ts | 生成溯源快照（V4.0.9.1）：buildGenerationProvenance（生成时刻冻结用户原话 / 修改方案 / 参考图角色 / 服装策略 / 模型记录）+ renderUserInstruction（@token→@label）+ describeProvenanceModificationPlan（历史「本次修改方案」行）+ PROVENANCE_ROLE_LABELS；历史详情只读快照，禁止 final_prompt 伪造用户要求 |
 | FinalPromptEditor（vision-final-prompt） | pages/VisionUnderstanding.tsx | 最终生图 Prompt **唯一**查看/编辑/Diff/复制入口（最终版本 Tab 可编辑 promptDraft、修改对比 Tab Diff、四态状态徽章）；禁止第二套「编辑生成方案」输入框 |
 | PromptDiff（diff-seg） | pages/VisionUnderstanding.tsx（FinalPromptEditor 修改对比 Tab 内） | 全文 Diff 渲染（新增绿 / 删除红 + 删除线 / 未变化普通色）；计算唯一来源 features/vision/promptDiff.ts |
 | DimensionCard（vision-plan-field） | pages/VisionUnderstanding.tsx | 维度锁定卡（锁定/可修改/已修改角标 + ·手动标识 + 原/新对比） |
@@ -64,8 +67,14 @@
 | resolveImageDetailMetadata | features/gallery/imageDetailMetadata.ts | 图库详情 / ImageViewer metadata 唯一 view-model resolver（基础信息行：文件名/来源/用途/导入时间/生成时间/尺寸/格式/文件大小/生成模型/任务 ID + 动作白膜批次区 + viewerMetadata）；内部复用 resolveImageSource，禁止复制其推断逻辑 |
 | useGalleryFileDrop | hooks/useGalleryFileDrop.ts | 图片库 OS 文件拖入唯一入口（Tauri onDragDropEvent → controller；api / Toast / store 刷新注入；enabled=false = Modal 打开），见 patterns.md §18 |
 | galleryFileDrop controller | features/gallery/galleryFileDrop.ts | 拖拽状态机（enter/over/leave/drop + processing 防重入）+ Overlay / Toast 文案唯一来源（galleryDropOverlayCopy / describeImportResult）；纯逻辑无 React/Tauri 依赖 |
+| AiModelUsageSettings | features/aiRouting/AiModelUsageSettings.tsx | 设置页「AI 模型使用」唯一实现（分组 Role Row + 跟随/单独指定 + 能力过滤 ModelPicker + 恢复推荐设置）；只读解析走 resolveModelForRole，禁止第二套模型路由 UI，见 ai-model-routing.md |
+| resolveModelForRole | features/aiRouting/resolveModelForRole.ts | 所有 AI 功能模型解析唯一入口（manual/follow/default/fallback + 显式回退原因）；禁止业务组件自读全局默认模型 |
+| useAiModelRoutingStore | features/aiRouting/modelRoutingPolicy.ts | AI 路由配置持久层（ai_model_routing_v1：只存用户改过的条目）+ 进程内「最近使用」记录 |
 | EvaluationSummary / EvaluationPanel | features/evaluation/ | 评分摘要与详情（跟随选中缩略图；长文本 2~4 行折叠） |
 | FavoriteButton（vision-result-quick 内） | features/evaluation/VisionResultSection.tsx | ♡/♥ 收藏 Toggle（与 👍 满意分离，落 image_evaluations.favorite） |
+| taskState.ts | utils/taskState.ts | 主任务状态聚合唯一纯函数（deriveTaskState 六态从 sub_tasks 派生 + resolveTaskStartedAt/resolveTaskFinishedAt/taskDurationMs + DERIVED_STATUS_META 状态词）；页面禁止自猜 task.status，见 patterns.md §20 |
+| taskFailure.ts | utils/taskFailure.ts | 图片生成失败 canonical classifier（classifyGenerationFailure：结构化 detail 优先 / 旧 string 回落；category→文案表见 copy.md §13；describeEndpoint 脱敏；attemptFailureHistory 尾部对齐）；旧 subtaskError.ts 已删除，禁止复活第二套分类 |
+| taskNavigation.ts | utils/taskNavigation.ts | TaskQueue→History 任务详情深链唯一入口（openTaskDetailFromQueue：cy_history_focus_task_id + cyimage-navigate(history)）；禁止第二套 Task Detail |
 
 ## 4. Badge 体系（禁止重复造）
 

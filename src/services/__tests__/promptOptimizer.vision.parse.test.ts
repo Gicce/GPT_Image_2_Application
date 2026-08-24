@@ -218,3 +218,45 @@ describe('clothing 维度协议扩展（V4.1：人物 / 服装独立判定）', 
     expect(content).toContain('红色 23 号球衣');
   });
 });
+
+describe('forcedDimensions（V4.1：Chip 启用维度必须真实修改）', () => {
+  it('启用人物 / 动作 / 背景 → 三个方案行标为「用户显式要求修改」', () => {
+    const plan = buildRecreationPlan(fixtureAnalysis());
+    const content = buildVisionRecreationUserContent({
+      originalRecreationPrompt: 'p',
+      structuredRecreationPlan: plan,
+      userAdjustmentInstruction: '把人物换成参考人物，动作和背景也要变',
+      forcedDimensions: ['subject', 'pose', 'scene'],
+    });
+    expect(content).toContain('人物 / 主体［用户显式要求修改（必须真实修改该维度并列入 changed_dimensions');
+    expect(content).toContain('动作［用户显式要求修改（必须真实修改该维度并列入 changed_dimensions');
+    expect(content).toContain('背景 / 场景［用户显式要求修改（必须真实修改该维度并列入 changed_dimensions');
+    expect(content).toContain('绝不保持原值');
+    // 未启用维度仍走自动判断口径
+    expect(content).toContain('自动（由你按调整要求判断');
+  });
+
+  it('user_override 锁定优先：手动锁定维度不受 forcedDimensions 影响', () => {
+    const plan = {
+      ...buildRecreationPlan(fixtureAnalysis()),
+      fields: buildRecreationPlan(fixtureAnalysis()).fields.map(
+        f => (f.key === 'pose' ? { ...f, locked: true, lockSource: 'user_override' as const } : f),
+      ),
+    };
+    const content = buildVisionRecreationUserContent({
+      originalRecreationPrompt: 'p',
+      structuredRecreationPlan: plan,
+      userAdjustmentInstruction: 'x',
+      forcedDimensions: ['pose'],
+    });
+    expect(content).toContain('动作［用户手动锁定（最高优先级：必须保持不变）］');
+    expect(content).not.toContain('动作［用户显式要求修改');
+  });
+
+  it('系统提示词含规则 2a（显式启用维度不受「禁止大面积放开」约束）', () => {
+    const source = readFileSync(STORE_PATH_OPTIMIZER, 'utf-8');
+    expect(source).toContain('2a.');
+    expect(source).toContain('用户显式要求修改');
+    expect(source).toContain('不适用于这些显式开启的维度');
+  });
+});

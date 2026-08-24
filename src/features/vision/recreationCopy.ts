@@ -9,10 +9,33 @@
 
 export const ADJUST_INPUT = {
   title: '你想怎么修改这张图片？',
-  desc: '点击快捷按钮选中要修改的维度（再次点击取消），或用大白话直接描述。AI 会结合对原图的理解、锁定项和你的要求，重新优化生成方案。',
+  desc: '点击快捷按钮选择要修改的维度，或直接描述需求。输入 @ 可引用当前任务图片，例如：「把 @图二 的人物换成 @图三，并保留 @图二 的动漫AI照片风效果。」',
   label: '修改意图',
-  placeholder:
-    '例如：\n· 保持人物、服装和背景不变，把人物动作改成双手抱胸，表情稍微冷酷一点\n· 整体改得更像电影海报，光线更柔和\n· 把衣服改成白色，背景不要动\n· 让画面更梦幻一些，但不要改变构图',
+  placeholder: '描述你想怎么修改，输入 @ 引用当前任务图片…',
+} as const;
+
+/** @图片引用（Image Mention）输入与弹层文案。 */
+export const IMAGE_MENTION = {
+  popupTitle: '引用图片',
+  popupSectionTask: '当前任务',
+  popupPickGallery: '从图片库选择…',
+  popupEmpty: '当前任务还没有可引用的图片；可先从图片库选择加入当前任务。',
+  popupHint: '↑↓ 选择 · Enter 插入 · Esc 关闭',
+  chipsLabel: '已引用图片',
+  chipsRemove: '移除引用',
+  chipsView: '点击在内置图片查看器中查看',
+  chipAlt: '引用图片缩略图',
+  viewerTitle: '引用图片',
+} as const;
+
+/** 「已识别图片角色」建议条（自然语言 / @mention → 人物替换面板，不偷偷覆盖）。 */
+export const MENTION_SUGGESTION = {
+  title: '已识别图片角色',
+  templateLabel: '模板图',
+  personLabel: '替换人物',
+  apply: '应用到人物替换',
+  dismiss: '忽略',
+  note: '应用后可在人物替换面板中查看与调整；不会覆盖你已手动设置的内容。',
 } as const;
 
 /**
@@ -26,15 +49,31 @@ export const MODIFICATION_CHIPS = {
   boostHint: '更贴近原图：未提及的视觉结构从严保持（不是视觉维度，独立生效）',
 } as const;
 
-/** 人物替换面板（Person Replacement Panel）文案。 */
+/** 人物替换面板（V4.1 视觉映射版：画面模板 → 替换人物 双栏 + 箭头）。 */
 export const PERSON_REPLACEMENT = {
   title: '人物替换',
+  businessBadge: '已启用',
+  businessDesc: '将原画面中的主体人物替换为新的参考人物。未特别指定时，画面风格沿用原图（模板图）；已启用的维度（动作 / 背景等）会继续参与修改。',
+  templateLabel: '画面模板',
+  templateUseHint: '保留画风 / 构图 / 背景氛围',
+  templateChangeButton: '更换模板',
+  templateChangeNote: '更换模板图会替换当前参考图，需要重新理解图片',
+  templateMissing: '尚未选择模板图（当前任务的参考图）',
+  templateToken: '原图',
+  personBlockLabel: '替换人物',
+  personUseHint: '替换人物身份 / 五官 / 发型 / 服装参考',
   sourceLabel: '人物来源',
-  sourceGallery: '图片库人物',
+  sourceGallery: '图片库',
   sourceLocal: '本地导入',
   sourceDescription: '文字描述',
-  referenceLabel: '人物参考',
+  personCardTitle: '人物参考',
+  personCardSourceGallery: '图片库',
+  personCardSourceLocal: '本地导入',
+  personTextCardTitle: '文字描述人物',
+  personEmptyAction: '选择人物参考',
+  personEmptyHint: '图片库 / 本地导入 / 文字描述',
   changeButton: '更换人物',
+  cancelPickButton: '取消',
   removeButton: '移除人物替换',
   galleryPickButton: '从图片库选择',
   localPickButton: '选择本地图片',
@@ -43,20 +82,22 @@ export const PERSON_REPLACEMENT = {
   descriptionPlaceholder: '例如：25 岁亚洲女性，银色短发，蓝色眼睛，纤细体型',
   descriptionHint: '只描述人物特征（身份 / 脸部 / 发型 / 体型），服装在下方单独决定',
   thumbnailAlt: '人物参考图',
-  emptyHint: '选择一种人物来源；也可以只用文字描述修改要求',
+  mappingArrowLabel: '替换为',
 } as const;
 
-/** 服装处理（Clothing Policy）文案；「服装 / 造型」为维度标准名。 */
+/** 服装来源（Clothing Policy）文案；语义 payload 见 clothingPolicyInstruction（与 UI 文案解耦）。
+ * V4.0.9 状态不变量：clothing ∈ activeDimensions ⇔ clothingPolicy ≠ preserve_original
+ * （选择「原图服装」自动取消「修改服装」维度；「人物服装 / 自定义」自动启用）。 */
 export const CLOTHING_POLICY = {
-  sectionLabel: '服装处理',
-  preserveOriginal: '沿用原图服装（推荐）',
-  preserveOriginalHint: '人物换新，服装不变',
-  useSubjectReference: '使用参考人物服装',
-  useSubjectReferenceHint: '服装 / 造型以人物参考为准',
-  custom: '自定义服装',
-  customHint: '单独描述新的服装 / 造型',
-  customInputLabel: '描述新的服装 / 造型',
-  customInputPlaceholder: '例如：黑色西装、白衬衫、无领带',
+  sectionLabel: '服装来源',
+  preserveOriginal: '原图服装',
+  preserveOriginalHint: '仅替换人物身份、五官、发型等人物特征，继续沿用原图服装和造型（自动取消「修改服装」维度）。',
+  useSubjectReference: '人物服装',
+  useSubjectReferenceHint: '人物身份与服装均以人物参考图为准（自动启用「修改服装」维度）。',
+  custom: '自定义',
+  customHint: '按你的文字描述重新设计服装（自动启用「修改服装」维度，需填写描述）',
+  customInputLabel: '服装描述',
+  customInputPlaceholder: '输入希望人物穿着的服装……',
 } as const;
 
 /** 视觉理解「正在分析」阶段的产品化文案（VisualAnalysisProgress）。 */
@@ -118,6 +159,11 @@ export const FINAL_PROMPT = {
   diffAddedLabel: '新增',
   diffRemovedLabel: '删除',
   diffEmpty: '最终 Prompt 与原始复刻 Prompt 一致，暂无修改。',
+  summaryTitle: '本次重点修改',
+  summaryStatusPlanned: '待优化',
+  summaryStatusApplied: '已修改',
+  keyChangesTitle: '本次关键变化',
+  keyChangesHint: '上方为修改意图的结构化摘要；全文逐字对比见 diff 区。',
 } as const;
 
 /** 维度锁定卡（锁定 / 可修改 / 已修改 + AI 判断与用户手动的区分）。 */

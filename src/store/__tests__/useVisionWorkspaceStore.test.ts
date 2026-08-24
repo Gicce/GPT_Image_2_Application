@@ -129,9 +129,12 @@ describe('Workspace 保存与恢复（页面切换 / 组件卸载 / 应用重启
       freeText: '把球衣换成蓝色',
       activeDimensions: ['clothing'],
       person: null,
-      clothingPolicy: 'preserve_original',
-      customClothing: '',
+      // V4.0.9 状态不变量：clothing ∈ activeDimensions ⇔ clothingPolicy ≠ preserve_original
+      clothingPolicy: 'custom',
+      customClothing: '蓝色球衣',
       replicationBoost: false,
+      mentions: [],
+      extraImageRefs: [],
     });
     store.getState().flushPendingPersist(); // 文本输入为防抖落盘（组件卸载时同样冲刷）
 
@@ -144,9 +147,11 @@ describe('Workspace 保存与恢复（页面切换 / 组件卸载 / 应用重启
     expect(state.visionTaskId).toBe('task-7');
     expect(state.sessionId).toBe('session-9');
     expect(state.stage).toBe('ready');
-    // 用户结构化修改意图同样恢复
+    // 用户结构化修改意图同样恢复（合法状态原样持久化）
     expect(state.modificationDraft.freeText).toBe('把球衣换成蓝色');
     expect(state.modificationDraft.activeDimensions).toEqual(['clothing']);
+    expect(state.modificationDraft.clothingPolicy).toBe('custom');
+    expect(state.modificationDraft.customClothing).toBe('蓝色球衣');
   });
 
   it('旧快照（V4.1 前 adjustmentInput 纯文本）迁移为 modificationDraft.freeText，维度 / 服装为默认', async () => {
@@ -271,6 +276,57 @@ describe('重新开始 / 移除图片', () => {
     expect(state.profileId).toBe('profile-a');
     expect(state.modelId).toBe('glm-5v-turbo');
     expect(state.mode).toBe('high_fidelity');
+  });
+});
+
+describe('重新理解失败保护（V4.0.9：lastSuccessfulAnalysis 绝不被失败清掉）', () => {
+  it('分析 A 成功 → 重新理解 B 失败：A 的分析 / 复刻方案 / Prompt 原样保留，semanticRevision 不变', () => {
+    store.getState().setSource('D:/imgs/ref.png');
+    store.getState().applyAnalysis({
+      analysis: makeAnalysis(),
+      reverseResult: makeReverseResult(),
+      recreation: makeRecreation('原始复刻 Prompt'),
+      genParams: { size: '1024x1024', quality: 'auto', count: 1 },
+      visionProfileId: 'p', visionModelId: 'glm-5v-turbo', visionTaskId: 'task-a', sessionId: 'session-a',
+    });
+    const before = store.getState();
+    const analysisBefore = before.analysis;
+    const recreationBefore = before.recreation;
+    const promptBefore = before.promptDraft;
+
+    // 重新理解失败（schema 漂移 / 网络错误等任何原因）只落 stage + errorText
+    store.getState().markStage('failed', '本次重新理解没有完成，仍保留上一次分析结果。图片理解没有完成，AI 返回的分析结果不完整，可以重新尝试理解。');
+
+    const after = store.getState();
+    expect(after.analysis).toBe(analysisBefore);           // 同一引用：旧成功结果未被触碰
+    expect(after.recreation).toBe(recreationBefore);
+    expect(after.recreation!.semanticRevision).toBe(0);    // 失败不是语义修改，不污染修订计数
+    expect(after.promptDraft).toBe(promptBefore);
+    expect(after.stage).toBe('failed');
+    expect(after.errorText).toContain('仍保留上一次分析结果');
+
+    // 失败不死锁：可立即再次进入分析
+    store.getState().markStage('analyzing', '');
+    expect(store.getState().stage).toBe('analyzing');
+    expect(store.getState().analysis).toBe(analysisBefore);
+  });
+
+  it('失败后重启恢复：旧成功分析与 failed 状态共存，仍可重新执行', async () => {
+    store.getState().setSource('D:/imgs/ref.png');
+    store.getState().applyAnalysis({
+      analysis: makeAnalysis(),
+      reverseResult: makeReverseResult(),
+      recreation: makeRecreation('P'),
+      genParams: { size: '1024x1024', quality: 'auto', count: 1 },
+      visionProfileId: 'p', visionModelId: 'm', visionTaskId: 't', sessionId: 's',
+    });
+    store.getState().markStage('failed', '本次重新理解没有完成，仍保留上一次分析结果。');
+
+    const reloaded = await freshStore();
+    const state = reloaded.getState();
+    expect(state.stage).toBe('failed');            // normalizeStage：有内容时 failed 保留
+    expect(state.analysis?.summary).toContain('篮球运动员');
+    expect(state.recreation?.originalPrompt).toBe('P');
   });
 });
 

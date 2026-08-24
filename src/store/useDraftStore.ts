@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import type { GenerationImageReference, GenerationProvenanceSnapshot } from '../types';
 
 /** V4.0.6 视觉理解 → 图片生成 的单向草稿（带入即清空，绝不自动提交生成） */
 export interface VisionCarryDraft {
@@ -18,11 +19,40 @@ export interface VisionCarryDraft {
   sourceAssetId?: string;
   /** V4.1 人物替换参考图（i2i 时作为第二张参考图；身份 / 脸部 / 发型 / 体型）。 */
   personReferencePath?: string;
+  /**
+   * V4.0.9.1 带角色的生成参考图（顺序 = 最终提交 gpt-image-2 的图片顺序：
+   * template → person_reference → extras）。与 sourceImagePath / personReferencePath
+   * 并存（后两者保留兼容），carryApply 以本清单为准编译图片使用说明指令块。
+   */
+  imageReferences?: GenerationImageReference[];
+  /**
+   * V4.0.9.1 人物替换语义快照（i2i 时驱动确定性「强制替换 / 排除模板人物身份 /
+   * 服装来源分离」指令编译；缺省时回落 personReferencePath 存在即强替换）。
+   */
+  personReplacement?: {
+    enabled: boolean;
+    clothingPolicy?: string;
+    customClothing?: string;
+  };
   sourceVisionSessionId?: string;
   /** V4.0.7 复刻链路：来源视觉理解任务 id（写入生成任务 source_task_id，任务中心显示来源关系） */
   sourceVisionTaskId?: string;
   /** 任务摘要（生成任务的 task_plan_summary，如"基于视觉理解复刻方案已将人物替换为…生成"） */
   taskPlanSummary?: string;
+  /** V4.0.9 生成溯源快照（用户原话 / 修改方案 / 参考图角色 / 服装策略 / 模型记录）。 */
+  provenance?: GenerationProvenanceSnapshot;
+  /**
+   * V4.1 Workbench V2：Prompt 已由视觉项目 Prompt Compiler 分层编译
+   * （图片角色 / 人物替换 / 区域 / 媒介 / 服装 / 维度 / 模板保留全部合同层已入 prompt）。
+   * true 时 carryApply 不再前置图片使用说明（禁止双份指令）。
+   */
+  promptCompiled?: boolean;
+  /** V4.1 Region V1：区域合成 mask PNG 路径（真实进入 create_task.mask_image → edits `mask` 部件）。 */
+  maskImagePath?: string;
+  /** V4.1 Visual Project：来源项目 id / 修订（随任务冻结，History 项目来源段）。 */
+  projectId?: string;
+  projectName?: string;
+  projectRevision?: number;
   /** Prompt 已在视觉理解链路优化过：ImageStudio 提交时冻结快照，禁止再次自动优化 */
   optimization?: {
     providerName?: string;

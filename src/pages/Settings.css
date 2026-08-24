@@ -1674,3 +1674,188 @@
 .model-config-dialog .settings-subsection-title {
   margin-top: 14px;
 }
+
+/* ============ AI 模型使用（V4.1 aiRouting） ============ */
+
+.ai-usage-card {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.ai-usage-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ai-usage-head .settings-section-desc {
+  margin: 4px 0 0;
+}
+
+.ai-usage-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ai-usage-group-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.ai-role-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: var(--bg-card);
+  flex-wrap: wrap;
+}
+
+.ai-role-row.expanded {
+  border-color: var(--accent-primary);
+}
+
+.ai-role-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  flex: 1 1 320px;
+}
+
+.ai-role-info {
+  min-width: 0;
+}
+
+.ai-role-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.ai-role-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.ai-role-model {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+
+.ai-role-model-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 320px;
+}
+
+.ai-role-model-text {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ai-role-model-name .billing-badge {
+  flex-shrink: 0;
+}
+
+.ai-role-source {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.ai-role-source.is-fallback {
+  color: var(--badge-warn-text);
+}
+
+.ai-role-source.is-error {
+  color: var(--text-error);
+  font-size: 12px;
+  white-space: normal;
+}
+
+.ai-role-used {
+  font-size: 12px;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+.ai-role-fallback-note {
+  font-size: 12px;
+  color: var(--badge-warn-text);
+  background: var(--badge-warn-bg);
+  border-radius: 6px;
+  padding: 4px 8px;
+  margin: 4px 0 0;
+}
+
+.ai-role-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.ai-role-fixed-note {
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+.ai-role-config {
+  width: 100%;
+  border-top: 1px dashed var(--border-default);
+  margin-top: 8px;
+  padding-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ai-role-config-radios {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.ai-role-radio {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.ai-role-radio input[type='radio'] {
+  accent-color: var(--accent-primary);
+}
+
+.ai-role-manual-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ai-role-config-actions {
+  display: flex;
+  gap: 8px;
+}

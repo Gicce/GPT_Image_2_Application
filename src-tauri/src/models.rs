@@ -101,6 +101,32 @@ impl Default for Settings {
     }
 }
 
+/// 子任务失败结构化快照（V4.1 canonical failure model）。
+/// Rust 在错误信息最完整的时刻写入；TS 只负责 category → 文案映射。
+/// 旧 tasks.json 无此字段（serde default 兼容，TS 回落解析 error 字符串）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubTaskErrorDetail {
+    /// 失败发生时间（本地 rfc3339）。
+    pub timestamp: String,
+    /// 失败类别（与 TS FailureCategory 一致：timeout / upstream_5xx / rate_limit /
+    /// auth / insufficient_balance / invalid_request / content_rejected / network /
+    /// local_file / cancelled / unknown）。
+    pub category: String,
+    /// 该类失败是否建议重试。
+    pub retryable: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http_status: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_code: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<String>,
+    /// 上游 body 里的原始 primary 文案（rawMessage）。
+    #[serde(default)]
+    pub message: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubTask {
     pub index: usize,
@@ -115,6 +141,12 @@ pub struct SubTask {
     /// 历史 attempt 失败原因（最近在后，最多保留 5 条；成功后 error 清空但历史保留）
     #[serde(default)]
     pub attempt_errors: Vec<String>,
+    /// 最近一次失败的结构化快照（新数据；旧任务缺失 = 仅 string error）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_detail: Option<SubTaskErrorDetail>,
+    /// 历史 attempt 的结构化快照（与 attempt_errors 尾部对齐；旧任务缺失）
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attempt_details: Vec<SubTaskErrorDetail>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -257,6 +289,10 @@ pub struct Task {
     pub task_type: String,
     #[serde(default)]
     pub source_images: Vec<String>,
+    /// 区域替换 mask（视觉项目 Region V1；edit 请求 multipart `mask` 部件的真实
+    /// 数据源；PNG 本地路径，普通任务 / 文生图任务为 None）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mask_image: Option<String>,
     #[serde(default)]
     pub execution_mode: String,
     #[serde(default)]
@@ -290,6 +326,10 @@ pub struct Task {
     /// 动作白膜批元数据（cy-video-studio Pose Batch；普通任务为 None，旧数据缺省兼容）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pose_batch: Option<PoseBatchMeta>,
+    /// 生成溯源快照（视觉复刻等链路创建时冻结：用户原话 / 修改方案 / 参考图角色 /
+    /// 服装策略 / 模型记录；schema 由前端 TS 单一维护，此处 JSON 透传，旧数据缺省兼容）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -413,6 +453,10 @@ pub struct CreateTaskParams {
     pub task_type: String,
     #[serde(default)]
     pub source_images: Vec<String>,
+    /// 区域替换 mask（视觉项目 Region V1；edit 请求 multipart `mask` 部件的真实
+    /// 数据源；PNG 本地路径，普通任务 / 文生图任务为 None）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mask_image: Option<String>,
     #[serde(default)]
     pub execution_mode: String,
     #[serde(default)]
@@ -429,6 +473,9 @@ pub struct CreateTaskParams {
     pub source_task_id: Option<String>,
     #[serde(default)]
     pub source_task_kind: String,
+    /// 生成溯源快照（前端冻结后透传落库，不在此处解释 schema）
+    #[serde(default)]
+    pub provenance: Option<serde_json::Value>,
 }
 
 /// 视觉理解任务的阶段性状态更新（前端驱动；task_runner 不参与执行）。

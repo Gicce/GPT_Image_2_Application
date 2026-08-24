@@ -6,6 +6,7 @@ import {
   clearPersonReplacement,
   clothingPolicyInstruction,
   describePerson,
+  dimensionDirectiveInstruction,
   hasStructuredIntent,
   isModificationDraftEmpty,
   migrateModificationDraft,
@@ -118,10 +119,50 @@ describe('合成优化器指令（自由文本 + 结构化意图合并，两者�
     expect(instruction.trim()).not.toBe('');
   });
 
-  it('风格维度只有一个槽位：换值靠覆盖（编译层不产生重复 style 行）', () => {
+  it('风格维度只有一个槽位：换值靠覆盖（重点修改维度行不产生重复 style 项）', () => {
     const draft = toggleModificationDimension(empty(), 'style');
     const instruction = buildModificationInstruction(draft);
-    expect(instruction.match(/风格/g)?.length).toBe(1);
+    const dimLine = instruction.match(/重点修改维度：([^\n]*)/)?.[1] ?? '';
+    expect(dimLine).toBe('风格');
+  });
+
+  it('启用「修改动作」→ must-change 指令（未写具体动作也绝不退化成保持原样）', () => {
+    const draft = toggleModificationDimension(empty(), 'pose');
+    const instruction = buildModificationInstruction(draft);
+    expect(instruction).toContain('动作修改（已启用）');
+    expect(instruction).toContain('必须生成与原图明确不同的新动作');
+    expect(instruction).toContain('禁止沿用原图姿势');
+  });
+
+  it('启用「修改背景」→ 背景内容必须变化但保持画面风格', () => {
+    const draft = toggleModificationDimension(empty(), 'scene');
+    const instruction = buildModificationInstruction(draft);
+    expect(instruction).toContain('背景修改（已启用）');
+    expect(instruction).toContain('背景内容不再照搬原图');
+    expect(instruction).toContain('保持原图整体画面风格与动漫氛围');
+  });
+
+  it('三维同时启用（人物 / 动作 / 背景）→ 三类修改语义同时进入指令', () => {
+    let draft = empty();
+    for (const key of ['subject', 'pose', 'scene'] as const) {
+      draft = toggleModificationDimension(draft, key);
+    }
+    draft = setPersonReplacement(draft, { source: 'gallery', assetId: 'a1', path: 'D:/p.png', label: 'p.png' });
+    draft = { ...draft, clothingPolicy: 'use_subject_reference' };
+    const instruction = buildModificationInstruction(draft, { template: { label: '原图' } });
+    expect(instruction).toContain('人物替换（强制条件）：使用图片库人物参考图（p.png）');
+    expect(instruction).toContain('动作修改（已启用）');
+    expect(instruction).toContain('背景修改（已启用）');
+    expect(instruction).toContain('服装处理：使用人物参考图中的服装');
+    // 模板行不得再写死「仅替换主体人物」——动作 / 背景已开放修改
+    expect(instruction).toContain('已启用的修改维度（动作、背景）按各自修改指令执行');
+    expect(instruction).not.toContain('仅替换主体人物，其余视觉结构尽量沿用模板图');
+  });
+
+  it('纯文本主体修改（无人物参考）→ subject 也有 must-change 语义', () => {
+    const draft = toggleModificationDimension(empty(), 'subject');
+    const instruction = buildModificationInstruction(draft);
+    expect(instruction).toContain('人物修改（已启用）');
   });
 });
 
@@ -156,9 +197,10 @@ describe('人物替换五案例（§52：subject / clothing 语义分离的指�
       { source: 'gallery', assetId: 'a1', path: 'D:/g.png', label: '银发少女.png' },
       'preserve_original',
     );
-    expect(instruction).toContain('人物替换：使用图片库人物参考图（银发少女.png）');
-    expect(instruction).toContain('身份、脸部、发型、体型');
-    expect(instruction).toContain('服装处理：严格保留原图服装');
+    expect(instruction).toContain('人物替换（强制条件）：使用图片库人物参考图（银发少女.png）');
+    expect(instruction).toContain('不得保留原图（画面模板）原人物的脸部身份或面部特征');
+    expect(instruction).toContain('服装处理：严格保留原图（画面模板）服装');
+    expect(instruction).toContain('保留服装 ≠ 保留人物');
   });
 
   it('Case 5 人物参考图 + 使用参考人物服装 → use_subject_reference 指令显式', () => {
@@ -167,8 +209,89 @@ describe('人物替换五案例（§52：subject / clothing 语义分离的指�
       { source: 'local', path: 'D:/local/ref.png' },
       'use_subject_reference',
     );
-    expect(instruction).toContain('人物替换：使用本地导入人物参考图');
+    expect(instruction).toContain('人物替换（强制条件）：使用本地导入人物参考图');
     expect(instruction).toContain('服装处理：使用人物参考图中的服装');
+  });
+
+  it('双图工作流指令（V4.0.9）：人物 + 模板上下文 → 画面模板行显式（图二风格 + 图三人）', () => {
+    let draft: ModificationDraft = { ...empty(), freeText: '把 @原图 的人物换成 @人物参考' };
+    draft = setPersonReplacement(draft, { source: 'gallery', assetId: 'a2', path: 'D:/person.png', label: '人物参考.png' });
+    draft = {
+      ...draft,
+      mentions: [
+        { id: 'm1', path: 'D:/source.png', label: '原图', token: '原图', role: 'source_reference' },
+        { id: 'm2', assetId: 'a2', path: 'D:/person.png', label: '人物参考', token: '人物参考', role: 'person_replacement_reference' },
+      ],
+    };
+    const instruction = buildModificationInstruction(draft, { template: { label: '原图' } });
+    expect(instruction).toContain('把 @原图 的人物换成 @人物参考');
+    expect(instruction).toContain('图片引用：@原图=随消息附上的对应图片（原图）');
+    expect(instruction).toContain('人物替换（强制条件）：使用图片库人物参考图（人物参考.png）');
+    expect(instruction).toContain('画面模板：以「原图」为画面模板');
+    expect(instruction).toContain('延续其画风、视觉氛围、构图与背景关系');
+    expect(instruction).toContain('服装处理：严格保留原图（画面模板）服装');
+  });
+
+  it('面板为空但文本 @引用人物 → 人物来源 mention 指令行（不与面板冲突）', () => {
+    const draft: ModificationDraft = {
+      ...empty(),
+      freeText: '把 @图二 的人物换成 @图三',
+      mentions: [
+        { id: 'm1', path: 'D:/fig2.png', label: '图二', token: '图二', role: 'source_reference' },
+        { id: 'm2', path: 'D:/fig3.png', label: '图三', token: '图三', role: 'person_replacement_reference' },
+      ],
+    };
+    const instruction = buildModificationInstruction(draft, {
+      template: { label: '图二' },
+      personMention: { label: '图三' },
+    });
+    expect(instruction).toContain('人物来源=@图三（随消息附上的图片）');
+    expect(instruction).toContain('画面模板：以「图二」为画面模板');
+  });
+
+  it('personReplacementWithReplicationBoostStillUsesPersonReference：复刻强度不得覆盖人物替换', () => {
+    let draft: ModificationDraft = setPersonReplacement(
+      empty(),
+      { source: 'gallery', assetId: 'a1', path: 'D:/p.png', label: 'p.png' },
+    );
+    draft = toggleReplicationBoost(draft);
+    const instruction = buildModificationInstruction(draft);
+    // 复刻强度行存在且显式限定「不作用于人物身份」
+    expect(instruction).toContain('复刻强度');
+    expect(instruction).toContain('不作用于人物身份——人物替换不受复刻强度影响');
+    // 强替换语义同在（不被复刻强度弱化）
+    expect(instruction).toContain('人物替换（强制条件）');
+    expect(instruction).toContain('不得保留原图（画面模板）原人物的脸部身份或面部特征');
+  });
+
+  it('forcedPersonActionBackgroundAllReachCompiledPrompt：人物 / 动作 / 背景显式启用全部进入指令', () => {
+    let draft: ModificationDraft = empty();
+    for (const key of ['subject', 'pose', 'scene'] as const) {
+      draft = toggleModificationDimension(draft, key);
+    }
+    draft = setPersonReplacement(draft, { source: 'local', path: 'D:/ref.png' });
+    const instruction = buildModificationInstruction(draft);
+    expect(draft.activeDimensions).toEqual(expect.arrayContaining(['subject', 'pose', 'scene']));
+    expect(instruction).toContain('人物替换（强制条件）');
+    expect(instruction).toContain('动作修改（已启用）');
+    expect(instruction).toContain('必须生成与原图明确不同的新动作');
+    expect(instruction).toContain('背景修改（已启用）');
+    expect(instruction).toContain('背景内容不再照搬原图');
+    // 动作 / 背景进「重点修改维度」行；subject 由人物替换块表达（不重复列维度）
+    expect(instruction).toContain('重点修改维度：动作、背景');
+    expect(draft.activeDimensions).toEqual(['subject', 'pose', 'scene']);
+  });
+
+  it('孤儿 mention（文本已删除 token）不进入指令绑定行', () => {
+    const draft: ModificationDraft = {
+      ...empty(),
+      freeText: '只改成夜景',
+      mentions: [
+        { id: 'm1', path: 'D:/fig2.png', label: '图二', token: '图二', role: 'source_reference' },
+      ],
+    };
+    const instruction = buildModificationInstruction(draft);
+    expect(instruction).not.toContain('图片引用：');
   });
 
   it('文字描述人物 → 无图片参考，指令走描述行', () => {
@@ -191,8 +314,24 @@ describe('人物替换五案例（§52：subject / clothing 语义分离的指�
   it('describePerson / clothingPolicyInstruction 边界', () => {
     expect(describePerson({ source: 'description', description: ' 描述 ' })).toBe('描述');
     expect(describePerson({ source: 'local', path: 'D:/a/b/人物.png' })).toBe('人物.png');
-    expect(clothingPolicyInstruction('preserve_original', '', false)).toContain('严格保留原图服装');
+    expect(clothingPolicyInstruction('preserve_original', '', false)).toContain('严格保留原图（画面模板）服装');
     expect(clothingPolicyInstruction('custom', '', true)).toContain('由 AI 按整体意图自洽设计');
+  });
+
+  it('服装策略 = 人物服装 → 指令包含服装继承强约束（不仅换脸）', () => {
+    const instruction = clothingPolicyInstruction('use_subject_reference', '', true);
+    expect(instruction).toContain('使用人物参考图中的服装');
+    expect(instruction).toContain('不仅替换脸部');
+    expect(instruction).toContain('继承该人物的服装与造型特征');
+  });
+
+  it('dimensionDirectiveInstruction：subject 无指令（由人物替换块表达），其余维度均有 must-change 行', () => {
+    expect(dimensionDirectiveInstruction('subject')).toBeNull();
+    for (const key of ['pose', 'scene', 'camera', 'style', 'clothing'] as const) {
+      const directive = dimensionDirectiveInstruction(key);
+      expect(directive).toBeTruthy();
+      expect(directive).toContain('（已启用）');
+    }
   });
 
   it('提高复刻度 → 复刻强度指令行', () => {

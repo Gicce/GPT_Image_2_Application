@@ -5,10 +5,13 @@ mod models;
 mod pose_batch;
 mod reconciliation;
 mod storage;
+mod task_failure;
 mod task_runner;
 mod video_bridge;
 mod video_task_bridge;
 mod vision;
+mod vision_normalize;
+mod visual_projects;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -118,6 +121,12 @@ pub fn run() {
             commands::retry_task,
             commands::retry_task_subtasks,
             commands::create_batch_redo_task,
+            visual_projects::list_visual_projects,
+            visual_projects::load_visual_project,
+            visual_projects::save_visual_project,
+            visual_projects::rename_visual_project,
+            visual_projects::delete_visual_project,
+            visual_projects::save_visual_project_mask,
             vision::vision_analyze_image,
             vision::vision_compare_images,
             vision::compute_color_similarity,

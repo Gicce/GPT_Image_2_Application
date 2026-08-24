@@ -1,5 +1,168 @@
 # cyimagepro-ui CHANGELOG
 
+## Skill 14.0.0 / UI System 1.2.0（2026-08-24，V4.2 CY Credits Billing）
+
+规则层（无 Token 变更，UI System 保持 1.2.0）：
+
+- **patterns.md 新增 §21-§24**：Credits Billing / Trial Entitlement / Generation Quote /
+  Wallet-Ledger / Pricing Transparency 五大计费交互模式（V4.2 铁律：生成前报价确认、
+  客户端禁止自行计价、三类点数钱包、采购成本不出现在用户界面）。
+
+---
+
+## Skill 13.0.0 / UI System 1.2.0（2026-08-24，V4.1 Task Queue Reliability & Failure UX）
+
+规则层（无 Token 变更，UI System 保持 1.2.0）：
+
+- **SKILL.md 新增最高优先级规则 21（Task Failure UX 铁律）**：
+  - Friendly error summary MUST be separated from technical diagnostics（raw error 进「技术详情」折叠区且必须保留）。
+  - TaskQueue is operational status UI; History is full audit UI（禁止第二套 Task Detail，深链 openTaskDetailFromQueue）。
+  - Terminal tasks MUST expose a terminal timestamp（resolveTaskFinishedAt 唯一入口，缺失显示「—」，禁 Date.now() 伪值）。
+  - Native browser/system alerts MUST NOT be used for task retry feedback（一律应用内 Toast）。
+  - 状态聚合唯一入口 deriveTaskState（sub_tasks 事实派生六态）；失败分类唯一入口 classifyGenerationFailure（canonical failure model）。
+- **patterns.md 新增 §20 Task Failure UX Pattern**（8 条：分层呈现 / 分类唯一入口 / 状态派生 / 队列与历史职责 / 终态时间 / 终态按钮契约 / Toast 重试 / 失败 slot 精确重试与 attempt 历史）。
+- **copy.md 新增 §13 任务失败 / 重试 / 时间**：生成中（替代执行中）/ 部分完成 / 开始·结束·耗时 / 十一类失败标题与建议 / 重试 Toast 固定文案 / 技术详情字段名与 Endpoint 脱敏格式。
+- **layouts.md §6**：补 TaskQueue 任务卡 V4.1 结构（时间块 / 失败卡 / 终态按钮 / 长 Prompt 折叠）。
+- **components.md**：新增 taskState.ts / taskFailure.ts / taskNavigation.ts 三个唯一入口条目；subtaskError.ts 已删除（禁止复活第二套分类）。
+- SKILL.md：版本 12.0.0 → 13.0.0（规则变更）。
+
+配套代码（V4.1，未发版）：
+
+- Rust：`task_failure.rs`（canonical 分类 + request_id 提取 + cargo tests）；`SubTask.error_detail / attempt_details` 结构化快照（serde default 兼容旧 tasks.json）；`send_with_transient_retry` 返回结构化 `SendFailure`；reconciliation reset 清 error_detail；attempt 历史双轨（errors + details，尾部对齐）。
+- TS：`utils/taskState.ts`（deriveTaskState 六态 + resolveTaskFinishedAt + taskDurationMs）；`utils/taskFailure.ts`（classifyGenerationFailure + describeEndpoint + attemptFailureHistory）；`utils/taskNavigation.ts`（History 深链）；TaskQueue 重构（Toast 重试 / 终态按钮 / 时间块 / 失败卡 / 接口脱敏）；History（派生态 + 结束时间/耗时 + 失败友好标题 + 深链选中）；EditTaskModal 去 alert；App.tsx focusTaskId 仅 queue 页写队列键。
+- 测试：vitest 新增 7 套（taskTerminalState / taskFinishedAt / taskFailureClassifier / taskFailurePresentation / taskRetryInteraction / taskQueueHistoryNavigation / taskRetryAlertGuard）。
+
+## Skill 12.0.0 / UI System 1.2.0（2026-08-24，V4.1 Workbench V2 视觉项目工作台）
+
+规则层（无 Token 变更，UI System 保持 1.2.0）：
+
+- **SKILL.md 新增最高优先级规则 16–20**：
+  - **16. Creative Workflow MUST use Adaptive Workbench Layout**（`.vision-workbench` 双栏断点体系；禁窄容器回归；CTA 唯一渲染处 = Context Rail）。
+  - **17. Visual Project Pattern**（Template=baseline / Modification=overlay；修订白名单；恢复绝不重分析；Effective Plan 唯一合成视图；生成硬门禁只认语义错误）。
+  - **18. Identity != RenderingMode**（人物参考「是谁」≠ 媒介「怎么画」；风格修改不改写层模式；混合媒介分层铁律）。
+  - **19. Region Editing Contract**（坐标归一化 0..1；mask 文件路径引用；全屏编辑器；语义通道写区域）。
+  - **20. Prompt Optimizer 无合同裁决权**（HARD CONTRACT values are immutable；Compiler 分层编译；promptCompiled 禁双份指令）。
+- **visual-workflow.md 新增 §7–§10**：Visual Project Pattern / Identity vs RenderingMode / Region Editing Contract / Optimizer 权限收缩与分层编译（含编译块文案锚点）。
+- **layouts.md 新增 §9 Visual Project Workbench**（Golden Sample 结构 + 断点规则 + 源码契约测试索引）。
+- SKILL.md：版本 11.0.0 → 12.0.0（规则变更）。
+
+配套代码（V4.1 Workbench V2，未发版）：
+
+- 新模块 `src/features/vision/project/`（types/project/personContract/rendering/region/template/validators/effectivePlan/promptCompiler/optimizerContract/migrate + __tests__）；`src/store/useVisualProjectStore.ts`；`src/features/vision/region/`（RegionEditorPanel/RegionCanvasEditor/regionMask）；`ContextRail.tsx` / `ProjectHeaderBar.tsx`。
+- Rust：`visual_projects` 表 + `visual_projects.rs` 六命令（list/load/save/rename/delete/save_mask；PNG 魔数 + 路径穿越防护）；`Task.mask_image` / `CreateTaskParams.mask_image` 全构造点透传；`edit_single_image` multipart `mask` 部件（文件缺失本地硬失败）。
+- `VisionUnderstanding.tsx` 工作台化（ProjectHeaderBar + workbench 双栏 + Region 面板 + 换图确认 + 硬合同行进优化器）；`PersonReplacementPanel` V2 合同控制区（强度/范围/身份应用/区域绑定）；`promptOptimizer.ts` 规则 0/6c/6d + 【硬性合同】块；`carryApply.ts` promptCompiled 分支；History 项目来源/区域/媒介段 + mask 缩略图。
+- 测试：vitest 1013 → 1096（project 域 63 + store 8 + 编译器 9 + 布局契约 7 + History 契约 8 等）；cargo 205 → 207。
+
+## Skill 11.0.0 / UI System 1.2.0（2026-08-24，V4.0.9 任务详情语义重构 + 服装策略状态冲突修复）
+
+规则层（无 Token 变更，UI System 保持 1.2.0）：
+
+- **SKILL.md 新增最高优先级规则 15（三层 Provenance 与服装状态不变量铁律）**：
+  - **User instruction, structured modification plan, and final execution prompt are three distinct provenance layers and MUST NOT be conflated.**（用户原话 / 修改方案 / 最终执行 Prompt 三层溯源严禁混淆）
+  - **clothingPolicy=preserve_original and clothing=modified is an invalid semantic state.**（`clothing ∈ activeDimensions ⇔ clothingPolicy ≠ 'preserve_original'`）
+- **visual-workflow.md §1d**：服装状态不变量完整落地规则——唯一归一入口 `normalizeModificationState` 覆盖全部写入路径（toggle / setClothingPolicy / clearPersonReplacement / 持久化恢复 / store setter 收口）；Chip 点击自动切换策略（有人物参考→人物服装，无→custom 等描述）；选「原图服装」自动取消维度、选「人物服装 / 自定义」自动启用；custom 空描述 `clothingReadinessError` 拦截优化与生成；「可修改 N」计数以 activeDimensions 为单一事实源；优化器系统提示词规则 6 三态硬性对应。
+- **visual-workflow.md 新增 §1h Generation Provenance Snapshot**：快照字段（userInstruction（@token→@label）+ userInstructionRaw + mentionBindings / modificationIntent / imageRoles / models）；冻结链（generateFromPlan → carry → VisionCarryDraft → CreateTaskParams → Rust Task.provenance JSON 透传 + task_source='vision_recreation'）；历史详情四层结构 + 小节序号不跳号。
+- **patterns.md §15**：新增服装不变量与生成溯源两条要点（含旧任务兼容：无快照如实「未保存」、参考图只编号不猜角色）。
+- **components.md**：modificationIntent.ts 条目补 normalizeModificationState / setClothingPolicy / clothingReadinessError；新增 generationProvenance.ts 条目。
+- **copy.md 新增 §8b 任务详情四层结构**：用户要求 / 本次修改方案 / 参考图片（画面模板 / 人物参考 / 背景参考 / 风格参考 / 参考图）/ 最终执行 Prompt（正向）/ 模型执行记录 / 任务来源：视觉复刻，及各禁止变体。
+- SKILL.md：版本 10.0.0 → 11.0.0（规则变更）。
+
+配套代码（V4.0.9 任务详情语义重构）：
+
+- **新模块 `src/features/vision/generationProvenance.ts`**：`buildGenerationProvenance`（生成时刻冻结快照）、`renderUserInstruction`（@token→@label 人类可读）、`describeProvenanceModificationPlan`（历史「本次修改方案」结构化行）、`describeClothingPolicy`、`PROVENANCE_ROLE_LABELS`。
+- **modificationIntent.ts**：新增 `normalizeModificationState`（biconditional 不变量）/ `setClothingPolicy`（radiogroup 唯一写入口）/ `clothingReadinessError`（空描述守卫）/ `MODIFICATION_DIMENSION_LABELS` 导出；`toggleModificationDimension` clothing 分支自动切换策略、取消回到原图服装；`clearPersonReplacement` 保留显式服装修改（降级 custom）；`migrateModificationDraft` 恢复即归一（矛盾态 legacy 数据自动修复）；服装修改指令行改为「必须真实修改并列入 changed_dimensions」。
+- **useVisionWorkspaceStore.setModificationDraft**：最终收口 normalize（任何写入路径不可能留下矛盾态）。
+- **promptOptimizer.ts**：系统提示词规则 6 增加「服装处理指令 ↔ changed_dimensions 硬性对应」三态契约。
+- **VisionUnderstanding.tsx**：`onClothingPolicyChange` 走 `setClothingPolicy`；优化 / 生成入口空自定义守卫；维度计数以 activeDimensions 为准（Chip 已启用即「可修改」）；`generateFromPlan` 构建并携带 provenance 快照。
+- **recreationPlan.ts / useDraftStore.ts**：carry 增加 `provenance` 字段透传。
+- **ImageStudio.tsx**：视觉复刻链路 `task_source='vision_recreation'`（不再「手动」fallback）+ provenance 提交透传。
+- **Rust**：`Task.provenance` / `CreateTaskParams.provenance`（`Option<serde_json::Value>`，serde default 兼容旧 tasks.json）；`create_task` / 整批重提 / 批量重做透传保留（6 处 Task 构造点同步）。
+- **types/index.ts**：`GenerationProvenanceSnapshot` 数据契约（自包含无反向依赖）；Task / CreateTaskParams 挂载 + task_source 联合类型扩 'vision_recreation'。
+- **History.tsx / History.css**：任务详情重构为 ① 任务概览 ② 用户要求（快照 userInstruction；旧视觉任务明示未保存，禁止 final_prompt 伪造）③ 本次修改方案（结构化行）④ 参考图片（角色标签；旧任务「参考图 N」）⑤ 最终执行 Prompt（final_prompt 快照 + 复刻原始 Prompt 折叠；无负面时不再重复展示拼接版）⑥ 模型执行记录（生成时快照，Prompt 优化回落 prompt_optimization 字段）⑦ 生成结果；参考图 / 结果图 / 方案抽屉结果图全部点击进全局 ImageViewer（结果图携带实际提交 Prompt）；小节序号动态取号不跳号。
+- **recreationCopy.ts / ClothingSourceControl.tsx**：三来源副文案标注维度自动启用 / 取消。
+- 测试：vitest 934 → 964（新增 clothingInvariant 16：Case A–D + 持久化归一 + 四处一致；generationProvenance 14：快照冻结 / token 解析 / 角色去重 / carry 透传 / 方案行 / 旧任务空快照；修正 useVisionWorkspaceStore 1 例矛盾态夹具）；cargo 205（provenance 字段全构造点编译验证）；tsc + build 全绿。
+
+## Skill 10.0.0 / UI System 1.2.0（2026-08-24，V4.1 视觉链路三轮修复：mention 对齐 / 维度强制生效 / 先摘要后全文）
+
+规则层（无 Token 变更，UI System 保持 1.2.0）：
+
+- **visual-workflow.md §1g**：新增**度量对齐铁律**——textarea 必须 `font-family: inherit`（UA 默认 Arial 与页面字体中文字宽不同 → 逐行漂移重叠）；token pill 禁止 font-weight / padding；换行属性只用 pre-wrap + overflow-wrap；token 16 字上限 + 省略号；chip 显示 `@{label}` 非 token。
+- **visual-workflow.md §3**：新增**（V4.1 铁律）启用 = 必须真实修改**——Chip 启用维度三层强制（逐维度 must-change 指令行 + forcedDimensions 方案行标记 + 系统提示词规则 2a 不受「禁止大面积放开」约束）；user_override 锁定仍最高优先；人物替换模板行按已启用维度动态表述。
+- **visual-workflow.md §4**：新增**先摘要、后全文**——FinalPromptEditor 顶部「本次重点修改」结构化摘要（buildPromptChangeSummary，人物/动作/背景/服装分组 + 待优化/已修改状态）；Diff Tab 底部「本次关键变化」。
+- **visual-workflow.md §1c**：新增**真实大图预览**（usePersonThumb 两级加载 + contain 不裁切，禁止 4:3 cover）与**「当前规则」动态 modify 行**（activeDimensions 增补修改行、保留行剔除已启用维度）。
+- SKILL.md：版本 9.0.0 → 10.0.0（规则变更）。
+
+配套代码（V4.1 未升版本轮次）：
+
+- `modificationIntent.ts`：新增 `dimensionDirectiveInstruction`（pose/scene/camera/style/clothing must-change 行）；`buildModificationInstruction` 输出逐维度指令 + 纯文本 subject 行；人物替换行强化「整体替换 + 不保留旧人物长相」；`clothingPolicyInstruction` 人物服装分支强化「不仅替换脸部 + 继承服装造型」；模板行按已启用维度动态表述。
+- `promptOptimizer.ts`：`VisionRecreationOptimizeInput.forcedDimensions`；`buildVisionRecreationUserContent` 方案行三态（user_override / 用户显式要求修改 / 自动）；系统提示词规则 2a。
+- 新模块 `src/features/vision/promptChangeSummary.ts`：结构化修改摘要纯函数（指令行 + 维度 Diff 双源派生，planned/applied 两态，一句话截断）。
+- `usePersonThumb.ts`：两级加载（缩略图 → readImageData 原图，防乱序覆盖）；`replacementRules.ts`：modify 行 + 保留行动态；`imageMention.ts`：token 16 字截断。
+- `VisionUnderstanding.tsx/.css`：forcedDimensions 接线、修改摘要 UI、mention 字体对齐修复、人物卡 contain 大图。
+- 测试：vitest 916 → 934（新增 promptChangeSummary 7、dimensionDirective / forcedDimensions / modify 行 / token 截断等）；cargo 205 无 Rust 变更；tsc + build 全绿。
+
+## Skill 9.0.0 / UI System 1.2.0（2026-08-24，V4.0.9 @图片引用 + 人物替换双图角色语义）
+
+规则层（无 Token 变更，UI System 保持 1.2.0）：
+
+- **visual-workflow.md**：新增 **§1g Image Mention（@图片引用）强制契约**——In Vision Workflow, @image mentions MUST resolve from current task/conversation images first（候选唯一来源 buildVisionContextImages，当前任务隔离）；mention 是真实图片引用（token 在 freeText + mentions 侧车表绑定 assetId/path/role）；原生 textarea + 背景高亮层（IME 安全，禁止富文本编辑器）；弹层纯视图不 dirty；**When a task involves "replace the person in image A with the person from image B", the system must preserve the semantic roles of both images**（A = template/style/composition reference，B = person replacement reference）；优化器清单 ↔ parts 一一对应。§1c 升级为**人物替换业务卡**（**Person Replacement is a first-class business action, not a weak advanced form section**：👤 卡头 + 已启用徽章 + A 区画面模板 / B 区替换人物双区）；§1d 服装口径升级「沿用模板图服装」；工作流全链补 @引用与多图 multimodal。
+- **patterns.md**：新增 **§19 Image Mention Pattern**（候选池 / 真实引用 / IME 安全 / 纯视图不 dirty / 双图角色语义 / 优化器双图 payload 六条规则）。
+- **components.md**：新增 IntentMentionInput / imageMention.ts 条目；PersonReplacementPanel 更新为业务卡双区描述；modificationIntent.ts 补 mentions / extraImageRefs。
+- **copy.md**：§8a 扩充——人物替换业务卡（已启用徽章）、画面模板 / 替换人物（A/B 区）、更换模板图、沿用模板图服装（口径含模板图）、引用图片 / 当前任务（弹层）、已引用图片（chips）、已识别图片角色 / 应用到人物替换（建议条）、池角色标签（主参考图 / 人物参考 / 生成结果 N / 图片引用，禁止无语义「图1 / 图2」编号）。
+- SKILL.md：版本 8.0.0 → 9.0.0（规则变更）。
+
+配套代码（V4.0.9 Image Mention + Person Replacement Dual-Role）：
+
+- **新模块 `src/features/vision/imageMention.ts`**：图片角色语义（template_reference / person_replacement_reference / source_reference / generated_result_reference / background_reference / generic_reference + 中文标签与用途说明）；`buildVisionContextImages` 当前任务图片池唯一 selector（人物参考置顶 → 主参考图 → 图库附加 → 生成结果；路径归一去重 + 角色优先级）；mention token 插入 / 定位 / 清理（`insertMentionToken` / `findMentionTokens` / `pruneMentions` / `removeMentionToken` / `detectMentionTrigger` 邮箱防误触）；`resolveImageMentionRoles` 双图角色解析（面板显式 > 明确 Mention > 自然语言推断；动词前后定位 + 像/参考句式 + 「图N」文件名 / 池序号匹配）。
+- **新组件 `src/features/vision/IntentMentionInput.tsx`**：原生 textarea + `.vision-mention-backdrop` 背景高亮层（同度量对齐 + 滚动同步，token pill 无额外 padding）+ @ 弹层（缩略图 + 名称 + 用途 + 角色标签，键盘 ↑↓/Enter/Esc，isComposing 防输入法冲突）+ 引用 chips 行（hover 缩略图 / 点击进全局 ImageViewer / × 移除）+ 图库回填一次消费；弹层为纯视图状态（组件不 import workspace store）。
+- **modificationIntent.ts**：ModificationDraft 新增 `mentions` / `extraImageRefs`（持久化迁移 + 合法化去重）；`buildModificationInstruction(draft, context?)` 新增图片引用绑定行、双图工作流行（「画面模板：以「X」为画面模板——延续其画风…」）、面板为空时人物来源 mention 行；服装指令口径「严格保留原图（画面模板）服装」。
+- **promptOptimizer.ts**：`imageReferences` 输入（+ `OptimizerImageReference` / `describeOptimizerImageReference` / `collectOptimizerImageReferences` 去重排序 / `buildImageReferencesBlock` 清单）；多模态装配改为逐图 readImageData、清单 ↔ parts 一一对应（失败图不进清单不占序号）；系统提示词新增规则 6a（模板图风格延续 + 人物图仅身份特征 + 不得把模板图风格替换成人物参考图的写实风格）；personReferencePath 旧参数并入去重。
+- **PersonReplacementPanel.tsx**：业务卡重构——👤 卡头（已启用徽章 + 业务说明 + 移除）+ A 区画面模板（当前任务参考图缩略图 / 当前使用：@原图 / 更换模板图（tooltip 声明会重置分析））+ B 区替换人物（三来源 tab）+ C 区服装（模板图口径副文案）。
+- **VisionUnderstanding.tsx**：当前任务图片池接线（generatedResults 从本视觉任务 source_task_id 过滤）；IntentMentionInput 替换裸 textarea；「已识别图片角色」建议条（面板为空才出现，应用走 onPersonChange 正常语义通道，忽略为视图）；图库 purpose='mention'（加入 extraImageRefs + 一次消费回填）；优化调用携带 buildOptimizerImageReferences（模板 + 人物 + @引用）；commitModificationDraft / optimizeRecreationPrompt 合成指令带双图上下文。
+- **recreationCopy.ts**：ADJUST_INPUT 新 desc/placeholder（输入 @ 引用当前任务图片 + 图二图三示例）；新增 IMAGE_MENTION / MENTION_SUGGESTION 文案块；PERSON_REPLACEMENT 业务卡文案；CLOTHING_POLICY 模板图口径。
+- 测试：vitest 899（新增 imageMention 20：池去重/隔离/置顶、token 插入定位清理/触发边界、双图角色 §10 四例 + 面板优先级 + 无线索不瞎猜；optimizer imageRefs 10：汇总去重排序 / 清单角色标注 / parts 装配契约；页面契约 16：池唯一来源/任务隔离、mention 真实引用/IME/纯视图、业务卡双区、建议条不覆盖、payload 双图）；cargo 205（无 Rust 变更）；tsc + build 全绿。
+
+## Skill 8.0.0 / UI System 1.2.0（2026-08-24，V4.0.9 视觉理解结构化响应容错）
+
+规则层（无 Token 变更，UI System 保持 1.2.0）：
+
+- **visual-workflow.md**：新增 **§0 Vision Response Tolerance & Error Presentation 强制契约**——Internal transport / parser / schema errors MUST NEVER be exposed directly in user-facing UI；Hiding an error message is NOT error recovery（恢复在 Rust 规范化层：normalize → validate → 同一模型最多一次 repair，UI 只做映射拦截）；失败保留旧成功分析；修复过程用户无感（不出现「正在修复 JSON」类文案）；schema 漂移 ≠ 模型不可用（绝不触发无关模型 fallback）；normalization 不触碰 semanticRevision。§1a 规则 4 衔接错误映射层。
+- **patterns.md**：§8 Loading / Error Retry 新增「AI 结构化响应错误的呈现铁律」三条（同上，适用所有 AI 结构化功能）。
+- **copy.md**：§8a 新增**视觉理解失败文案表**（schema_error 固定文案 / 有旧结果前缀 / 兜底 / 未配置）+ 禁止用户可见词清单（invalid type / sequence / serde / JSON / schema / 解析器 / 反序列化）。
+- SKILL.md：版本 7.0.0 → 8.0.0（规则变更）。
+
+配套代码（V4.0.9 Vision Schema Tolerance）：
+
+- 根因：`vision.rs` 严格 `serde_json::from_value::<VisionAnalysis>` 遇到 GLM-5V-Turbo 的合理类型漂移（String 字段返回 array）→ `invalid type: sequence, expected a string` 整次失败，serde 细节直透 UI。
+- **Rust 新模块 `vision_normalize.rs`**：schema 驱动规范化边界（Tolerant External → Canonical Internal）——String-Like（string / array「；」稳定合并 / object 语义 key description·text·value·name·summary·content·label / null→默认）、数组语义字段保持数组（单字符串包装、object 采集字符串叶子）、数字 / 布尔 / 区域（[x,y,w,h] 四元组）归一；逐字段修复报告（`$.subjects[0].clothing expected=… actual=… action=…`）只进 `[VisionSchema]` 开发日志；Canonical DTO 保持严格类型不变。
+- **vision.rs 管线重写**：extract → 解包（analysis/result/comparison）→ normalize → 严格 validate → 内容校验；失败且可修复 → **同一模型最多一次结构修复**（REPAIR_SYSTEM_PROMPT 只修结构不改内容；不切换模型路由）；最终失败 kind=`schema_error` 产品级文案。分析 / 双图比较两条链路同架构；Transport `extract_chat_content` 早已兼容 content string / parts 双形态（本轮补测试锁定）。
+- **Prompt 契约强化**：分析 System Prompt 新增字段类型硬规则（字符串字段禁数组 / 对象）；比较 Prompt 新增分数小数 + 数组规则。
+- **TS `src/features/vision/visionErrors.ts`**：`mapVisionErrorToUserMessage`（kind 映射 + isTechnicalErrorMessage 拦截）；VisionUnderstanding 三处失败分支接入；重新理解失败提示「仍保留上一次分析结果」；高复刻失败同样过映射。
+- 测试：vitest 848（新增 15：visionErrors 映射与拦截 / store 旧分析保护与 semanticRevision 不变 / UI Error Guard 源码断言）；cargo 205（新增 20：规范化矩阵 / Fixture A·B·C / content 双形态 / repair 构建器 / 比较漂移）；tsc + build 全绿。
+
+## Skill 7.0.0 / UI System 1.2.0（2026-08-24，V4.1 AI Model Routing：AI 功能模型路由全链）
+
+规则层（无 Token 变更，UI System 保持 1.2.0）：
+
+- **新增 ai-model-routing.md（§11 专项规范）**：AI Model Role 目录（8 个真实 role，禁止虚构）、resolveModelForRole 唯一解析入口、manual/follow/default/fallback 四来源语义、显式 fallback 规则（vision_prompt_optimizer 可跨类别回退 / image_evaluation 禁止跨类别回退）、@图片多模态上下文契约（vision 能力模型收真实 image_url；纯文本模型只收结构化描述）、设置页「AI 模型使用」布局、运行时可见性、Provenance 快照、测试守卫清单。
+- **SKILL.md**：最高优先级规则新增第 12 条 **AI Model Routing 铁律**——No AI feature may silently inherit an unrelated global model / Every AI model invocation must have an explicit model role / Displayed model MUST equal resolved runtime model；版本 6.0.0 → 7.0.0（规则变更），索引新增 11。
+- **patterns.md**：新增 §1a AI Model Routing 模式（取模型一律 resolveModelForRole；显示=执行；fallback 可见；配置来源四词）。
+- **components.md**：新增 AiModelUsageSettings / resolveModelForRole / useAiModelRoutingStore 条目；ModelPicker 行补 role 能力过滤（roleModelFilter.buildRolePickerGroups）。
+- **copy.md**：新增 **§12 AI 模型使用**——设置页固定名「AI 模型使用」、8 个功能行名、配置来源四词（单独指定 / 跟随「X」 / 系统默认 / 当前回退）、分组名（视觉与复刻 / 图片创作 / AI 智能体）、恢复推荐设置、视觉页优化标签 / 优化中按钮 / Fallback hint·Toast / Provenance 全套固定文案。
+- **visual-workflow.md**：工作流全链补 role=vision_prompt_optimizer 路由与多模态说明；§2 补「（V4.1）优化模型可见性」规则。
+
+配套代码（V4.1 AI Model Routing）：
+
+- **根因修复**：`optimizeVisionRecreation` 原走 `resolveByokConfigForUse('prompt_optimizer')`（只在 agent 档案解析 → 静默继承 agent 默认 deepseek-v4-flash，与视觉页显示的 GLM-5V-Turbo 不符）。改为 `resolveModelForRole('vision_prompt_optimizer', { visionPreferred })`：默认跟随视觉理解模型；视觉不可用 → 显式回退提示词优化链（source='fallback' + 原因，Toast 可见）。
+- **新模块 `src/features/aiRouting/`**：modelRoles.ts（角色目录 + 两条铁律）、modelRoutingPolicy.ts（ai_model_routing_v1 持久层，只存用户改过的条目 + 进程内最近使用）、resolveModelForRole.ts（唯一解析入口 + manual 失效显式回退 + follow 环免疫）、roleModelFilter.ts（能力过滤纯函数）、aiRoutingLog.ts（[AITransport] 日志 + describeFallback）、AiModelUsageSettings.tsx（设置页）。
+- **全部 AI 入口接入**：optimizePrompt（image_prompt_optimizer）、batchPlanner（batch_planner，默认跟随图片 Prompt 优化）、evaluationService（image_evaluation，默认跟随视觉理解）；chat / interpret / plan_task / 深度检测 / Agent Prompt 生成器 payload 补 role/feature 标注。
+- **Rust**：AgentRunPayload 新增 role/feature（serde default，仅日志）；`[ChatTransport]` 日志行升级 `[AITransport] role=… feature=… mode=… model=…`；vision_analyze_image / vision_compare_images / evaluate_image 命令入口打印同格式日志（禁止输出密钥）。
+- **@图片**：优化器模型 capabilities 含 vision 且有人物参考图 → readImageData data URL 以 image_url part 进入真实 multimodal payload（optimizerReceivedPersonImage 如实记录）；纯文本模型只收结构化描述。
+- **运行时可见性**：视觉页优化按钮旁常驻「Prompt 优化 · {模型} · 跟随视觉理解/单独指定/当前回退」；优化中按钮带模型；fallback warn hint + 成功 Toast；FinalPromptEditor 头部「由 {模型} 优化 · HH:MM」；确认生成弹层四行模型快照（视觉分析 / Prompt 优化 / gpt-image-2 / AI 评价）。
+- **Provenance**：RecreationState 新增 optimizerModelId/optimizerProviderId/optimizerSource/optimizerFallbackReason（applyOptimizationResult 落位并持久化 session）；GenerationCarry.optimization 冻结 modelId/source；旧数据缺失字段不崩溃不伪造。
+- **设置页**：设置与更新新增「AI 模型使用」分区（nav 第 5 项）：分组 Role Row（功能/说明/模型+ProviderLogo/计费 BillingBadge/配置来源/最近使用）+ 跟随（推荐）/单独指定 radiogroup + 按 role 能力过滤的 ModelPicker + 单项 / 全局「恢复推荐设置」；external role 跳转既有设置页；gpt-image-2 只读标注「服务端模型」。
+- 测试：vitest 833（新增 aiRouting 25：Bug 回归 / manual / follow 切换同步 / 显式 fallback reason / 设置页映射无 undefined / 能力过滤 / @图片 image_url part / UI-only 不弄脏 semanticRevision / provenance 快照与旧数据兼容）；cargo 185；tsc + build 全绿。
+
 ## Skill 6.0.0 / UI System 1.2.0（2026-08-24，V4.1 图库来源收口：Source / AssetType 分离）
 
 规则层（无 Token 变更，UI System 保持 1.2.0）：

@@ -673,6 +673,8 @@ export async function planTaskWithAgent(input: TaskPlanInput): Promise<TaskPlanR
     });
     result = await api.runAgentRequest({
       mode: 'plan_task',
+      role: 'agent_planner',
+      feature: 'agent-task-plan',
       base_url: input.agentBaseUrl,
       token: input.agentToken,
       model: input.agentModel,

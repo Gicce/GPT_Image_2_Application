@@ -1,8 +1,10 @@
 /**
  * PromptOptimizerService —— 统一的 AI 提示词优化服务。
  *
- * 模型来源：resolveByokConfigForUse('prompt_optimizer')（用户自己配置的
- * GLM / DeepSeek / 第三方 API，禁止 fallback 到服务器 Agent）。
+ * 模型来源：resolveModelForRole（V4.1 AI Model Routing 唯一入口）：
+ *  - 图片 Prompt 优化 → role=image_prompt_optimizer（agent 档案提示词优化链）
+ *  - 视觉复刻 Prompt 优化 → role=vision_prompt_optimizer（默认跟随视觉理解模型；
+ *    视觉模型不可用时显式回退提示词优化模型，绝不静默继承聊天默认模型）
  *
  * 使用约定：
  *  - 返回的是「候选 Prompt」，绝不自动覆盖用户原文 —— 由 UI 层显式「采用优化」后写入。
@@ -10,8 +12,10 @@
  */
 
 import { api } from './api';
-import { resolveByokConfigForUse } from '../features/aiProviders/store';
 import { buildProviderError, providerErrorCompact } from '../features/aiProviders/providerError';
+import { resolveModelForRole, recordAiRoleUsage, type AiRoleConnection } from '../features/aiRouting/resolveModelForRole';
+import { logAiTransport } from '../features/aiRouting/aiRoutingLog';
+import type { AiModelSource } from '../features/aiRouting/modelRoles';
 import type { RecreationFieldKey, VisualRecreationPlan } from '../features/vision/recreationPlan';
 
 export interface PromptOptimizeInput {
@@ -234,10 +238,13 @@ export function parseOptimizerItems(reply: string): { items: OptimizedPromptItem
 }
 
 export async function optimizePrompt(input: PromptOptimizeInput): Promise<PromptOptimizerOutcome> {
-  const byok = resolveByokConfigForUse('prompt_optimizer');
-  if (!byok.ok) {
-    return { ok: false, error: byok.error };
+  const resolution = resolveModelForRole('image_prompt_optimizer');
+  if (!resolution.ok || !resolution.connection) {
+    return { ok: false, error: resolution.ok ? '该功能没有可用的模型连接。' : resolution.error };
   }
+  const byok: AiRoleConnection = resolution.connection;
+  recordAiRoleUsage(resolution.resolved);
+  logAiTransport(resolution.resolved, 'image-studio-optimize');
 
   const batchPlan = input.batchPlan && input.batchPlan.requestedCount >= 2 ? input.batchPlan : undefined;
   const taskLabel = input.taskType === 'edit' ? '图生图（图片编辑）' : '文生图';
@@ -256,6 +263,8 @@ export async function optimizePrompt(input: PromptOptimizeInput): Promise<Prompt
   try {
     const runResult = await api.runAgentRequest({
       mode: 'chat',
+      role: 'image_prompt_optimizer',
+      feature: 'image-studio-optimize',
       base_url: byok.baseUrl,
       token: byok.token,
       model: byok.model,
@@ -337,9 +346,9 @@ export async function optimizePrompt(input: PromptOptimizeInput): Promise<Prompt
 
 /** 当前 Prompt 优化模型（用于 UI 展示"优化模型：智谱 / GLM-5.2"） */
 export function resolvePromptOptimizerModelLabel(): string | null {
-  const byok = resolveByokConfigForUse('prompt_optimizer');
-  if (!byok.ok) return null;
-  return `${byok.profileName} / ${byok.modelEntity.display_name || byok.model}`;
+  const resolution = resolveModelForRole('image_prompt_optimizer');
+  if (!resolution.ok) return null;
+  return `${resolution.resolved.providerName} / ${resolution.resolved.displayName}`;
 }
 
 // ===== 视觉理解复刻链路：统一「调整要求」→ 最终 Prompt 重建 =====
@@ -347,12 +356,18 @@ export function resolvePromptOptimizerModelLabel(): string | null {
 const VISION_RECREATION_SYSTEM_PROMPT = `你是 CyImagePro 的视觉复刻 Prompt 重建专家。用户已对参考图完成视觉理解，得到一份结构化复刻方案和原始复刻 Prompt；现在用户在「调整要求」中用大白话提出修改意愿（例如"把主体换成蓝色小龙，整体更梦幻"），你负责基于原始方案重建最终生图 Prompt。
 
 规则：
+0. 【硬性合同（HARD CONTRACT）不可变更】：用户内容中【硬性合同】段列出的值（人物是否替换 / 人物身份来源 / 服装来源 / 区域是否应用 / 媒介结构 / 用户显式启用的修改维度）是用户已确认的事实，你没有裁决权：不得推翻、省略、软化或"重新决定"它们；你的职责只是把这些已确定的合同表达成更好的生成语言。合同与调整要求冲突时，合同优先并在 summary 说明。
 1. 用户手动锁定的维度（最高优先级）：必须保持与结构化方案一致，显式强化保持约束（例如"保持原始上篮动作不变"）；即使用户的调整要求与手动锁定项冲突，也优先保留锁定内容，并在 summary 中说明存在冲突、已优先保留锁定项，且绝不能把它列入 changed_dimensions。
 2. 其余维度由你根据用户的调整要求判断：只有用户意图明确涉及的维度才允许修改；用户没有提到的维度保持原始语义，不得漂移，也不要为了"优化"擅自解锁。模糊意图（如"整体更梦幻一点"）只开放最贴切的少量维度（通常为 style / lighting / color 中的一到三项），禁止大面积放开。
+2a. 结构化方案中标注「用户显式要求修改」的维度、以及调整要求中「重点修改维度」与「XX修改（已启用）」指令行涉及的维度，是用户明确开启的修改项：这些维度必须真实修改（不是可选），必须列入 changed_dimensions 并在 dimension_values 中给出新值；用户未给出具体值时由你设计自洽的新值——动作必须与原图明确不同（新姿势 / 手势 / 视角至少一项显著变化，禁止沿用原图姿势），背景内容必须在保持画面风格与氛围的前提下发生明确变化（背景中的人物 / 屏幕 / 画面元素随之调整），服装严格按「服装处理」指令执行。规则 2 的「禁止大面积放开」不适用于这些显式开启的维度。
 3. 修改要整体自洽：例如替换主体后需要重建与新人选自洽的整体描述（性别、年龄、外观、服装与场景/动作/风格的衔接），不是简单字符串替换。
 4. 原始复刻 Prompt 中与修改无关的视觉结构必须原样保留语义，不得漂移。
 5. 「人物 / 主体」（subject）与「服装 / 造型」（clothing）是两个独立维度，必须区分判定：用户只换人（如"换成一个黑发男性"）而未提及服装 → subject 修改、clothing 保持原服装；用户只描述服装（如"人物不变，换成红色晚礼服"）→ clothing 修改、subject 保持；人物描述中同时包含服装（如"黑发男性，穿白色西装"）→ subject 与 clothing 都修改。
-6. 人物替换参考图仅用于身份、脸部、发型、体型等人物特征；是否采用参考图服装必须遵循调整要求中的「服装处理」指令（严格保留原图服装 / 使用参考人物服装 / 自定义服装），并在最终 Prompt 中显式写出服装保留或替换的约束（禁止只写"换这个人"式的模糊表达）。
+6. 人物替换参考图仅用于身份、脸部、发型、体型等人物特征；是否采用参考图服装必须遵循调整要求中的「服装处理」指令，并在最终 Prompt 中显式写出服装保留或替换的约束（禁止只写"换这个人"式的模糊表达）。「服装处理」指令与 changed_dimensions 的硬性对应：「严格保留原图（画面模板）服装」→ clothing 绝不能出现在 changed_dimensions，最终 Prompt 显式写出保持模板图服装的约束；「使用人物参考图中的服装」→ clothing 必须列入 changed_dimensions，dimension_values.clothing 来自人物参考图服装语义；「更换为指定服装」→ clothing 必须列入 changed_dimensions，dimension_values.clothing 来自自定义服装描述。
+6a. 随消息附上的图片按其标注角色使用，双图人物替换工作流必须区分两类来源：画面模板图（延续其画风、视觉氛围、构图与背景关系，最终生成与模板图同风格的图片）+ 人物替换参考图（仅提供主体人物的身份、五官、发型与外貌特征）。替换人物后需要把人物特征与模板图的画风 / 构图 / 场景重新衔接自洽，不得把模板图风格替换成人物参考图的写实风格。
+6b. 人物替换是用户的显式业务动作，属于强制条件而非建议：你无权裁决「是否替换人物」。调整要求含「人物替换（强制条件）」时，最终 positive_prompt 必须显式写出：主体人物的身份、脸部五官、脸型、发型以人物参考图为准；不得保留画面模板图原人物的脸部身份或面部特征；模板图仅用于画面布局、风格、背景与整体视觉参考。当随消息附上多张图片时，positive_prompt 开头必须包含「图片使用说明」段：按附图顺序逐张写明职责（图片1=画面模板：构图/风格/背景/氛围；图片2=人物身份参考：身份/五官/发型），让图片生成模型明确每张附图负责什么。「服装处理：严格保留原图（画面模板）服装」只约束服装本身，绝不扩大为保留原图人物（保留服装 ≠ 保留人物）。「复刻强度 / 提高复刻度」只作用于未开放修改的画面维度，绝不作用于人物身份。
+6c. 媒介结构（如果硬性合同包含媒介结构）：人物参考图只决定「是谁」，媒介结构决定「怎么画」——二者绝不混淆。混合媒介模板（如真人摄影 × 动漫插画拼贴）的各媒介层必须保持各自媒介类型：真人层保持真人媒介、动漫层保持动漫媒介；动漫对应角色使用与主体同一人物的动漫化版本（same_as_primary），不是另一个人。用户修改风格（如"赛博朋克"）只改变各层的风格化表达，绝不把整图统一成单一媒介；只有硬性合同明确「统一媒介」时才允许。
+6d. 区域替换（如果硬性合同包含区域）：区域合同列出的每个区域按其用途 / 替换对象 / 范围 / 约束执行，区域外画面严格保持画面模板。你无权取消任何已启用的区域。
 7. positive_prompt 一律使用简体中文，输出为适合 gpt-image-2（GPT Image 系）执行的自然语言长句描述；禁止 Markdown 列表堆砌关键词，禁止中英双份。
 8. negative_prompt 用简体中文列出要避免的元素（含典型负面项：低画质、模糊、错误人体结构、多余手指、水印、文字等），并结合修改后的内容重新整理；无可避免项时输出空字符串。
 9. summary 是一句话中文摘要，说明做了什么修改、保留了什么（例如"已根据调整要求将主体替换为蓝色小龙并增强梦幻氛围，保留手动锁定的背景、构图与光线"），用于任务提示与历史记录。
@@ -372,6 +387,15 @@ export interface VisionRecreationOptimizeResult {
   dimensionValues: Partial<Record<RecreationFieldKey, string>>;
   providerName: string;
   modelName: string;
+  /** V4.1 Provenance：执行时模型快照（优化后换模型不影响历史任务展示）。 */
+  optimizerModelId: string;
+  optimizerProviderId: string;
+  optimizerSource: AiModelSource;
+  /** 显式回退时的原因与预期模型（source='fallback' 时必有）。 */
+  optimizerFallbackReason?: string;
+  optimizerRequestedModelId?: string;
+  /** 本轮优化器是否真正收到了人物参考图内容（多模态模型才可能为 true）。 */
+  optimizerReceivedPersonImage: boolean;
 }
 
 /** 复刻 Prompt 优化输入（统一「调整要求」链路，字段名与交互契约一致）。 */
@@ -386,6 +410,97 @@ export interface VisionRecreationOptimizeInput {
   targetImageModelInfo?: string;
   /** 原始负面提示词（供优化器重新整理）。 */
   originalNegativePrompt?: string;
+  /** 视觉页当前选择的模型（follow 链解析目标；缺失时用视觉档案默认）。 */
+  visionPreferred?: { profileId?: string; modelId?: string };
+  /** 人物替换参考图本地路径（优化器模型具备视觉能力时随消息真实传入）。 */
+  personReferencePath?: string;
+  /**
+   * 图片引用（V4.0.9 双图角色语义）：模板图 / 人物图 / 其它 @引用，
+   * 优化器模型具备视觉能力时按顺序以真实 image parts 附上（绝不只当文字）。
+   */
+  imageReferences?: ReadonlyArray<OptimizerImageReference>;
+  /**
+   * 用户显式启用的修改维度（快捷 Chip；V4.1 修「点了维度却没生效」）：
+   * 这些维度在结构化方案行中标为「用户显式要求修改」——必须真实修改
+   * 并列入 changed_dimensions，不受规则 2「禁止大面积放开」约束。
+   */
+  forcedDimensions?: ReadonlyArray<RecreationFieldKey>;
+  /**
+   * V4.1 硬性合同行（HARD CONTRACT）：人物替换决策 / 服装来源 / 区域 / 媒介结构 /
+   * 模板保留等用户已确认的事实。系统提示词规则 0 明确这些值不可变更 ——
+   * 优化器只负责表达，不负责重新决定。
+   */
+  hardContractLines?: ReadonlyArray<string>;
+}
+
+/** 优化器多模态图片引用（role 决定标注文案与模型使用方式）。 */
+export interface OptimizerImageReference {
+  path: string;
+  label: string;
+  role: 'template_reference' | 'person_replacement_reference' | 'source_reference' | 'generated_result_reference' | 'background_reference' | 'generic_reference';
+}
+
+/** 图片引用的角色标注（随消息图片清单行；模型按角色使用图片）。 */
+export function describeOptimizerImageReference(role: OptimizerImageReference['role']): string {
+  switch (role) {
+    case 'template_reference':
+    case 'source_reference':
+      return '画面模板——延续其画风、视觉氛围、构图与背景关系（生成与该图同风格的新图）';
+    case 'person_replacement_reference':
+      return '人物身份参考（主体人物身份唯一主来源）——身份、脸部五官、脸型、发型、体型等人物特征一律以该图为准；画面模板图原人物的脸部身份不得保留';
+    case 'generated_result_reference':
+      return '当前任务生成结果——本任务此前生成的图片';
+    case 'background_reference':
+      return '背景参考——仅用于背景 / 环境参照';
+    case 'generic_reference':
+    default:
+      return '参考图——按调整要求中的引用语境使用';
+  }
+}
+
+/**
+ * 汇总优化器图片引用：personReferencePath（旧参数）并入 imageReferences，
+ * 按归一化路径去重（模板 → 人物 → 其它，顺序稳定；映射对 multimodal parts 成立）。
+ */
+export function collectOptimizerImageReferences(input: {
+  personReferencePath?: string;
+  imageReferences?: ReadonlyArray<OptimizerImageReference>;
+}): OptimizerImageReference[] {
+  const roleOrder: Record<OptimizerImageReference['role'], number> = {
+    template_reference: 3,
+    source_reference: 2,
+    person_replacement_reference: 1,
+    generated_result_reference: 0,
+    background_reference: 0,
+    generic_reference: 0,
+  };
+  const refs: OptimizerImageReference[] = [];
+  if (input.personReferencePath?.trim()) {
+    refs.push({ path: input.personReferencePath.trim(), label: '人物参考图', role: 'person_replacement_reference' });
+  }
+  for (const ref of input.imageReferences ?? []) {
+    if (!ref.path?.trim()) continue;
+    refs.push({ path: ref.path.trim(), label: ref.label, role: ref.role });
+  }
+  const seen = new Set<string>();
+  return refs
+    .filter(ref => {
+      const key = ref.path.replace(/\\/g, '/').toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((a, b) => roleOrder[b.role] - roleOrder[a.role]);
+}
+
+/** 图片引用清单文本块（多模态消息里的图片目录；顺序 = image parts 顺序）。 */
+export function buildImageReferencesBlock(refs: ReadonlyArray<OptimizerImageReference>): string {
+  if (refs.length === 0) return '';
+  const lines = refs.map((ref, index) => `- 图片${index + 1}（@${ref.label}）：${describeOptimizerImageReference(ref.role)}`);
+  return [
+    `【随消息附上的图片引用】共 ${refs.length} 张，按下方清单顺序附在本消息末尾，请按各自角色使用：`,
+    ...lines,
+  ].join('\n');
 }
 
 /** 已知维度 key 集合（与 recreationPlan.RECREATION_FIELD_KEYS 同源；模块内字面量避免循环依赖）。 */
@@ -501,11 +616,18 @@ export function parseVisionOptimizerReply(
 
 /** 构建复刻优化 user 内容（纯函数，供测试锁定「用户手动锁定真正进入提示词」）。 */
 export function buildVisionRecreationUserContent(input: VisionRecreationOptimizeInput): string {
+  /** 用户显式启用（Chip）的维度：方案行升级为 must-change 标记（user_override 锁定项除外——锁定优先）。 */
+  const forced = new Set(input.forcedDimensions ?? []);
   const planLines = input.structuredRecreationPlan.fields
     .map(field => {
-      const flag = field.lockSource === 'user_override'
-        ? (field.locked ? '用户手动锁定（最高优先级：必须保持不变）' : '用户手动开放（允许按调整要求修改）')
-        : '自动（由你按调整要求判断：意图明确涉及才修改，未提及则保持原语义）';
+      let flag: string;
+      if (field.lockSource === 'user_override') {
+        flag = field.locked ? '用户手动锁定（最高优先级：必须保持不变）' : '用户手动开放（允许按调整要求修改）';
+      } else if (forced.has(field.key)) {
+        flag = '用户显式要求修改（必须真实修改该维度并列入 changed_dimensions；新值按调整要求自洽设计，绝不保持原值）';
+      } else {
+        flag = '自动（由你按调整要求判断：意图明确涉及才修改，未提及则保持原语义）';
+      }
       return `- ${field.label}［${flag}］：${field.value || '（未识别）'}`;
     })
     .join('\n');
@@ -514,7 +636,16 @@ export function buildVisionRecreationUserContent(input: VisionRecreationOptimize
     .map(field => field.label);
   const lockedLines = userLocked.length ? userLocked.join('、') : '（无）';
 
+  const hardLines = (input.hardContractLines ?? []).map(line => line.trim()).filter(Boolean);
+
   return [
+    ...(hardLines.length > 0
+      ? [
+        '【硬性合同（不可变更——以下值是用户已确认的事实，规则 0：只能表达，不得推翻 / 省略 / 软化 / 重新决定）】',
+        ...hardLines.map(line => `- ${line}`),
+        '',
+      ]
+      : []),
     '【结构化复刻方案】',
     `参考图概述：${input.structuredRecreationPlan.summary}`,
     planLines,
@@ -533,7 +664,7 @@ export function buildVisionRecreationUserContent(input: VisionRecreationOptimize
     '',
     `目标图片模型：${input.targetImageModelInfo || 'gpt-image-2（GPT Image 系，自然语言长句偏好）'}`,
     '',
-    '请基于以上信息重建最终生图 Prompt：只修改用户意图明确涉及的非手动锁定维度，手动锁定维度显式强化保持约束，其余视觉结构保持原语义；并如实输出 changed_dimensions 与 dimension_values。',
+    '请基于以上信息重建最终生图 Prompt：只修改用户意图明确涉及的非手动锁定维度，手动锁定维度显式强化保持约束，其余视觉结构保持原语义；标注「用户显式要求修改」的维度必须真实修改并列入 changed_dimensions；并如实输出 changed_dimensions 与 dimension_values。',
   ].join('\n');
 }
 
@@ -546,14 +677,27 @@ function logVisionOptimizerFailure(kind: VisionOptimizerErrorKind, detail: unkno
 /**
  * 复刻方案 Prompt 重建：原始复刻 Prompt + 结构化方案 + 锁定项 + 用户调整要求
  * → 最终生图 Prompt。只在复刻方案处于 dirty 状态时调用（optimized 状态禁止重复优化）。
+ *
+ * 模型路由（V4.1）：role=vision_prompt_optimizer，默认跟随视觉理解模型 ——
+ * 页面显示什么视觉模型，优化就用什么模型；视觉模型不可用时显式回退提示词优化
+ * 模型（source='fallback' + 原因），绝不静默继承聊天默认模型。
+ * 优化器模型具备视觉能力且存在人物替换参考图时，参考图以真实图片内容随消息传入
+ * （多模态上下文）；纯文本模型只接收视觉分析产出的结构化描述。
  */
 export async function optimizeVisionRecreation(
   input: VisionRecreationOptimizeInput,
 ): Promise<VisionRecreationOptimizeOutcome> {
-  const byok = resolveByokConfigForUse('prompt_optimizer');
-  if (!byok.ok) {
-    return { ok: false, kind: 'config_error', error: byok.error };
+  const resolution = resolveModelForRole('vision_prompt_optimizer', {
+    visionPreferred: input.visionPreferred,
+  });
+  if (!resolution.ok || !resolution.connection) {
+    return { ok: false, kind: 'config_error', error: resolution.ok ? '该功能没有可用的模型连接。' : resolution.error };
   }
+  const byok: AiRoleConnection = resolution.connection;
+  const resolved = resolution.resolved;
+  recordAiRoleUsage(resolved);
+  logAiTransport(resolved, 'vision-recreation');
+
   const instruction = input.userAdjustmentInstruction.trim();
   if (!instruction) {
     return {
@@ -563,17 +707,56 @@ export async function optimizeVisionRecreation(
     };
   }
 
-  const userContent = buildVisionRecreationUserContent({ ...input, userAdjustmentInstruction: instruction });
+  const baseContent = buildVisionRecreationUserContent({ ...input, userAdjustmentInstruction: instruction });
+
+  // 多模态判定只看 capabilities（禁止按模型名称猜）；unknown / 未声明视为纯文本。
+  const optimizerSeesImages = (byok.modelEntity.capabilities ?? []).includes('vision');
+  let userContent = baseContent;
+  let messages: Array<Record<string, unknown>> = [{ role: 'user', content: userContent }];
+  let receivedPersonImage = false;
+
+  // 图片引用（模板图 + 人物图 + @引用）：优化器具备视觉能力时按清单顺序真实附上
+  const imageRefs = collectOptimizerImageReferences({
+    personReferencePath: input.personReferencePath,
+    imageReferences: input.imageReferences,
+  });
+  if (optimizerSeesImages && imageRefs.length > 0) {
+    const readResults: Array<{ ref: OptimizerImageReference; url?: string }> = [];
+    for (const ref of imageRefs) {
+      try {
+        readResults.push({ ref, url: await api.readImageData(ref.path) });
+      } catch (error) {
+        // 单图读取失败不阻塞其余图片与文本优化（结构化描述仍可用）
+        logVisionOptimizerFailure('request_failed', { stage: 'image_reference_read', path: ref.path, error });
+      }
+    }
+    const kept = readResults.filter((entry): entry is { ref: OptimizerImageReference; url: string } => !!entry.url);
+    if (kept.length > 0) {
+      // 清单 ↔ parts 一一对应（读取失败的图不进清单，不占图片序号）
+      const block = buildImageReferencesBlock(kept.map(entry => entry.ref));
+      userContent = [baseContent, '', block].join('\n');
+      messages = [{
+        role: 'user',
+        parts: [
+          { part_type: 'text', text: userContent },
+          ...kept.map(entry => ({ part_type: 'image_url', image_url: entry.url })),
+        ],
+      }];
+      receivedPersonImage = kept.some(entry => entry.ref.role === 'person_replacement_reference');
+    }
+  }
 
   try {
     const runResult = await api.runAgentRequest({
       mode: 'chat',
+      role: 'vision_prompt_optimizer',
+      feature: 'vision-recreation',
       base_url: byok.baseUrl,
       token: byok.token,
       model: byok.model,
       billing_mode: byok.billingMode,
       system_prompt: VISION_RECREATION_SYSTEM_PROMPT,
-      messages: [{ role: 'user', content: userContent }],
+      messages,
     }) as AgentRunResult;
 
     if (!runResult.ok) {
@@ -626,6 +809,12 @@ export async function optimizeVisionRecreation(
         dimensionValues: parsed.dimensionValues,
         providerName: byok.profileName,
         modelName: byok.modelEntity.display_name || byok.model,
+        optimizerModelId: byok.model,
+        optimizerProviderId: byok.profileId,
+        optimizerSource: resolved.source,
+        ...(resolved.fallbackReason ? { optimizerFallbackReason: resolved.fallbackReason } : {}),
+        ...(resolved.requestedModelId ? { optimizerRequestedModelId: resolved.requestedModelId } : {}),
+        optimizerReceivedPersonImage: receivedPersonImage,
       },
     };
   } catch (error: any) {

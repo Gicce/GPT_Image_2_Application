@@ -13,7 +13,8 @@ import { api } from '../../services/api';
 import { registerTaskRefreshHook } from '../../store/useTaskStore';
 import { useEvaluationStore } from '../../store/useEvaluationStore';
 import { useVisionWorkspaceStore } from '../../store/useVisionWorkspaceStore';
-import { resolveByokVisionConfig } from '../aiProviders/store';
+import { resolveModelForRole, recordAiRoleUsage } from '../aiRouting/resolveModelForRole';
+import { logAiTransport } from '../aiRouting/aiRoutingLog';
 import { listVisionSessions } from '../vision/session';
 import { buildPreserveChange, evaluationTaskKind } from './evaluationModel';
 import { readEvaluationSettings } from './evaluationSettings';
@@ -97,7 +98,21 @@ export async function evaluateTaskImages(
 ): Promise<EvaluateTaskOutcome> {
   const store = useEvaluationStore.getState();
   const force = options?.force === true;
-  const config = resolveByokVisionConfig();
+  // role=image_evaluation（V4.1）：默认跟随视觉理解模型；单独指定 / 回退经统一 resolver
+  const resolution = resolveModelForRole('image_evaluation');
+  let config: { ok: true; baseUrl: string; token: string; model: string } | { ok: false; error: string };
+  if (resolution.ok && resolution.connection) {
+    config = {
+      ok: true,
+      baseUrl: resolution.connection.baseUrl,
+      token: resolution.connection.token,
+      model: resolution.connection.model,
+    };
+    recordAiRoleUsage(resolution.resolved);
+    logAiTransport(resolution.resolved, 'image-evaluation');
+  } else {
+    config = { ok: false, error: resolution.ok ? '该功能没有可用的模型连接。' : resolution.error };
+  }
   const kind = evaluationTaskKind(task);
   const context = resolveEvaluationContext(task);
 

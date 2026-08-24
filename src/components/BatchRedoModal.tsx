@@ -204,7 +204,7 @@ export default function BatchRedoModal({ task, onClose }: Props) {
                       <img className="batch-redo-item-thumb" src={thumb} alt="" />
                     ) : (
                       <span className={`batch-redo-item-status status-${status}`}>
-                        {status === 'completed' ? (retried > 0 ? '重试成功' : '已完成') : status === 'failed' ? '失败' : status === 'running' ? '执行中' : '排队'}
+                        {status === 'completed' ? (retried > 0 ? '重试成功' : '已完成') : status === 'failed' ? '失败' : status === 'running' ? '生成中' : '排队'}
                       </span>
                     )}
                     <div className="batch-redo-item-info">

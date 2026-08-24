@@ -64,6 +64,8 @@ export async function buildAgentPrompt(input: PromptBuilderInput): Promise<Promp
   try {
     const result = await api.runAgentRequest({
       mode: 'chat',
+      role: 'agent_prompt_builder',
+      feature: 'agent-settings-prompt-builder',
       base_url: baseUrl,
       token,
       model: input.model.model_id,

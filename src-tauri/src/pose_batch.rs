@@ -482,10 +482,13 @@ pub fn build_pose_batch_task(plan: &PoseBatchPlan, output_dir: String) -> Task {
                 label: Some(s.label.clone()),
                 retry_count: 0,
                 attempt_errors: Vec::new(),
+                error_detail: None,
+                attempt_details: Vec::new(),
             })
             .collect(),
         task_type: "generate".to_string(),
         source_images: Vec::new(),
+        mask_image: None,
         execution_mode: "batch".to_string(),
         batch_strategy: String::new(),
         task_plan_summary: plan.action_name.clone(),
@@ -543,6 +546,7 @@ pub fn build_pose_batch_task(plan: &PoseBatchPlan, output_dir: String) -> Task {
                 })
                 .collect(),
         }),
+        provenance: None,
     }
 }
 

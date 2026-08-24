@@ -6,6 +6,15 @@
 
 见 model-selector.md 专项规范。要点：集中策略、默认精简（3~6）、更多模型不丢入口、计费 Badge 整词。
 
+## 1a. AI Model Routing（AI 功能模型路由，V4.1）
+
+「哪个 AI 功能用哪个模型」的唯一规范见 `ai-model-routing.md`。要点：
+
+- **任何 AI 功能取模型一律走 `resolveModelForRole(role)`**（`features/aiRouting/`）；禁止组件内 `selectedModel || defaultModel`、禁止硬编码模型 id 兜底、禁止静默继承其它功能的全局默认模型。
+- **显示的模型 = 执行的模型**：功能入口旁的模型标签（如视觉页「Prompt 优化 · GLM-5V-Turbo · 跟随视觉理解」）与实际请求的模型来自同一次 resolve；fallback 必须带原因且 UI 可见（warn hint + Toast）。
+- 设置页「AI 模型使用」（设置与更新 → AI 模型使用）：分组 Role Row（功能 / 模型 / Provider / BillingBadge / 配置来源 / 最近使用）+ 跟随（推荐）/ 单独指定 radiogroup + 按 role 能力过滤的 ModelPicker + 恢复推荐设置；external role 跳转既有设置页。
+- 配置来源四词固定：`手动指定 / 跟随「X」 / 系统默认 / 当前回退`（copy.md §12）。
+
 ## 2. Image Attachment（图片附件 / 上下文栏）
 
 - 入口统一：本地选择 / 拖入 / 图库 / 粘贴 四路都写进同一附件数据结构，绝不自动发送。
@@ -46,6 +55,10 @@ Esc 关闭、Ctrl+C 复制当前预览图。
 - 错误横幅（chat-error）：文案 + 复制 + 关闭；可重试的横幅加重试按钮（chat-model-error 模式）。
 - 轻量操作反馈：Toast（成功/失败）；关键表单错误：inline error。
 - 异步操作按钮：disabled + busy 文案（「设置中…」「正在创建任务...」），防重复提交。
+- **AI 结构化响应错误的呈现铁律（V4.0.9）**：
+  - Internal transport / parser / schema errors MUST NEVER be exposed directly in user-facing UI（serde / JSON / schema / invalid type 类词只进开发日志）。
+  - Hiding an error message is NOT error recovery —— 先在数据层完成 normalize → validate → 最多一次 repair，UI 层只做 `mapVisionErrorToUserMessage` 式映射 + 技术信息拦截（视觉理解实例：`src/features/vision/visionErrors.ts`）。
+  - 失败保留旧成功结果（禁止整页回空状态）；失败后重试入口立即可用。
 
 ## 9. AI Generated Result（生成结果）
 
@@ -147,7 +160,8 @@ Understand → Modify → Optimize → Review Prompt → Generate → Evaluate �
 - **UI-only interaction MUST NOT dirty semantic state.（强制铁律）**：Collapse / Expand / Tab / Viewer / Selection-only actions are view state. They MUST NOT change semantic revision or Prompt provenance. 折叠 / Tab / Viewer / 选中缩略图等视图操作统一放 `useVisionViewStore`（进程内、不持久化），语义状态（modificationDraft / recreation 修订 / Prompt 产物）唯一载体是 workspace store；`needsOptimization = semanticRevision !== optimizedRevision` 派生判定，禁止任何写入方私设粘滞 dirty 标记。
 - **FinalPromptEditor 是唯一 Prompt Editor**：页面唯一「最终生图 Prompt」概念，显示值 === 提交值（同一数据源 promptDraft）；Final View（可编辑）/ Diff View（修改对比）同一空间切换；禁止 Final Prompt + 「编辑生成方案」两个编辑区并存。
 - **快捷修改按钮是 Modification Dimension Selector**：结构化 toggle（同一维度唯一槽位、多维度可并存、「提高复刻度」独立开关），禁止向 textarea 追加「修改XX：」文本；选中态从 modificationDraft 读取。
-- **人物替换 / 服装策略结构化**：三种人物来源（图片库人物 / 本地导入 / 文字描述）+ ClothingPolicy 三选一；服装是独立第九维度（clothing），与 subject 区分判定。
+- **人物替换 / 服装策略结构化**：三种人物来源（图片库人物 / 本地导入 / 文字描述）+ ClothingPolicy 三选一；服装是独立第九维度（clothing），与 subject 区分判定。**（V4.0.9.1 状态不变量）clothingPolicy=preserve_original and clothing=modified is an invalid semantic state**：`clothing ∈ activeDimensions ⇔ clothingPolicy ≠ 'preserve_original'`，唯一归一入口 `normalizeModificationState`（toggle / setClothingPolicy / clearPersonReplacement / 持久化恢复 / store setter 全部经过）；「原图服装」自动取消「修改服装」Chip，「人物服装 / 自定义」自动启用；custom 空描述用 `clothingReadinessError` 拦截优化与生成；「可修改 N」计数以 activeDimensions 为单一事实源。
+- **生成溯源快照（V4.0.9.1）**：User instruction, structured modification plan, and final execution prompt are three distinct provenance layers and MUST NOT be conflated。「确认生成图片」冻结 `GenerationProvenanceSnapshot`（userInstruction / modificationIntent / imageRoles / models）随 Task 落库；历史任务详情四层结构（用户要求 / 本次修改方案 / 参考图片 / 最终执行 Prompt + 模型执行记录），旧任务无快照如实「未保存」、参考图只编号不猜角色；任务来源=视觉复刻（`task_source='vision_recreation'`，与生成方式两维度并存）；所有参考图与结果图点击进全局 ImageViewer。详见 visual-workflow.md §1h。
 - **失败不吞成功**：优化失败只影响「最近一次尝试」，lastSuccessfulPrompt 原样保留；Banner 外提供「使用上一次 Prompt」回退。
 - **Dimension Lock 三来源优先级**：User Override > Modification Intent > Default Preservation；修改意图来自 AI 结构化输出（changed_dimensions，九维含 clothing），禁止前端 includes() 猜维度。
 - **Prompt Diff 双层**：维度 Diff（原/新红绿对比）默认；全文 Diff 在 FinalPromptEditor「修改对比」Tab；+/− 前缀 + 删除线 + Token 颜色三通道。
@@ -191,3 +205,58 @@ Understand → Modify → Optimize → Review Prompt → Generate → Evaluate �
 6. **多文件 / 混合文件**：单文件失败不中断整批；结果如实分桶 `imported / skipped / failed`，Toast 文案来自 copy.md §11（「已导入 7 张，1 张失败」+ 失败明细独立 Toast），禁止伪百分比进度。
 7. **导入完成后的图库状态**：刷新只接受 Rust 重扫返回的全量列表（`useImageStore.applyImages`），不 push 到数组头、不偷偷切换用户当前筛选 / 排序——本地新资产只出现在「全部」（本地无独立筛选 Tab），来源 Badge「本地」由 resolver 的 isLocal 决定。
 8. **Overlay 形态**：覆盖 Gallery 主内容区（`.gallery-page` 定位上下文，不遮左侧主导航），Brand Indigo 虚线框 + Brand Soft 底 + 导入图标 + 轻微 fade/scale（0.12s，reduced-motion 降级）；`pointer-events: none` + `role="status"`，文案与数量（「释放即可导入 6 张图片」「可导入 4 张图片 · 2 个文件不支持」「没有可导入的图片」）由 `galleryDropOverlayCopy` 唯一产出，Overlay 是纯 UI 组件。
+
+## 19. Image Mention Pattern（@图片引用，V4.0.9 视觉理解验证）
+
+**@ in Vision Workflow → real image reference bound to the current task image pool.** 实例：`src/features/vision/IntentMentionInput.tsx` + 纯函数层 `imageMention.ts`（弹层 / chips / 语义解析全链）。规则：
+
+1. **@image mentions MUST resolve from current task/conversation images first.** 候选唯一来源 `buildVisionContextImages`（主参考图 + 人物替换参考 + 图库附加参考 + 本任务生成结果；同路径去重 + 业务标签：人物参考 / 主参考图 / 生成结果 N / 图片引用）；人物参考已设置时置顶。弹层条目 = 缩略图 + 名称 + 用途说明 + 角色标签（禁止只显示「图1 / 图2」）。
+2. **Mention 是真实引用**：token 在 freeText（持久化安全），绑定在 `draft.mentions`（assetId / path / role）；@ 弹层「从图片库选择…」把图加入 `extraImageRefs`（当前任务隔离）后插入。
+3. **原生 textarea + 背景高亮层**：IME 安全（isComposing 不处理弹层键盘；禁止 contentEditable / 富文本编辑器）；高亮层与 textarea 同度量（padding / 字体 / 行高 / white-space），token pill 无额外 padding，滚动同步。
+4. **纯视图操作不 dirty**：弹层开关 / ↑↓ / Enter 预览 / Esc / hover 绝不写 store、不触发 semanticRevision；只有插入 / 删除 mention（文本 + mentions 变化）走语义通道。
+5. **双图角色语义**：`resolveImageMentionRoles` 把「把 @A 的人物换成 @B」映射为 A=template_reference / B=person_replacement_reference；优先级 用户显式面板选择 > 明确 Mention > 自然语言推断（序号按「图N」文件名 + 池序号匹配）；面板为空时以「已识别图片角色」建议条呈现（应用走正常语义通道，绝不偷偷覆盖）。
+6. **优化器 payload 双图真实进入**：`collectOptimizerImageReferences`（模板 → 人物 → 其它，路径去重）+ `buildImageReferencesBlock` 清单（顺序 = image parts 顺序）；优化器系统提示词规则 6a：模板图延续画风 / 构图 / 背景 / 氛围，人物图仅身份特征，不得把模板图风格替换成人物参考图的写实风格。
+
+## 20. Task Failure UX Pattern（V4.1 任务失败与重试 UX）
+
+实例：`src/pages/TaskQueue.tsx` + `src/utils/taskFailure.ts` + `src/utils/taskState.ts` + `src/utils/taskNavigation.ts`。规则：
+
+1. **Friendly error summary MUST be separated from technical diagnostics.** 失败卡默认只显示「⚠ 分类标题 + 一句话说明 + 行动建议 + 历史尝试次数 + [重新生成] [查看技术详情 ▾]」；HTTP 状态 / Provider Code / Endpoint / Request ID / Raw Message 只进「技术详情」折叠区（Raw Message 可复制），且必须保留——友好文案≠删除技术错误。
+2. **分类唯一入口 `classifyGenerationFailure`**（canonical failure model）：新数据读 Rust 结构化 `SubTask.error_detail`（category 权威），旧数据按稳定文案前缀回落解析；category → 文案映射表唯一来源 copy.md §13。禁止页面 substring 自分类、禁止把 HTTP 500 报成「请求超时」（timeout 只认真实超时信号）。
+3. **主任务状态聚合唯一入口 `deriveTaskState(task)`**：queued / running / completed / partial / failed / cancelled 六态全部从 sub_tasks 事实派生；后端 finalize 事件丢失 / 刷新失败时 UI 仍显示正确终态（1/1 失败 ≠ 生成中）。
+4. **TaskQueue is operational status UI. History is full audit UI.** 任务队列只承担状态 / 进度 / 失败摘要 / 重试 / 时间；完整审计（用户要求 / 执行合同 / Prompt / 模型记录 / 错误全量）在历史记录详情。「查看任务详情」= `openTaskDetailFromQueue(taskId)` 深链（cyimage-navigate + `cy_history_focus_task_id`），复用同一套 Task Detail，禁止第二套详情弹层；长 Prompt 在队列中默认折叠。
+5. **Terminal tasks MUST expose a terminal timestamp.** 终态任务（completed / partial / failed / cancelled）显示 开始时间 / 结束时间 / 耗时；唯一入口 `resolveTaskFinishedAt`（= completed_at 持久化值），旧数据缺失显示「—」，禁止 Date.now() 伪值；耗时 = finished − started，任一缺失不显示。
+6. **终态按钮契约**：活跃任务只显示「取消任务」；终态显示「查看任务详情」（+ failed/partial 的「重新生成失败项 / 重试失败项」）；已有重做 / 编辑重发 / 删除保留为次级操作，不新增隐藏能力。
+7. **Native browser/system alerts MUST NOT be used for task retry feedback.** 重试提交成功 / 失败一律应用内 Toast（`toastSuccess` / `toastError`）；提交失败的原始错误进 `console.error` 开发日志。
+8. **重试只重跑失败 slot**：失败槽 pending → 重新执行；completed 槽的图片与计费绝不触碰；`attempt_errors` / `attempt_details` 历史保留（「尝试 N · 时间 · 标题 · HTTP 状态」分条展示，不挤一行）；手动重试后主任务派生态回到 queued/running，结束时间在再次终态后更新。
+
+## 21. Credits Billing Pattern（CY 点数计费，V4.2）
+
+- **计费单位唯一 = CY 点（credits）**。用户侧禁止出现第二套计价单位（美元成本/汇率换算不进用户界面）；旧 USD 字段仅作兼容镜像，页面禁止再以 `$` 作主展示。
+- **钱包三类点数**：正式（paid）/ 试用（trial）/ 赠送（gift），总可用 = 三者之和；消费顺序 试用 → 赠送 → 正式（服务端 `consume_credits` 唯一裁决，客户端不做任何扣减预测）。
+- **充值 = 人民币直购**：档位 ¥10/¥20/¥50/¥100 + 自定义 ¥ 输入；兑换率（¥1 = N 点）只从服务端 `packages.credits_per_cny` 读取，展示「支付 ¥X → 预计获得 Y 点」；确认弹层（应用内 Dialog，禁止系统弹窗）文案固定「确认充值 · Y 点」。
+- **余额不足文案**：`点数不足，请充值后继续使用`（402 / QUOTA_EXHAUSTED，全局唯一）。
+
+## 21a. Trial Entitlement Pattern（试用一次性领取，V4.2）
+
+- 入口可见性唯一依据 = 服务端 `users.me.trial_available`（总开关 + 试用默认 Token 有效 + 该邮箱未领取过）；客户端禁止自行推断。
+- 按钮文案 = `申请免费试用`；成功 Toast = `试用点数已开通：+N 点`；同邮箱重复领取由服务端 claim ledger 判定（409），客户端只透出服务端 message。
+
+## 22. Generation Quote Pattern（生成前报价确认，V4.2 铁律）
+
+- **所有付费图片生成入口在 authorize 之前 MUST 先取服务端报价**（`POST /api/billing/quote`），经全局 `QuoteConfirmDialog` 展示：模式 / 数量 / 单张 / 预计消耗 / 当前余额 / 生成后预计剩余；点数不足时确认按钮禁用并提示充值。
+- 确认文案固定 `[确认生成 · N 点]`；取消 = 抛 `quoteCancelled` 错误，调用方静默返回（禁止当错误横幅弹出）。
+- **客户端禁止 `数量 × 单价` 自行计价**：报价一律来自服务端；生成按钮上的价格标注（如 `开始生成 4 张图片 · 预计 200 点`）标注「预计」且数据源为服务端权益接口。
+- 参数变化 → 重新报价（quote 10 分钟过期，authorize 携 quote_id 按冻结价计费）。
+
+## 23. Wallet / Ledger Pattern（账户点数流水，V4.2）
+
+- 「我的账户 → 点数流水」= 服务端 `GET /api/billing/ledger` 直出：充值 / 图片生成 / 生成退款 / 充值退款 / 试用赠送 / 迁移，中文标签由服务端下发（`type_label`），客户端不维护映射表。
+- 方向约定：正数 = 入账（充值/退回/释放），负数 = 消费；RESERVED 预占行标注「（已预占）」。
+- 任务卡计费列（TaskBillingBadge）：未结算显示 `预计 N 点`，结算后显示 `实际 M 点（退回 K）`；partial 释放 MUST 可见。
+
+## 24. Pricing Transparency Pattern（价格透明，V4.2 铁律）
+
+- **用户生成前 MUST 知道预计点数消耗；生成后 MUST 能看到实际消耗；失败释放 MUST 在流水中可见。**
+- **采购成本 / 毛利率 / Provider 内部定价 MUST NOT 出现在普通用户界面**（仅管理后台授权接口）；客户端代码禁止引用任何成本字段。
+- 扣费标准弹窗：单张 N 点（约 ¥X）+ 费目明细（每笔 M 点）；旧 `$` 口径仅历史数据回退显示。

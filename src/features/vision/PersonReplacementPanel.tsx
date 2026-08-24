@@ -1,26 +1,59 @@
 /**
- * PersonReplacementPanel（V4.1）——「修改人物」维度的结构化人物输入器。
+ * PersonReplacementPanel（V4.1 视觉映射版）——「修改人物」维度的业务卡编排器。
  *
- * 三种人物来源（tab 语义）：图片库人物 / 本地导入 / 文字描述；
- * 图片来源（图库 / 本地）额外提供「服装处理」三选一（ClothingPolicy）：
- * 沿用原图服装（推荐）/ 使用参考人物服装 / 自定义服装（附描述输入）。
+ * 结构（一眼看懂“谁被换成谁、服装跟谁、哪些内容保留”）：
+ *  A. 业务卡头：人物替换 · 已启用 + 一句话说明 + 移除（secondary，非 danger）；
+ *  B. ReferenceMapping：画面模板（@原图）→ 替换人物（@人物参考）双栏视觉映射；
+ *  C. CharacterSourcePicker：人物来源 Segmented（仅未选 / 更换中 / 描述编辑中可见）；
+ *  D. ClothingSourceControl：服装来源 Segmented（原图服装 / 人物服装 / 自定义按需展开）；
+ *  E. ReplacementSummary：当前替换规则（真实配置动态派生，绝不写死）。
  *
- * 语义边界：来源 Tab 切换是视图操作（不产生语义修改）；真正落 draft 的是
- * 人物数据（参考图 / 文字描述）与服装策略。人物缩略图点击进全局 ImageViewer。
+ * 语义边界：来源 Tab 切换、更换人物进入选择态是视图操作（不产生语义修改）；真正落 draft
+ *  的是人物数据（参考图 / 文字描述）与服装策略（走 props 回调 = 页面语义通道）。
  */
 
 import { useEffect, useState } from 'react';
-import { api } from '../../services/api';
-import { useImageViewerStore } from '../../store/useImageViewerStore';
-import { personHasImage, type ClothingPolicy, type PersonReplacement, type PersonSource } from './modificationIntent';
-import { CLOTHING_POLICY, PERSON_REPLACEMENT } from './recreationCopy';
+import { personHasImage, type ClothingPolicy, type ModificationDimension, type PersonReplacement, type PersonSource } from './modificationIntent';
+import { PERSON_REPLACEMENT } from './recreationCopy';
+import CharacterSourcePicker from './CharacterSourcePicker';
+import ClothingSourceControl from './ClothingSourceControl';
+import ReferenceMapping from './ReferenceMapping';
+import ReplacementSummary from './ReplacementSummary';
+import {
+  PERSON_REPLACE_SCOPE_LABELS,
+  PERSON_STRENGTH_LABELS,
+} from './project/personContract';
+import type {
+  PersonConstraintStrength,
+  PersonReplacementContract,
+  PersonReplaceScope,
+} from './project/types';
+
+/** 画面模板信息（当前任务主参考图）。 */
+export interface PersonPanelTemplate {
+  path: string;
+  label: string;
+  assetId?: string;
+}
 
 interface PersonReplacementPanelProps {
   person: PersonReplacement | null;
   clothingPolicy: ClothingPolicy;
   customClothing: string;
+  /** 画面模板（当前任务主参考图；缺失时显示占位）。 */
+  template?: PersonPanelTemplate | null;
   /** clothing 独立维度同时激活时，服装策略区提示其作用于整体造型。 */
   clothingDimensionActive?: boolean;
+  /** 已启用的修改维度（动作 / 背景等；「当前将执行」规则摘要动态派生）。 */
+  activeDimensions?: ReadonlyArray<ModificationDimension>;
+  /**
+   * V4.1 人物替换合同 V2（项目化链路传入；缺省 = 非项目模式，不渲染 V2 控制区）：
+   * strength / replaceScope / applyIdentityTo 由合同驱动，禁止组件自行造状态。
+   */
+  personContract?: PersonReplacementContract | null;
+  onPersonContractChange?: (partial: Partial<PersonReplacementContract>) => void;
+  /** 可选区域清单（replaceScope = custom_region 时的目标选择）。 */
+  regionOptions?: ReadonlyArray<{ id: string; name: string; enabled: boolean }>;
   disabled?: boolean;
   onPersonChange: (person: PersonReplacement | null) => void;
   onClothingPolicyChange: (policy: ClothingPolicy) => void;
@@ -28,19 +61,35 @@ interface PersonReplacementPanelProps {
   onRemove: () => void;
   onGalleryPick: () => void;
   onLocalPick: () => void;
+  /** 打开区域编辑器（创建 custom_region 目标）。 */
+  onOpenRegionEditor?: () => void;
+  /** 更换模板图（打开图库选新的主参考图；会重置当前分析）。 */
+  onTemplateChange?: () => void;
 }
 
-const SOURCE_TABS: ReadonlyArray<{ key: PersonSource; label: string }> = [
-  { key: 'gallery', label: PERSON_REPLACEMENT.sourceGallery },
-  { key: 'local', label: PERSON_REPLACEMENT.sourceLocal },
-  { key: 'description', label: PERSON_REPLACEMENT.sourceDescription },
+const STRENGTH_OPTIONS: ReadonlyArray<{ value: PersonConstraintStrength; label: string; hint: string }> = [
+  { value: 'strict', label: PERSON_STRENGTH_LABELS.strict, hint: '人物身份以参考图为准，模板人物身份不保留' },
+  { value: 'balanced', label: PERSON_STRENGTH_LABELS.balanced, hint: '以参考图为主，允许与画面风格自然衔接' },
+  { value: 'natural', label: PERSON_STRENGTH_LABELS.natural, hint: '参考图仅提供人物方向，不承诺保留具体面部特征' },
+];
+
+const SCOPE_OPTIONS: ReadonlyArray<{ value: PersonReplaceScope; label: string }> = [
+  { value: 'whole_person', label: PERSON_REPLACE_SCOPE_LABELS.whole_person },
+  { value: 'upper_body', label: PERSON_REPLACE_SCOPE_LABELS.upper_body },
+  { value: 'face', label: PERSON_REPLACE_SCOPE_LABELS.face },
+  { value: 'custom_region', label: PERSON_REPLACE_SCOPE_LABELS.custom_region },
 ];
 
 export default function PersonReplacementPanel({
   person,
   clothingPolicy,
   customClothing,
+  template,
   clothingDimensionActive,
+  activeDimensions,
+  personContract,
+  onPersonContractChange,
+  regionOptions,
   disabled,
   onPersonChange,
   onClothingPolicyChange,
@@ -48,55 +97,42 @@ export default function PersonReplacementPanel({
   onRemove,
   onGalleryPick,
   onLocalPick,
+  onOpenRegionEditor,
+  onTemplateChange,
 }: PersonReplacementPanelProps) {
-  // 来源 Tab = 视图状态：person 未落地数据前切 Tab 不产生语义修改
+  // 来源 Tab / 更换选择态 = 视图状态：切换不产生语义修改
   const [activeTab, setActiveTab] = useState<PersonSource>(person?.source ?? 'gallery');
-  const [thumbUrl, setThumbUrl] = useState('');
-  const hasImageRef = personHasImage(person);
+  const [picking, setPicking] = useState(false);
 
+  // 外部人物来源变化（图库 / 本地选图）时同步默认 Tab；选中图片人物即退出选择态
   useEffect(() => {
-    let cancelled = false;
-    const path = hasImageRef ? person?.path : '';
-    if (!path) {
-      setThumbUrl('');
-      return;
-    }
-    void api.readThumbnail(path)
-      .then(url => { if (!cancelled) setThumbUrl(url); })
-      .catch(() => { if (!cancelled) setThumbUrl(''); });
-    return () => { cancelled = true; };
-  }, [hasImageRef, person?.path]);
+    if (person?.source) setActiveTab(person.source);
+  }, [person?.source]);
+  useEffect(() => {
+    if (personHasImage(person)) setPicking(false);
+  }, [person?.path, person]);
 
-  const openPersonViewer = () => {
-    if (!person?.path) return;
-    useImageViewerStore.getState().openViewer([{
-      id: `person-${person.path}`,
-      path: person.path,
-      title: PERSON_REPLACEMENT.thumbnailAlt,
-      fileName: person.path.split(/[\\/]/).pop(),
-      metadata: [{ label: '用途', value: '人物替换参考图' }],
-    }], 0);
+  const hasImageRef = personHasImage(person);
+  /** 来源选择区可见性：未选 / 更换中 / 文字描述编辑中（已选图片人物 = 只显示卡片）。 */
+  const showSourcePicker = picking || !hasImageRef;
+
+  /** 描述输入（CharacterSourcePicker 内部防抖后回调）：非空创建描述人物，空 = 清除。 */
+  const handleDescriptionChange = (text: string) => {
+    onPersonChange(text.trim() ? { source: 'description', description: text } : null);
   };
 
-  const clothingOptions: ReadonlyArray<{
-    key: ClothingPolicy;
-    label: string;
-    hint: string;
-  }> = hasImageRef
-    ? [
-        { key: 'preserve_original', label: CLOTHING_POLICY.preserveOriginal, hint: CLOTHING_POLICY.preserveOriginalHint },
-        { key: 'use_subject_reference', label: CLOTHING_POLICY.useSubjectReference, hint: CLOTHING_POLICY.useSubjectReferenceHint },
-        { key: 'custom', label: CLOTHING_POLICY.custom, hint: CLOTHING_POLICY.customHint },
-      ]
-    : [
-        { key: 'preserve_original', label: CLOTHING_POLICY.preserveOriginal, hint: CLOTHING_POLICY.preserveOriginalHint },
-        { key: 'custom', label: CLOTHING_POLICY.custom, hint: CLOTHING_POLICY.customHint },
-      ];
-
   return (
-    <div className="vision-person-panel">
-      <div className="vision-person-head">
-        <span className="vision-person-title">{PERSON_REPLACEMENT.title}</span>
+    <div className="vision-person-panel is-business">
+      {/* ===== A. 业务卡头 ===== */}
+      <div className="vision-person-business-head">
+        <span className="vision-person-business-icon" aria-hidden="true">👤</span>
+        <div className="vision-person-business-text">
+          <span className="vision-person-business-title">
+            {PERSON_REPLACEMENT.title}
+            <em className="vision-person-business-badge">{PERSON_REPLACEMENT.businessBadge}</em>
+          </span>
+          <p className="vision-person-business-desc">{PERSON_REPLACEMENT.businessDesc}</p>
+        </div>
         <button
           type="button"
           className="vision-btn vision-btn-sm"
@@ -108,125 +144,146 @@ export default function PersonReplacementPanel({
         </button>
       </div>
 
-      <div className="vision-person-block">
-        <span className="vision-person-label">{PERSON_REPLACEMENT.sourceLabel}</span>
-        <div className="vision-person-tabs" role="tablist" aria-label={PERSON_REPLACEMENT.sourceLabel}>
-          {SOURCE_TABS.map(tab => (
-            <button
-              key={tab.key}
-              type="button"
-              role="tab"
-              aria-selected={activeTab === tab.key}
-              className={`vision-person-tab${activeTab === tab.key ? ' active' : ''}`}
-              disabled={disabled}
-              onClick={() => setActiveTab(tab.key)}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
-      </div>
+      {/* ===== B. 视觉映射：画面模板 → 替换人物 ===== */}
+      <ReferenceMapping
+        template={template}
+        person={person}
+        disabled={disabled}
+        onTemplateChange={onTemplateChange}
+        onPickPerson={onGalleryPick}
+        onChangePerson={() => setPicking(true)}
+      />
 
-      <div className="vision-person-block">
-        <span className="vision-person-label">{PERSON_REPLACEMENT.referenceLabel}</span>
-        {activeTab === 'gallery' && (
-          <div className="vision-person-entry">
-            <button type="button" className="vision-btn" disabled={disabled} onClick={onGalleryPick}>
-              {PERSON_REPLACEMENT.galleryPickButton}
-            </button>
-            {!person && <p className="vision-hint">{PERSON_REPLACEMENT.emptyHint}</p>}
-          </div>
-        )}
-        {activeTab === 'local' && (
-          <div className="vision-person-entry">
-            <button type="button" className="vision-btn" disabled={disabled} onClick={onLocalPick}>
-              {PERSON_REPLACEMENT.localPickButton}
-            </button>
-            <p className="vision-hint">{PERSON_REPLACEMENT.localDropHint}</p>
-          </div>
-        )}
-        {activeTab === 'description' && (
-          <div className="vision-person-entry">
-            <textarea
-              className="vision-person-description"
-              rows={2}
-              disabled={disabled}
-              value={person?.source === 'description' ? person.description ?? '' : ''}
-              placeholder={PERSON_REPLACEMENT.descriptionPlaceholder}
-              aria-label={PERSON_REPLACEMENT.descriptionLabel}
-              onChange={e => {
-                const text = e.target.value;
-                onPersonChange(text.trim() ? { source: 'description', description: text } : null);
-              }}
-            />
-            <p className="vision-hint">{PERSON_REPLACEMENT.descriptionHint}</p>
-          </div>
-        )}
+      {/* ===== C. 人物来源（未选 / 更换中 / 描述编辑中可见） ===== */}
+      {showSourcePicker && (
+        <CharacterSourcePicker
+          person={person}
+          activeTab={activeTab}
+          disabled={disabled}
+          picking={picking}
+          onCancelPick={() => setPicking(false)}
+          onTabChange={setActiveTab}
+          onGalleryPick={onGalleryPick}
+          onLocalPick={onLocalPick}
+          onDescriptionChange={handleDescriptionChange}
+        />
+      )}
 
-        {hasImageRef && person && (
-          <div className="vision-person-ref">
-            <img
-              className="vision-person-thumb"
-              src={thumbUrl}
-              alt={PERSON_REPLACEMENT.thumbnailAlt}
-              title="点击在内置图片查看器中查看"
-              onClick={openPersonViewer}
-            />
-            <div className="vision-person-ref-meta">
-              <p className="vision-person-ref-label" title={person.path}>{person.label || person.path?.split(/[\\/]/).pop()}</p>
-              <div className="vision-person-ref-actions">
+      {/* ===== D. 服装来源 ===== */}
+      <ClothingSourceControl
+        clothingPolicy={clothingPolicy}
+        customClothing={customClothing}
+        personHasReference={hasImageRef}
+        clothingDimensionActive={clothingDimensionActive}
+        disabled={disabled}
+        onClothingPolicyChange={onClothingPolicyChange}
+        onCustomClothingChange={onCustomClothingChange}
+      />
+
+      {/* ===== D2. 人物替换合同 V2（项目化链路：强度 / 范围 / 身份应用） ===== */}
+      {personContract && personContract.enabled && onPersonContractChange && (
+        <div className="vision-person-contract">
+          <div className="vision-person-contract-row" role="radiogroup" aria-label="人物替换强度">
+            <span className="vision-person-contract-label">人物替换强度</span>
+            <div className="vision-person-contract-options">
+              {STRENGTH_OPTIONS.map(option => (
                 <button
+                  key={option.value}
                   type="button"
-                  className="vision-btn vision-btn-sm"
+                  role="radio"
+                  aria-checked={personContract.strength === option.value}
+                  className={`vision-person-contract-btn ${personContract.strength === option.value ? 'active' : ''}`}
                   disabled={disabled}
-                  onClick={activeTab === 'gallery' ? onGalleryPick : onLocalPick}
+                  title={option.hint}
+                  onClick={() => onPersonContractChange({ strength: option.value })}
                 >
-                  {PERSON_REPLACEMENT.changeButton}
+                  {option.label}
                 </button>
+              ))}
+            </div>
+            <p className="vision-hint">{STRENGTH_OPTIONS.find(o => o.value === personContract.strength)?.hint}</p>
+          </div>
+
+          <div className="vision-person-contract-row" role="radiogroup" aria-label="替换范围">
+            <span className="vision-person-contract-label">替换范围</span>
+            <div className="vision-person-contract-options">
+              {SCOPE_OPTIONS.map(option => (
+                <button
+                  key={option.value}
+                  type="button"
+                  role="radio"
+                  aria-checked={personContract.replaceScope === option.value}
+                  className={`vision-person-contract-btn vision-person-contract-sm ${personContract.replaceScope === option.value ? 'active' : ''}`}
+                  disabled={disabled}
+                  onClick={() => onPersonContractChange({ replaceScope: option.value })}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+            {personContract.replaceScope === 'custom_region' && (
+              <div className="vision-person-contract-region">
+                {(regionOptions ?? []).filter(r => r.enabled).length > 0 ? (
+                  <select
+                    value={personContract.targetRegionId ?? ''}
+                    disabled={disabled}
+                    aria-label="目标区域"
+                    onChange={e => onPersonContractChange({ targetRegionId: e.target.value || undefined })}
+                  >
+                    <option value="">选择区域…</option>
+                    {(regionOptions ?? []).filter(r => r.enabled).map(region => (
+                      <option key={region.id} value={region.id}>{region.name}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <span className="vision-hint">
+                    还没有可用区域。
+                    {onOpenRegionEditor && (
+                      <button type="button" className="vision-btn vision-btn-sm" disabled={disabled} onClick={onOpenRegionEditor}>
+                        打开区域编辑器
+                      </button>
+                    )}
+                  </span>
+                )}
               </div>
+            )}
+          </div>
+
+          <div className="vision-person-contract-row" role="radiogroup" aria-label="身份应用范围">
+            <span className="vision-person-contract-label">身份应用</span>
+            <div className="vision-person-contract-options">
+              <button
+                type="button"
+                role="radio"
+                aria-checked={personContract.applyIdentityTo === 'primary_subject_only'}
+                className={`vision-person-contract-btn vision-person-contract-sm ${personContract.applyIdentityTo === 'primary_subject_only' ? 'active' : ''}`}
+                disabled={disabled}
+                onClick={() => onPersonContractChange({ applyIdentityTo: 'primary_subject_only' })}
+              >
+                仅主体人物
+              </button>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={personContract.applyIdentityTo === 'all_corresponding_subjects'}
+                className={`vision-person-contract-btn vision-person-contract-sm ${personContract.applyIdentityTo === 'all_corresponding_subjects' ? 'active' : ''}`}
+                disabled={disabled}
+                onClick={() => onPersonContractChange({ applyIdentityTo: 'all_corresponding_subjects' })}
+              >
+                所有对应主体（含分身 / 多姿态）
+              </button>
             </div>
           </div>
-        )}
-      </div>
-
-      <div className="vision-person-block">
-        <span className="vision-person-label">{CLOTHING_POLICY.sectionLabel}</span>
-        <div className="vision-person-radios" role="radiogroup" aria-label={CLOTHING_POLICY.sectionLabel}>
-          {clothingOptions.map(option => (
-            <label key={option.key} className={`vision-person-radio${clothingPolicy === option.key ? ' checked' : ''}`}>
-              <input
-                type="radio"
-                name="vision-clothing-policy"
-                value={option.key}
-                checked={clothingPolicy === option.key}
-                disabled={disabled}
-                onChange={() => onClothingPolicyChange(option.key)}
-              />
-              <span className="vision-person-radio-text">
-                <span className="vision-person-radio-label">{option.label}</span>
-                <span className="vision-person-radio-hint">{option.hint}</span>
-              </span>
-            </label>
-          ))}
         </div>
-        {clothingPolicy === 'custom' && (
-          <div className="vision-person-custom">
-            <label className="vision-person-label" htmlFor="vision-custom-clothing">{CLOTHING_POLICY.customInputLabel}</label>
-            <textarea
-              id="vision-custom-clothing"
-              className="vision-person-description"
-              rows={2}
-              disabled={disabled}
-              value={customClothing}
-              placeholder={CLOTHING_POLICY.customInputPlaceholder}
-              onChange={e => onCustomClothingChange(e.target.value)}
-            />
-          </div>
-        )}
-        {clothingDimensionActive && (
-          <p className="vision-hint">已同时选择「修改服装」维度：优化后服装 / 造型会出现在维度对比中。</p>
-        )}
-      </div>
+      )}
+
+      {/* ===== E. 当前替换规则（真实配置动态派生） ===== */}
+      <ReplacementSummary
+        person={person}
+        clothingPolicy={clothingPolicy}
+        customClothing={customClothing}
+        activeDimensions={activeDimensions}
+      />
     </div>
   );
 }

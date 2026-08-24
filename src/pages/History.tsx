@@ -13,20 +13,28 @@ import {
 } from '../utils/taskCategory';
 import { copyText } from '../utils/clipboard';
 import { toastError, toastSuccess } from '../components/Toast';
+import { formatDuration } from '../utils/taskDuration';
+import { deriveTaskState, DERIVED_STATUS_META, taskDurationMs } from '../utils/taskState';
+import { classifyGenerationFailure } from '../utils/taskFailure';
+import { HISTORY_FOCUS_KEY } from '../utils/taskNavigation';
 import PromptTextBlock from '../components/PromptTextBlock';
 import BatchPlanDetailDrawer from '../components/BatchPlanDetailDrawer';
 import TaskFilterBar from '../components/TaskFilterBar';
+import { useImageViewerStore } from '../store/useImageViewerStore';
+import type { ImageViewerItem } from '../store/useImageViewerStore';
+import {
+  describeExecutionRules,
+  describeProvenanceModificationPlan,
+  PROVENANCE_ROLE_LABELS,
+} from '../features/vision/generationProvenance';
 import './History.css';
 import './ImageEdit.css';
 import '../components/BatchPlans.css';
 
-const STATUS_LABELS: Record<string, string> = {
-  pending: '等待中',
-  running: '执行中',
-  completed: '已完成',
-  failed: '失败',
-  cancelled: '已取消',
-};
+/** 任务状态展示：sub_tasks 事实派生（后端事件丢失也不再卡「生成中」）。 */
+function taskStatusMeta(task: Task): { label: string; cls: string } {
+  return DERIVED_STATUS_META[deriveTaskState(task)];
+}
 
 const STATUS_BADGE_CLS: Record<string, string> = {
   pending: 'pending',
@@ -38,7 +46,7 @@ const STATUS_BADGE_CLS: Record<string, string> = {
 
 const SUB_STATUS_META: Record<SubTask['status'], { label: string; cls: string }> = {
   pending: { label: '等待中', cls: 'pending' },
-  running: { label: '● 执行中', cls: 'loading' },
+  running: { label: '● 生成中', cls: 'loading' },
   completed: { label: '✓ 已完成', cls: 'success' },
   failed: { label: '✕ 失败', cls: 'error' },
   cancelled: { label: '已取消', cls: 'pending' },
@@ -48,7 +56,13 @@ const IMAGE_EXECUTION_MODEL = 'GPT Image 2';
 
 function getSourceLabel(task: Task): string {
   if (task.task_source === 'cy-video-studio') return 'CY Video Studio · 视频复刻';
+  if (task.task_source === 'vision_recreation') return '视觉复刻';
   return task.task_source === 'agent' ? 'AI Agent' : '手动';
+}
+
+/** 视觉复刻链路任务（新任务有 task_source 标记；旧任务按来源任务类型识别）。 */
+function isVisionRecreationTask(task: Task): boolean {
+  return task.task_source === 'vision_recreation' || task.source_task_kind === 'vision_understanding';
 }
 
 function getApiEndpoint(task: Task): string {
@@ -64,6 +78,20 @@ function composeExecutedPrompt(positive: string, negative: string): string {
   if (!neg) return positive.trim();
   return `${positive.trim()}\n\n画面中严格避免出现以下内容：${neg}`;
 }
+
+/** 任务详情小节序号（① 起；条件区块按渲染顺序取号，绝不跳号） */
+const SECTION_GLYPHS = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧'] as const;
+
+/** V4.1 Provenance V2 展示标签（只读快照；与项目域 label 单一语义对齐） */
+const REGION_TYPE_LABELS_HISTORY: Record<string, string> = {
+  person: '人物替换', background: '背景替换', object: '物体替换', custom: '自定义',
+};
+const PERSON_SCOPE_LABELS_HISTORY: Record<string, string> = {
+  whole_person: '整个人物', face: '脸部', upper_body: '上半身', custom_region: '指定区域',
+};
+const PERSON_STRENGTH_LABELS_HISTORY: Record<string, string> = {
+  natural: '自然', balanced: '平衡', strict: '严格',
+};
 
 /** label「方案 3 · 寒霜水刃 · 战场冲锋」→「寒霜水刃 · 战场冲锋」（仅旧任务 fallback） */
 function planTitleFromLabel(label: string | undefined, index: number): string {
@@ -89,6 +117,7 @@ interface HistoryPlanItem {
   negativePrompt: string;
   status: SubTask['status'];
   error?: string | null;
+  errorDetail?: SubTask['error_detail'];
   imageId?: string;
   /** 新版方案任务（有正式 AI plan metadata） */
   hasPlanMeta: boolean;
@@ -112,6 +141,7 @@ function buildPlanItems(task: Task): HistoryPlanItem[] {
       negativePrompt: negative,
       status: sub.status,
       error: sub.error,
+      errorDetail: sub.error_detail,
       imageId: sub.image_id,
       hasPlanMeta: !!(item?.plan_title?.trim() || item?.plan_summary?.trim()),
     };
@@ -194,7 +224,7 @@ export default function History() {
 
   useEffect(() => {
     const loadSourceUrls = async () => {
-      if (!selectedTask || selectedTask.source_images.length === 0) {
+      if (!selectedTask || (selectedTask.source_images.length === 0 && !selectedTask.mask_image)) {
         setSourceUrls({});
         return;
       }
@@ -204,6 +234,14 @@ export default function History() {
           urls[path] = await api.readThumbnail(path);
         } catch {
           urls[path] = '';
+        }
+      }
+      // V4.1 Region V1：区域 mask 缩略图（区域段预览用；读取失败不阻塞）
+      if (selectedTask.mask_image) {
+        try {
+          urls[selectedTask.mask_image] = await api.readThumbnail(selectedTask.mask_image);
+        } catch {
+          urls[selectedTask.mask_image] = '';
         }
       }
       setSourceUrls(urls);
@@ -216,6 +254,35 @@ export default function History() {
     setPlanDrawerIndex(null);
     if (detailScrollRef.current) detailScrollRef.current.scrollTop = 0;
   }, [selectedTaskId]);
+
+  // TaskQueue「查看任务详情」深链：按 task id 精确选中（不依赖列表第一页 / 当前筛选）。
+  // 键保留到用户手动点选其它任务为止 —— 刷新 / 重进 History 仍能重新打开同一详情。
+  useEffect(() => {
+    let focusId: string | null = null;
+    try {
+      focusId = localStorage.getItem(HISTORY_FOCUS_KEY);
+    } catch {}
+    if (!focusId || selectedTaskId === focusId) return;
+    // 任务尚未加载完成（loadTasks 未返回）时等待下一轮 tasks 更新
+    if (!tasks.some(task => task.id === focusId)) return;
+    setSelectedTaskId(focusId);
+    setActiveCategory('all');
+    const targetId = focusId;
+    setTimeout(() => {
+      const el = document.querySelector(`.history-item[data-task-id="${CSS.escape(targetId)}"]`);
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 200);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tasks]);
+
+  const handleSelectTask = (taskId: string) => {
+    try {
+      if (localStorage.getItem(HISTORY_FOCUS_KEY) !== taskId) {
+        localStorage.removeItem(HISTORY_FOCUS_KEY);
+      }
+    } catch {}
+    setSelectedTaskId(taskId);
+  };
 
   const togglePrompt = (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
@@ -257,11 +324,15 @@ export default function History() {
           ) : visibleHistoryTasks.length === 0 ? (
             <div className="history-filter-empty">当前筛选条件下没有任务</div>
           ) : (
-            visibleHistoryTasks.map(task => (
+            visibleHistoryTasks.map(task => {
+              const derived = deriveTaskState(task);
+              const derivedMeta = DERIVED_STATUS_META[derived];
+              return (
               <div
                 key={task.id}
+                data-task-id={task.id}
                 className={`history-item ${selectedTaskId === task.id ? 'active' : ''}`}
-                onClick={() => setSelectedTaskId(task.id)}
+                onClick={() => handleSelectTask(task.id)}
               >
                 <p
                   className={`history-prompt ${expandedPrompts.has(task.id) ? 'expanded' : ''}`}
@@ -277,7 +348,7 @@ export default function History() {
                   {task.source_task_kind === 'vision_understanding' && (
                     <span>来源：视觉理解任务{task.source_task_id ? ` #${task.source_task_id.slice(0, 8)}` : ''}</span>
                   )}
-                  <span>{STATUS_LABELS[task.status] || task.status}</span>
+                  <span>{derivedMeta.label}</span>
                   <span>{task.size}</span>
                   {task.task_type !== 'vision_understanding' && <span>{task.count} 张</span>}
                   <span className="success">成功 {task.success_count}</span>
@@ -285,7 +356,8 @@ export default function History() {
                 </div>
                 <p className="history-time">{new Date(task.created_at).toLocaleString('zh-CN')}</p>
               </div>
-            ))
+              );
+            })
           )}
         </div>
 
@@ -351,6 +423,7 @@ function HistoryPlanDrawerExtras(props: {
   thumbUrl?: string;
 }) {
   const { item, task, image } = props;
+  const openViewer = useImageViewerStore(state => state.openViewer);
   return (
     <>
       <div className="bp-drawer-divider" />
@@ -362,12 +435,36 @@ function HistoryPlanDrawerExtras(props: {
           {composeExecutedPrompt(item.positivePrompt, item.negativePrompt)}
         </p>
       </div>
-      {item.error && (
-        <div className="form-group">
-          <div className="bp-drawer-field-head"><label>失败原因</label></div>
-          <p className="bp-readonly-text history-plan-error">{item.error}</p>
-        </div>
-      )}
+      {item.error && (() => {
+        const failure = classifyGenerationFailure({ detail: item.errorDetail ?? null, message: item.error });
+        return (
+          <div className="form-group">
+            <div className="bp-drawer-field-head"><label>失败原因</label></div>
+            <p className="bp-readonly-text history-plan-error">{failure.title}——{failure.userMessage}</p>
+            {failure.suggestion && (
+              <p className="bp-readonly-text history-plan-suggestion">{failure.suggestion}</p>
+            )}
+            <details className="history-advanced">
+              <summary>技术详情</summary>
+              <div className="history-advanced-body">
+                {failure.technical?.httpStatus !== undefined && (
+                  <p className="bp-readonly-text">HTTP 状态：{failure.technical.httpStatus}</p>
+                )}
+                {failure.technical?.providerCode && (
+                  <p className="bp-readonly-text">Provider Code：{failure.technical.providerCode}</p>
+                )}
+                {failure.technical?.endpoint && (
+                  <p className="bp-readonly-text">Endpoint：{failure.technical.endpoint}</p>
+                )}
+                {failure.technical?.requestId && (
+                  <p className="bp-readonly-text">Request ID：{failure.technical.requestId}</p>
+                )}
+                <p className="bp-readonly-text">{item.error}</p>
+              </div>
+            </details>
+          </div>
+        );
+      })()}
       <div className="form-group">
         <div className="bp-drawer-field-head"><label>时间</label></div>
         <div className="history-plan-times">
@@ -379,7 +476,19 @@ function HistoryPlanDrawerExtras(props: {
       {image && (
         <div className="form-group">
           <div className="bp-drawer-field-head"><label>生成结果</label></div>
-          <div className="history-plan-result" onClick={() => !image.missing && api.openFile(image.local_path)}>
+          <div
+            className="history-plan-result"
+            onClick={() => !image.missing && openViewer(
+              [{
+                id: image.id,
+                path: image.local_path,
+                title: image.file_name,
+                fileName: image.file_name,
+                prompt: item.positivePrompt?.trim() || undefined,
+              }],
+              0,
+            )}
+          >
             {props.thumbUrl ? (
               <img src={props.thumbUrl} alt={image.file_name} />
             ) : (
@@ -393,7 +502,7 @@ function HistoryPlanDrawerExtras(props: {
   );
 }
 
-/** 历史任务详情主体：① 任务概览 ② 生成方案（方案卡片）③ 生成结果 ④ 高级信息 */
+/** 历史任务详情主体：① 任务概览 ② 用户要求 ③ 本次修改方案 ④ 参考图片 ⑤ 最终执行 Prompt ⑥ 模型执行记录 ⑦ 生成结果 */
 function HistoryTaskDetail(props: {
   task: Task;
   taskImages: ImageRecord[];
@@ -408,6 +517,46 @@ function HistoryTaskDetail(props: {
   const total = task.count || task.sub_tasks.length || 1;
   const done = task.success_count + task.failed_count;
   const progressPercent = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
+  const openViewer = useImageViewerStore(state => state.openViewer);
+
+  // 生成溯源快照（新任务创建时冻结；旧任务缺失 → 如实「未保存」，禁止伪造）
+  const provenance = task.provenance ?? null;
+  const visionLinked = isVisionRecreationTask(task);
+
+  // 用户要求唯一读取入口：新任务读快照 userInstruction（用户原话）；
+  // 旧视觉任务没有快照 → 明示「未保存」；普通任务 user_prompt_raw 本身就是用户输入。
+  // 绝不允许用 final_prompt / optimizedPrompt 充当用户要求。
+  const userInstruction = provenance?.userInstruction?.trim()
+    || (!visionLinked ? (task.user_prompt_raw || task.prompt).trim() : '');
+  const userInstructionEmptyHint = visionLinked && !userInstruction
+    ? '（该历史任务未保存原始用户要求）'
+    : '（未记录原始需求）';
+
+  // 本次修改方案（结构化；只有快照任务才有，旧任务不凭 Prompt 反推）
+  const modificationPlanRows = provenance ? describeProvenanceModificationPlan(provenance) : [];
+  // 执行规则摘要（最终 Prompt 前的确定性规则速览；同样只读快照）
+  // V4.1 追加项目合同 V2 行（人物强度 / 范围 / 身份应用 / 媒介结构；只读快照，绝不读当前项目状态）
+  const executionRules = provenance ? (() => {
+    const base = describeExecutionRules(provenance);
+    const contract = provenance.personContract;
+    if (contract) {
+      base.splice(1, 0,
+        `人物约束：${PERSON_STRENGTH_LABELS_HISTORY[contract.strength] ?? contract.strength}`,
+        `替换范围：${PERSON_SCOPE_LABELS_HISTORY[contract.replaceScope] ?? contract.replaceScope}`,
+        `身份应用：${contract.applyIdentityTo === 'all_corresponding_subjects' ? '所有对应主体' : '仅主体人物'}`,
+      );
+    }
+    const rendering = provenance.renderingContract;
+    if (rendering?.overallMode === 'mixed_media') {
+      const layers = (rendering.regions ?? [])
+        .map(layer => `${layer.label}=${layer.renderingMode}${layer.identityRelation === 'same_as_primary' ? '（同一人物）' : ''}`)
+        .join('；');
+      base.push(`媒介结构：混合媒介${rendering.preserveTemplateMediaStructure ? '（保持模板分层）' : ''}${layers ? `——${layers}` : ''}`);
+    } else if (rendering?.overallMode === 'single_media' && rendering.singleMode && rendering.singleMode !== 'unknown') {
+      base.push(`媒介结构：单一媒介（${rendering.singleMode}）`);
+    }
+    return base;
+  })() : [];
 
   const imageByPlanId = new Map<string, ImageRecord>();
   for (const item of planItems) {
@@ -421,14 +570,103 @@ function HistoryTaskDetail(props: {
 
   const singlePositive = (task.final_prompt || task.prompt).trim();
   const singleNegative = (task.final_negative_prompt || task.negative_prompt).trim();
-  const positiveLabel = optState.applied ? 'AI 优化提示词（正向）' : '最终提示词（正向）';
+
+  // 参考图片（点击进全局 ImageViewer）：新任务带角色（画面模板 / 人物参考…），旧任务只编号
+  const referenceCards: Array<{ path: string; roleLabel: string; label: string }> = provenance?.imageRoles
+    ? provenance.imageRoles.map(role => ({
+        path: role.path,
+        roleLabel: PROVENANCE_ROLE_LABELS[role.role] || '参考图',
+        label: `@${role.label}`,
+      }))
+    : task.source_images.map((path, index) => ({
+        path,
+        roleLabel: '',
+        label: `参考图 ${index + 1}`,
+      }));
+  const openReferenceViewer = (index: number) => {
+    const items: ImageViewerItem[] = referenceCards
+      .filter(card => !!card.path)
+      .map(card => ({ path: card.path, title: card.label, fileName: card.path.split(/[\\/]/).pop() }));
+    if (items.length === 0) return;
+    openViewer(items, index);
+  };
+
+  /** 生成结果点击进全局 Viewer（携带该张实际提交的 Prompt：批量走方案 override，单张走 final_prompt）。 */
+  const openResultViewer = (indexInTaskImages: number) => {
+    if (indexInTaskImages < 0 || indexInTaskImages >= taskImages.length) return;
+    if (taskImages[indexInTaskImages].missing) return;
+    const visible = taskImages.filter(img => !img.missing);
+    const items: ImageViewerItem[] = visible.map(img => {
+      const planItem = isPlanBatch ? planItems.find(item => item.imageId === img.id) : undefined;
+      const prompt = (planItem?.positivePrompt || singlePositive).trim();
+      return {
+        id: img.id,
+        path: img.local_path,
+        title: img.file_name,
+        fileName: img.file_name,
+        prompt: prompt || undefined,
+      };
+    });
+    const index = visible.findIndex(img => img.id === taskImages[indexInTaskImages].id);
+    if (items.length === 0 || index < 0) return;
+    openViewer(items, index);
+  };
+
+  // 模型执行记录（生成时快照，非当前 Settings；Prompt 优化回落优化快照字段）
+  const modelRows: Array<{ label: string; value: string }> = [];
+  if (provenance) {
+    const visionModel = provenance.models?.visionAnalysis;
+    const optimizerModel = provenance.models?.promptOptimizer;
+    const evaluationModel = provenance.models?.imageEvaluation;
+    modelRows.push({
+      label: '视觉理解',
+      value: visionModel?.displayName
+        ? `${visionModel.displayName}${visionModel.providerName ? ` · ${visionModel.providerName}` : ''}`
+        : '—',
+    });
+    const optimizerName = optimizerModel?.displayName || optState.snapshot?.model_name || '';
+    const optimizerProvider = optimizerModel?.providerName || optState.snapshot?.provider_name || '';
+    modelRows.push({
+      label: 'Prompt 优化',
+      value: optimizerName
+        ? `${optimizerName}${optimizerProvider ? ` · ${optimizerProvider}` : ''}`
+        : '未优化（原始复刻 Prompt）',
+    });
+    modelRows.push({
+      label: '图片生成',
+      value: provenance.models?.imageGeneration?.displayName || 'gpt-image-2',
+    });
+    modelRows.push({
+      label: 'AI 评价',
+      value: evaluationModel?.displayName
+        ? `${evaluationModel.displayName}${evaluationModel.providerName ? ` · ${evaluationModel.providerName}` : ''}`
+        : '未配置视觉模型（生成后不评价）',
+    });
+  }
+
+  // 小节序号（V4.1：①概览固定，②起动态取号——项目来源段存在时用户要求顺延为 ③）
+  const hasProjectSource = !!(provenance?.projectId && provenance?.projectName);
+  const hasRegions = (provenance?.regions?.length ?? 0) > 0;
+  const personContract = provenance?.personContract;
+  const renderingContract = provenance?.renderingContract;
+  let sectionIndex = 2;
+  const takeSectionGlyph = (show: boolean): string => (show ? SECTION_GLYPHS[sectionIndex++] : '');
+  const projectSourceGlyph = takeSectionGlyph(hasProjectSource);
+  const userInstructionGlyph = takeSectionGlyph(true);
+  const modificationPlanGlyph = takeSectionGlyph(modificationPlanRows.length > 0);
+  const regionGlyph = takeSectionGlyph(hasRegions);
+  const referenceGlyph = takeSectionGlyph(referenceCards.length > 0);
+  const plansGlyph = takeSectionGlyph(isPlanBatch);
+  const promptGlyph = takeSectionGlyph(!isPlanBatch);
+  const modelsGlyph = takeSectionGlyph(modelRows.length > 0);
+  const resultsGlyph = SECTION_GLYPHS[sectionIndex];
 
   return (
     <>
       <div className="history-detail-head">
         <h3>{getTaskCategoryLabel(task)}任务详情</h3>
         <span className={`bp-status-badge ${STATUS_BADGE_CLS[task.status] || 'pending'}`}>
-          {STATUS_LABELS[task.status] || task.status}
+          {taskStatusMeta(task).label}
         </span>
       </div>
 
@@ -471,6 +709,9 @@ function HistoryTaskDetail(props: {
             {task.task_plan_summary && (
               <div className="detail-row"><span>任务摘要</span><span>{task.task_plan_summary}</span></div>
             )}
+            {task.mask_image && (
+              <div className="detail-row"><span>区域 mask</span><span>已随请求提交（透明 = 可编辑区域）</span></div>
+            )}
             {isPlanBatch && (
               <div className="detail-row"><span>方案数量</span><span>{planItems.length}</span></div>
             )}
@@ -486,12 +727,20 @@ function HistoryTaskDetail(props: {
               </span>
             </div>
             <div className="detail-row"><span>创建时间</span><span>{formatTaskDateTime(task.created_at)}</span></div>
-            {task.started_at && (
-              <div className="detail-row"><span>开始时间</span><span>{formatTaskDateTime(task.started_at)}</span></div>
-            )}
-            {task.completed_at && (
-              <div className="detail-row"><span>完成时间</span><span>{formatTaskDateTime(task.completed_at)}</span></div>
-            )}
+            <div className="detail-row"><span>开始时间</span><span>{formatTaskDateTime(task.started_at ?? '') || '—'}</span></div>
+            {(() => {
+              // 结束时间 = completed/failed/partial/cancelled 共用的终态时间（旧数据缺失如实「—」）
+              const terminal = ['completed', 'failed', 'cancelled'].includes(task.status)
+                || !!task.completed_at;
+              if (!terminal) return null;
+              const duration = formatDuration(taskDurationMs(task));
+              return (
+                <>
+                  <div className="detail-row"><span>结束时间</span><span>{formatTaskDateTime(task.completed_at ?? '') || '—'}</span></div>
+                  <div className="detail-row"><span>耗时</span><span>{duration || '—'}</span></div>
+                </>
+              );
+            })()}
           </div>
           {(task.success_count > 0 || task.failed_count > 0) && (
             <div className="history-overview-counts">
@@ -499,20 +748,123 @@ function HistoryTaskDetail(props: {
               {task.failed_count > 0 && <span className="fail">失败 {task.failed_count}</span>}
             </div>
           )}
-          <PromptTextBlock
-            title="原始需求"
-            content={task.user_prompt_raw || task.prompt}
-            copyToastLabel="原始需求已复制"
-            emptyHint="（未记录原始需求）"
-          />
         </div>
       </section>
 
-      {/* ② 生成方案（批量方案任务） */}
+      {/* ② 项目来源（§34：项目化链路冻结 projectId / 修订；旧任务无此段 = 非项目生成，绝不伪造） */}
+      {hasProjectSource && (
+        <section className="history-section">
+          <h4 className="history-section-title">
+            <span className="history-section-no">{projectSourceGlyph}</span>项目来源
+          </h4>
+          <div className="history-overview">
+            <div className="history-overview-grid">
+              <div className="detail-row"><span>视觉项目</span><span>{provenance!.projectName}</span></div>
+              <div className="detail-row"><span>Project Revision</span><span>{provenance!.projectRevision ?? '—'}</span></div>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {/* 用户要求（用户真正输入的原话；快照任务读 userInstruction，绝不读 final_prompt） */}
+      <section className="history-section">
+        <h4 className="history-section-title">
+          <span className="history-section-no">{userInstructionGlyph}</span>用户要求
+        </h4>
+        <PromptTextBlock
+          title="用户要求"
+          content={userInstruction}
+          copyToastLabel="用户要求已复制"
+          emptyHint={userInstructionEmptyHint}
+        />
+      </section>
+
+      {/* 本次修改方案（结构化展示；只有快照任务才有，旧任务不凭 Prompt 反推） */}
+      {modificationPlanRows.length > 0 && (
+        <section className="history-section">
+          <h4 className="history-section-title">
+            <span className="history-section-no">{modificationPlanGlyph}</span>本次修改方案
+          </h4>
+          <div className="history-plan-rows">
+            {modificationPlanRows.map(row => (
+              <div key={row.label} className={`history-plan-row is-${row.kind}`}>
+                <span className="history-plan-row-label">{row.label}</span>
+                <span className="history-plan-row-value">{row.value}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* 区域（§34 ⑤：只读快照 regions；mask 缩略图来自 sourceUrls，无 mask 如实标注） */}
+      {hasRegions && (
+        <section className="history-section">
+          <h4 className="history-section-title">
+            <span className="history-section-no">{regionGlyph}</span>区域替换（{provenance!.regions!.length}）
+          </h4>
+          <div className="history-plan-rows">
+            {provenance!.regions!.map(region => (
+              <div key={region.id} className={`history-plan-row is-modified`}>
+                <span className="history-plan-row-label">
+                  {region.name}
+                  {region.personReferenceLabel ? `（@${region.personReferenceLabel}）` : ''}
+                </span>
+                <span className="history-plan-row-value">
+                  {REGION_TYPE_LABELS_HISTORY[region.replaceType] ?? region.replaceType}
+                  {region.replaceScope ? ` · ${PERSON_SCOPE_LABELS_HISTORY[region.replaceScope] ?? region.replaceScope}` : ''}
+                  {` · ${PERSON_STRENGTH_LABELS_HISTORY[region.constraintStrength] ?? region.constraintStrength}`}
+                  {region.rect ? ` · 矩形 (${region.rect.x.toFixed(2)}, ${region.rect.y.toFixed(2)}, ${region.rect.w.toFixed(2)}×${region.rect.h.toFixed(2)})` : ''}
+                  {region.brush ? ` · 画笔 ${region.brush.strokes} 笔` : ''}
+                  {region.prompt ? ` · ${region.prompt}` : ''}
+                  {region.maskPath
+                    ? (sourceUrls[region.maskPath]
+                      ? ' · mask 已提交'
+                      : ' · mask 已提交（预览不可用）')
+                      : ' · 无栅格 mask'}
+                </span>
+              </div>
+            ))}
+          </div>
+          {task.mask_image && sourceUrls[task.mask_image] && (
+            <div className="history-images history-region-mask-preview">
+              <div className="history-img-item" title="区域合成 mask（透明 = 可编辑区域）">
+                <img src={sourceUrls[task.mask_image]} alt="区域 mask" />
+                <span><em className="history-img-role">区域 mask</em>透明 = 可编辑</span>
+              </div>
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* 参考图片（新任务带业务角色：画面模板 / 人物参考…；旧任务仅编号，不瞎猜角色） */}
+      {referenceCards.length > 0 && (
+        <section className="history-section">
+          <h4 className="history-section-title">
+            <span className="history-section-no">{referenceGlyph}</span>参考图片（{referenceCards.length}）
+          </h4>
+          <div className="history-images">
+            {referenceCards.map((card, index) => (
+              <div key={`${card.path}-${index}`} className="history-img-item" onClick={() => openReferenceViewer(index)}>
+                {sourceUrls[card.path] ? (
+                  <img src={sourceUrls[card.path]} alt={card.label} />
+                ) : (
+                  <div className="gallery-loading">文件缺失</div>
+                )}
+                <span>
+                  {card.roleLabel && <em className="history-img-role">{card.roleLabel}</em>}
+                  {card.label}
+                </span>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* 生成方案（批量方案任务） */}
       {isPlanBatch && (
         <section className="history-section">
           <h4 className="history-section-title">
-            <span className="history-section-no">②</span>生成方案
+            <span className="history-section-no">{plansGlyph}</span>生成方案
             <span className="history-section-hint">{planItems.length} 个方案 · 点击「查看详情」查看完整提示词快照</span>
           </h4>
           <div className="history-plans">
@@ -531,7 +883,12 @@ function HistoryTaskDetail(props: {
                       <p className="bp-card-summary" title={item.summary}>{item.summary}</p>
                     )}
                     {item.error && (
-                      <p className="bp-card-error" title={item.error}>{item.error}</p>
+                      <p
+                        className="bp-card-error"
+                        title={item.error}
+                      >
+                        {classifyGenerationFailure({ detail: item.errorDetail ?? null, message: item.error }).title}
+                      </p>
                     )}
                     {item.tags.length > 0 && (
                       <div className="bp-card-tags">
@@ -564,31 +921,69 @@ function HistoryTaskDetail(props: {
         </section>
       )}
 
-      {/* 单张 / 非方案任务：提示词快照 */}
+      {/* 单张 / 非方案任务：执行规则摘要 + 最终执行 Prompt（真正提交给生成 API 的快照；非当前表单值） */}
       {!isPlanBatch && (
         <section className="history-section">
           <h4 className="history-section-title">
-            <span className="history-section-no">②</span>提示词快照
+            <span className="history-section-no">{promptGlyph}</span>最终执行 Prompt
           </h4>
+          {/* 执行规则摘要（快照结构化字段派生，供用户直接审计；绝不解析 Prompt 反推） */}
+          {executionRules.length > 0 && (
+            <ul className="history-exec-rules">
+              {executionRules.map(rule => <li key={rule}>{rule}</li>)}
+            </ul>
+          )}
           <div className="history-prompts">
             <PromptTextBlock
-              title={positiveLabel}
+              title="最终执行 Prompt（正向）"
               content={singlePositive}
-              copyToastLabel="正向提示词已复制"
+              copyToastLabel="最终执行 Prompt 已复制"
               emptyHint="（无正向提示词）"
             />
-            <PromptTextBlock
-              title="负面提示词"
-              content={singleNegative}
-              copyToastLabel="负面提示词已复制"
-              emptyHint="（无负面提示词）"
-            />
-            <PromptTextBlock
-              title="实际执行提示词"
-              content={composeExecutedPrompt(singlePositive, singleNegative)}
-              copyToastLabel="实际执行提示词已复制"
-              emptyHint="（无执行内容）"
-            />
+            {singleNegative && (
+              <PromptTextBlock
+                title="负面提示词"
+                content={singleNegative}
+                copyToastLabel="负面提示词已复制"
+              />
+            )}
+            {singleNegative && (
+              <PromptTextBlock
+                title="实际执行提示词"
+                content={composeExecutedPrompt(singlePositive, singleNegative)}
+                copyToastLabel="实际执行提示词已复制"
+              />
+            )}
+            {/* 视觉复刻链路：AI 优化前的复刻原始 Prompt（默认折叠，不与最终版抢视觉） */}
+            {visionLinked && optState.snapshot?.original_prompt?.trim() && (
+              <details className="history-advanced">
+                <summary>查看 AI 优化前的复刻原始 Prompt</summary>
+                <div className="history-advanced-body">
+                  <PromptTextBlock
+                    title="复刻原始 Prompt（优化前）"
+                    content={optState.snapshot.original_prompt}
+                    copyToastLabel="复刻原始 Prompt 已复制"
+                  />
+                </div>
+              </details>
+            )}
+          </div>
+        </section>
+      )}
+
+      {/* 模型执行记录（生成时快照；Prompt 优化回落优化快照字段，绝不读当前 Settings） */}
+      {modelRows.length > 0 && (
+        <section className="history-section">
+          <h4 className="history-section-title">
+            <span className="history-section-no">{modelsGlyph}</span>模型执行记录
+          </h4>
+          <div className="history-model-rows">
+            {modelRows.map(row => (
+              <div key={row.label} className="history-model-row">
+                <span className="history-model-row-label">{row.label}</span>
+                <span className="history-model-row-value">{row.value}</span>
+              </div>
+            ))}
           </div>
         </section>
       )}
@@ -606,7 +1001,14 @@ function HistoryTaskDetail(props: {
                   <span className="history-legacy-subtask-label">
                     #{sub.index + 1}{sub.label ? ` · ${sub.label}` : ''}
                   </span>
-                  {sub.error && <span className="history-legacy-subtask-error" title={sub.error}>{sub.error}</span>}
+                  {sub.error && (
+                    <span
+                      className="history-legacy-subtask-error"
+                      title={sub.error}
+                    >
+                      {classifyGenerationFailure({ detail: sub.error_detail ?? null, message: sub.error }).title}
+                    </span>
+                  )}
                 </div>
               );
             })}
@@ -614,29 +1016,10 @@ function HistoryTaskDetail(props: {
         </section>
       )}
 
-      {/* 源图 */}
-      {task.source_images.length > 0 && (
-        <section className="history-section">
-          <h4 className="history-section-title">源图 ({task.source_images.length})</h4>
-          <div className="history-images">
-            {task.source_images.map((path, index) => (
-              <div key={path} className="history-img-item" onClick={() => api.openFile(path)}>
-                {sourceUrls[path] ? (
-                  <img src={sourceUrls[path]} alt={`源图 ${index + 1}`} />
-                ) : (
-                  <div className="gallery-loading">文件缺失</div>
-                )}
-                <span>源图 {index + 1}</span>
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
-
-      {/* ③ 生成结果 */}
+      {/* 生成结果（点击进全局 ImageViewer；携带该张实际提交的 Prompt 快照） */}
       <section className="history-section">
         <h4 className="history-section-title">
-          <span className="history-section-no">③</span>生成结果（{taskImages.length} / {total}）
+          <span className="history-section-no">{resultsGlyph}</span>生成结果（{taskImages.length} / {total}）
         </h4>
         {taskImages.length === 0 ? (
           <p className="no-images">暂无结果图片</p>
@@ -645,8 +1028,9 @@ function HistoryTaskDetail(props: {
             {planItems.map(item => {
               const img = item.imageId ? imageByPlanId.get(item.imageId) : undefined;
               if (!img) return null;
+              const viewerIndex = taskImages.findIndex(record => record.id === img.id);
               return (
-                <div key={img.id} className="history-result-card" onClick={() => !img.missing && api.openFile(img.local_path)}>
+                <div key={img.id} className="history-result-card" onClick={() => openResultViewer(viewerIndex)}>
                   <div className="history-result-thumb">
                     {imageUrls[img.id] ? (
                       <img src={imageUrls[img.id]} alt={img.file_name} />
@@ -661,7 +1045,7 @@ function HistoryTaskDetail(props: {
                       type="button"
                       className="settings-btn settings-btn-outline settings-btn-sm"
                       disabled={img.missing}
-                      onClick={(e) => { e.stopPropagation(); api.openFile(img.local_path); }}
+                      onClick={(e) => { e.stopPropagation(); openResultViewer(viewerIndex); }}
                     >
                       查看图片
                     </button>
@@ -670,7 +1054,7 @@ function HistoryTaskDetail(props: {
               );
             })}
             {otherImages.map(img => (
-              <div key={img.id} className="history-result-card" onClick={() => !img.missing && api.openFile(img.local_path)}>
+              <div key={img.id} className="history-result-card" onClick={() => openResultViewer(taskImages.findIndex(record => record.id === img.id))}>
                 <div className="history-result-thumb">
                   {imageUrls[img.id] ? (
                     <img src={imageUrls[img.id]} alt={img.file_name} />
@@ -685,7 +1069,7 @@ function HistoryTaskDetail(props: {
                     type="button"
                     className="settings-btn settings-btn-outline settings-btn-sm"
                     disabled={img.missing}
-                    onClick={(e) => { e.stopPropagation(); api.openFile(img.local_path); }}
+                    onClick={(e) => { e.stopPropagation(); openResultViewer(taskImages.findIndex(record => record.id === img.id)); }}
                   >
                     查看图片
                   </button>
@@ -695,8 +1079,8 @@ function HistoryTaskDetail(props: {
           </div>
         ) : (
           <div className="history-images">
-            {taskImages.map(img => (
-              <div key={img.id} className="history-img-item" onClick={() => !img.missing && api.openFile(img.local_path)}>
+            {taskImages.map((img, index) => (
+              <div key={img.id} className="history-img-item" onClick={() => openResultViewer(index)}>
                 {imageUrls[img.id] ? (
                   <img src={imageUrls[img.id]} alt={img.file_name} />
                 ) : (

@@ -92,6 +92,8 @@ chat-page（flex，height:100%）
   .load-more / 分页
 ```
 
+TaskQueue 任务卡结构（V4.1）：header（状态徽章 + 类型/来源/模式徽章 + #id ‖ 右侧时间块「开始 / 结束 / 耗时」，活跃任务只显示「开始」）→ prompt（默认单行折叠，点击展开）→ meta 行 → 进度条 / 成功失败计数 → 失败子任务卡（⚠ 标题 + 说明 + 建议 + 历史尝试 N 次 + [重新生成][查看技术详情 ▾]）→ actions（活跃=取消任务；终态=查看任务详情 + 重新生成失败项/重试失败项 + 重做/编辑重发/删除）。长 Prompt 禁止默认横铺；完整审计进 History 详情（深链复用，见 patterns.md §20）。
+
 ## 7. 弹窗模板
 
 ```text
@@ -105,3 +107,30 @@ overlay（--bg-overlay，点击关闭）
 ## 8. 响应式检查基准
 
 窗口宽度 `1280 / 1440 / 1920 / 2560` 下必须：无重叠、无横向滚动、无关键状态截断（尤其 Badge 不换行）、Dropdown 不越界。
+
+
+## 9. Visual Project Workbench（视觉理解工作台，V4.1 Workbench V2 Golden Sample）
+
+```text
+.page.vision-page（max-width: none；Creative Workflow 禁窄容器）
+  .page-header（h2 22px + 重开按钮）
+  .vision-project-header（项目卡头：名称(点击重命名) · 基于缩略图 · 状态 · Revision N · 模型
+                          + [项目▾ Popover][保存][基于此方案新建][重新识别]）
+  .vision-workbench（grid；≥1600: minmax(0,1fr) + minmax(340px,390px)，宽 min(100%,1520px)）
+    .vision-main（min-width:0；卡片纵列：原图 / 分析入口 / AI理解(摘要+媒介行) /
+                  修改意图(IntentMentionInput+Chips+PersonPanel V2+RegionPanel) /
+                  AI生成方案(FinalPromptEditor+维度锁定) / 生成结果 / 高级设置）
+    .vision-rail（≥1600 sticky top 20 + max-height calc(100vh-40px) 内滚；
+                 <1440 转 static 摘要卡随文档流）
+      .vision-rail-card 当前方案（Effective Plan rows：人物身份/约束/范围/模板人物/维度/媒介/区域 + 待优化徽章）
+      .vision-rail-card.is-error 生成前需处理（语义错误清单）
+      .vision-rail-cta（CTA 唯一渲染处：使用上一次 Prompt / 重新优化 / 优化复刻 Prompt / 确认生成图片）
+```
+
+规则（`src/pages/__tests__/visionWorkbenchLayout.test.ts` 源码契约锁定）：
+
+- 断点：≥1600 双栏 340–390；1440–1599 rail 320 / gap 20 / 宽 calc(100% - 40px)；<1440 单列（rail static）。1280 / 1440 / 1920 / 2560 四档全覆盖，无横向溢出（主列 minmax(0,1fr) 可压缩）。
+- 禁止 `max-width: 960px` 回归（视觉页历史窄容器已删除；源码契约断言 not.toContain）。
+- 区域编辑器 `.vision-region-editor` 全屏 fixed 工作模式，禁止塞 Modal / 600px 卡。
+- 项目 Popover 展开是视图状态（组件局部 useState）；重命名 / 保存 / 派生 / 重新识别走项目语义或元数据回调。
+- CTA 唯一渲染处 = Context Rail；主卡仅无项目时（legacy 兜底）渲染完整操作行（ternary 守卫）。
