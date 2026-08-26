@@ -1,4 +1,4 @@
-import { useState, useEffect, useLayoutEffect, useRef } from 'react';
+import { Fragment, useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { serverApi, isLoopbackUrl } from '../services/serverApi';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { useRuntimeStore } from '../store/useRuntimeStore';
@@ -9,9 +9,15 @@ const POLL_INTERVAL = 10 * 60 * 1000;
 const SPEED = 40;
 const SPACER = 120;
 
+export function calculateMarqueeCopies(trackWidth: number, itemWidth: number): number {
+  if (trackWidth <= 0 || itemWidth <= 0) return 2;
+  return Math.max(2, Math.ceil(trackWidth / itemWidth) + 2);
+}
+
 export default function MarqueeNotice() {
   const [text, setText] = useState('');
   const [dismissedKey, setDismissedKey] = useState<string>('');
+  const [copyCount, setCopyCount] = useState(2);
   const noticeEnabled = useSettingsStore(s => s.settings.notice_enabled);
   // 等待 runtime ready（settings 恢复出真实 server_url）才建立轮询/SSE，
   // 否则启动瞬间会把 SSE 永久连到开发默认地址 localhost:4001
@@ -20,6 +26,7 @@ export default function MarqueeNotice() {
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const esRef = useRef<EventSource | null>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
+  const trackRef = useRef<HTMLDivElement>(null);
   const firstSpanRef = useRef<HTMLSpanElement>(null);
   const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -61,12 +68,22 @@ export default function MarqueeNotice() {
   }, [noticeEnabled, runtimeReady, resolvedServerUrl]);
 
   useLayoutEffect(() => {
-    if (!text || !firstSpanRef.current || !wrapperRef.current) return;
-    const textWidth = firstSpanRef.current.scrollWidth;
-    const step = textWidth + SPACER;
-    const duration = step / SPEED;
-    wrapperRef.current.style.setProperty('--marquee-step', `-${step}px`);
-    wrapperRef.current.style.setProperty('--marquee-duration', `${duration}s`);
+    if (!text || !firstSpanRef.current || !wrapperRef.current || !trackRef.current) return;
+
+    const updateLayout = () => {
+      if (!firstSpanRef.current || !wrapperRef.current || !trackRef.current) return;
+      const step = firstSpanRef.current.scrollWidth + SPACER;
+      const duration = step / SPEED;
+      wrapperRef.current.style.setProperty('--marquee-step', `-${step}px`);
+      wrapperRef.current.style.setProperty('--marquee-duration', `${duration}s`);
+      setCopyCount(prefersReducedMotion ? 1 : calculateMarqueeCopies(trackRef.current.clientWidth, step));
+    };
+
+    updateLayout();
+    const observer = new ResizeObserver(updateLayout);
+    observer.observe(trackRef.current);
+    observer.observe(firstSpanRef.current);
+    return () => observer.disconnect();
   }, [text]);
 
   function handleDismiss() {
@@ -80,15 +97,24 @@ export default function MarqueeNotice() {
   return (
     <div className="marquee-bar">
       <span className="marquee-icon">📢</span>
-      <div className="marquee-track">
+      <div className="marquee-track" ref={trackRef}>
         <div
           className="marquee-wrapper"
           ref={wrapperRef}
           style={prefersReducedMotion ? { animation: 'none' } : undefined}
         >
-          <span className="marquee-text" ref={firstSpanRef}>{text}</span>
-          <span className="marquee-gap" />
-          <span className="marquee-text">{text}</span>
+          {Array.from({ length: copyCount }, (_, index) => (
+            <Fragment key={index}>
+              <span
+                className="marquee-text"
+                ref={index === 0 ? firstSpanRef : undefined}
+                aria-hidden={index === 0 ? undefined : true}
+              >
+                {text}
+              </span>
+              <span className="marquee-gap" aria-hidden="true" />
+            </Fragment>
+          ))}
         </div>
       </div>
       <button className="marquee-close" onClick={handleDismiss} title="关闭通知">×</button>

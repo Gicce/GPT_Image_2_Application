@@ -361,6 +361,7 @@ export interface TrialStatus {
   already_claimed: boolean;
   claimed_at: string | null;
   grant_credits: number;
+  valid_days: number;
   campaign_version: number;
 }
 
@@ -765,7 +766,7 @@ export const serverApi = {
     request<TrialStatus>('/api/trial/status', {}, true),
 
   claimTrial: () =>
-    request<{ granted: boolean; grant_credits: number; claim_id: string; campaign_version: number }>(
+    request<{ granted: boolean; grant_credits: number; valid_days: number; claim_id: string; campaign_version: number }>(
       '/api/trial/claim',
       { method: 'POST' },
       true
@@ -836,7 +837,14 @@ export const serverApi = {
   getModels: () => request<ServerModel[]>('/api/models', {}, true),
 
   getTrialStock: () =>
-    request<{ remaining: number; available: boolean }>('/api/tokens/trial-stock'),
+    request<{
+      remaining: number;
+      available: boolean;
+      reason: string;
+      grant_credits: number;
+      valid_days: number;
+      campaign_version: number;
+    }>('/api/tokens/trial-stock'),
 
   forgotPassword: (email: string) =>
     request<{ message: string }>('/api/auth/forgot-password/send-code', {

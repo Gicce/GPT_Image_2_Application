@@ -19,7 +19,13 @@ export default function Auth({ onSuccess, onClose }: Props) {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [trialStock, setTrialStock] = useState<{ count: number; available: boolean } | null>(null);
+  const [trialStock, setTrialStock] = useState<{
+    available: boolean;
+    reason: string;
+    grant_credits: number;
+    valid_days: number;
+    campaign_version: number;
+  } | null>(null);
   const [stockLoading, setStockLoading] = useState(false);
 
   // 注册验证码相关状态
@@ -62,9 +68,14 @@ export default function Auth({ onSuccess, onClose }: Props) {
       setStockLoading(true);
       serverApi.getTrialStock()
         .then(data => {
-          const count = data.remaining ?? 0;
-          const available = data.available ?? count > 0;
-          setTrialStock({ count, available });
+          const available = data.available ?? (data.remaining ?? 0) > 0;
+          setTrialStock({
+            available,
+            reason: data.reason || (available ? 'ok' : 'trial_token_unavailable'),
+            grant_credits: data.grant_credits ?? 0,
+            valid_days: data.valid_days ?? 0,
+            campaign_version: data.campaign_version ?? 0,
+          });
           if (!available) setRegType('normal');
         })
         .catch(() => setTrialStock(null))
@@ -284,8 +295,10 @@ export default function Auth({ onSuccess, onClose }: Props) {
                   {stockLoading
                     ? '查询中...'
                     : trialAvailable
-                      ? `剩余 ${trialStock?.count} 个名额 · 2天有效期 · $1余额`
-                      : '名额已满，暂不可用'}
+                      ? `可申请 · ${trialStock?.valid_days ?? 0}天有效 · 赠送${(trialStock?.grant_credits ?? 0).toLocaleString('zh-CN')} CY点`
+                      : trialStock?.reason === 'trial_disabled'
+                        ? '试用活动暂未开放'
+                        : '试用服务暂不可用'}
                 </span>
               </span>
             </button>
