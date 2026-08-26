@@ -7,6 +7,10 @@ import { api } from '../services/api';
 import { setAsAvatarFromPath, clearAvatar } from '../services/avatarService';
 import { clearRuntimeConfig, loadRuntimeConfig } from '../services/runtimeTokenService';
 import { toastError, toastSuccess } from '../components/Toast';
+import {
+  clearRechargeReturnContext,
+  readRechargeReturnContext,
+} from '../components/QuoteConfirmDialog';
 import AccountUsagePanel from '../components/AccountUsagePanel';
 import AccountLedgerPanel from '../components/AccountLedgerPanel';
 import { explainError } from '../utils/errors';
@@ -67,6 +71,9 @@ export default function Account() {
   const [refundConfirmId, setRefundConfirmId] = useState<string | null>(null);
   const [refundPollingId, setRefundPollingId] = useState<string | null>(null);
   const [refundStatusMsg, setRefundStatusMsg] = useState('');
+  /** 「去充值」带回的返回上下文（充值完成可一键回到生成页；一次性消费）。 */
+  const [rechargeReturnTarget, setRechargeReturnTarget] = useState<{ page: string } | null>(
+    () => readRechargeReturnContext());
   const allocTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const refundTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -86,6 +93,23 @@ export default function Account() {
 
   // 模型列表跟随统一 store（替代页面私有 getModels 请求）
   useEffect(() => { setModels(serverModels); }, [serverModels]);
+
+  // 深链聚焦充值区（QuoteConfirmDialog「去充值」→ cyimage-navigate section=recharge）：
+  // 挂载时 + 事件到达时滚动到充值面板并短暂高亮，一次性消费后清除标记
+  useEffect(() => {
+    const focusRecharge = () => {
+      if (localStorage.getItem('cy_account_section') !== 'recharge') return;
+      localStorage.removeItem('cy_account_section');
+      const el = document.getElementById('account-recharge');
+      if (!el) return;
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      el.classList.add('is-focus-flash');
+      window.setTimeout(() => el.classList.remove('is-focus-flash'), 2400);
+    };
+    focusRecharge();
+    window.addEventListener('cy-account-section', focusRecharge);
+    return () => window.removeEventListener('cy-account-section', focusRecharge);
+  }, []);
 
   // 窗口重新获得焦点时拉取最新账户数据（服务端是唯一事实来源，缓存不得长期覆盖）
   useEffect(() => {
@@ -593,8 +617,21 @@ export default function Account() {
       </div>
 
       {/* 充值面板：CY 点数直购（¥1 = credits_per_cny 点，兑换率由服务端统一下发） */}
-      <div className="account-section">
+      <div className="account-section" id="account-recharge">
         <h3>点数充值</h3>
+        {rechargeReturnTarget && (
+          <button
+            type="button"
+            className="account-return-link"
+            data-testid="recharge-return-link"
+            onClick={() => {
+              const target = rechargeReturnTarget;
+              clearRechargeReturnContext();
+              setRechargeReturnTarget(null);
+              window.dispatchEvent(new CustomEvent('cyimage-navigate', { detail: { page: target.page } }));
+            }}
+          >← 充值完成后返回继续生成</button>
+        )}
         <div className="recharge-grid">
           <div className="recharge-card highlight">
             <div className="recharge-card-header">

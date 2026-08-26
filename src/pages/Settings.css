@@ -1859,3 +1859,74 @@
   display: flex;
   gap: 8px;
 }
+
+/* ===== AI 技能中心（V4.2 Runtime Skill Center） ===== */
+.runtime-skill-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.runtime-skill-group-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary, #666);
+}
+
+.runtime-skill-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.runtime-skill-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-default, #e5e7eb);
+  border-radius: 10px;
+}
+
+.runtime-skill-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.runtime-skill-name { font-size: 13px; font-weight: 600; }
+.runtime-skill-meta { font-size: 11px; color: var(--text-muted, #888); }
+.runtime-skill-desc { font-size: 11px; color: var(--text-secondary, #666); }
+
+.runtime-skill-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.runtime-skill-badge {
+  font-size: 11px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.runtime-skill-badge.is-core {
+  background: var(--badge-muted-bg, #f3f4f6);
+  color: var(--text-secondary, #666);
+}
+
+.runtime-skill-badge.is-auto {
+  background: var(--badge-info-bg, #dbeafe);
+  color: var(--badge-info-text, #1e40af);
+}

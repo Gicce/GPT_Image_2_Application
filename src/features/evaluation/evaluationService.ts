@@ -18,7 +18,12 @@ import { logAiTransport } from '../aiRouting/aiRoutingLog';
 import { listVisionSessions } from '../vision/session';
 import { buildPreserveChange, evaluationTaskKind } from './evaluationModel';
 import { readEvaluationSettings } from './evaluationSettings';
-import type { EvaluateImageRequestPayload, ImageEvaluation } from './types';
+import type {
+  AnimeConsistencyEvaluateOutcome,
+  AnimeConsistencyEvaluationRecord,
+  EvaluateImageRequestPayload,
+  ImageEvaluation,
+} from './types';
 import type { ImageRecord, Task } from '../../types';
 
 export interface EvaluationContext {
@@ -27,6 +32,86 @@ export interface EvaluationContext {
   understandingSummary: string;
   preserve: string[];
   change: string[];
+}
+
+export interface AnimeConsistencyContext {
+  characterReferencePath: string;
+  characterFacts: string;
+}
+
+/**
+ * 生成快照 -> 动漫一致性评价上下文。旧任务缺角色卡或角色参考图时返回 null，
+ * UI 不显示该评价，也绝不根据当前项目状态补造历史事实。
+ */
+export function resolveAnimeConsistencyContext(task: Task): AnimeConsistencyContext | null {
+  const snapshot = task.provenance?.animeCharacterSnapshot;
+  const reference = task.provenance?.imageRoles?.find(item => item.role === 'anime_character_reference');
+  if (!snapshot || !reference?.path?.trim()) return null;
+  return {
+    characterReferencePath: reference.path,
+    characterFacts: JSON.stringify({
+      hair: snapshot.hairFacts ?? snapshot.hair,
+      face: snapshot.face,
+      eyes: snapshot.eyes,
+      clothing: snapshot.clothing,
+      ...(snapshot.expression ? { expression: snapshot.expression } : {}),
+    }),
+  };
+}
+
+/** 单张生成结果的动漫角色一致性评价。失败只返回 ok=false，绝不抛出或修改任务状态。 */
+export async function evaluateAnimeConsistencyAsset(
+  task: Task,
+  image: ImageRecord,
+): Promise<AnimeConsistencyEvaluateOutcome> {
+  const context = resolveAnimeConsistencyContext(task);
+  if (!context || !image.local_path) {
+    return { ok: false, evaluation: null, error_kind: 'not_applicable', error_message: null, status: null };
+  }
+  const resolution = resolveModelForRole('image_evaluation');
+  if (!resolution.ok || !resolution.connection) {
+    return {
+      ok: false,
+      evaluation: null,
+      error_kind: 'model_unavailable',
+      error_message: resolution.ok ? '图片结果评价模型不可用。' : resolution.error,
+      status: null,
+    };
+  }
+  recordAiRoleUsage(resolution.resolved);
+  logAiTransport(resolution.resolved, 'anime-character-consistency-evaluation');
+  try {
+    return await api.evaluateAnimeCharacterConsistency({
+      asset_id: image.id,
+      asset_path: image.local_path,
+      task_id: task.id,
+      character_reference_path: context.characterReferencePath,
+      character_facts: context.characterFacts,
+      base_url: resolution.connection.baseUrl,
+      token: resolution.connection.token,
+      model: resolution.connection.model,
+    });
+  } catch (error: any) {
+    return {
+      ok: false,
+      evaluation: null,
+      error_kind: 'request_failed',
+      error_message: error?.message || '角色一致性评价失败，请稍后重试。',
+      status: null,
+    };
+  }
+}
+
+/** 读取单张已持久化角色一致性评价；无记录/读取失败均返回 null。 */
+export async function loadAnimeConsistencyEvaluation(
+  assetId: string,
+): Promise<AnimeConsistencyEvaluationRecord | null> {
+  try {
+    const records = await api.getAnimeConsistencyEvaluations([assetId]);
+    return records.find(item => item.asset_id === assetId) ?? null;
+  } catch {
+    return null;
+  }
 }
 
 function visionRecreationContext(task: Task): EvaluationContext {

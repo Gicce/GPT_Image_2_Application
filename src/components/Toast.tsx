@@ -10,11 +10,12 @@ interface ToastItem {
   message: string;
   /** 标题（与正文分层展示）；未显式传入时按类型给默认标题。 */
   title: string;
+  action?: { label: string; onClick: () => void };
 }
 
 interface ToastState {
   toasts: ToastItem[];
-  push: (kind: ToastKind, message: string, title?: string) => number;
+  push: (kind: ToastKind, message: string, title?: string, action?: ToastItem['action']) => number;
   dismiss: (id: number) => void;
   /** 更新已有 toast 的文案（loading 进度场景：一条 toast 走完全部状态） */
   update: (id: number, message: string, kind?: ToastKind, title?: string) => void;
@@ -33,10 +34,16 @@ export const DEFAULT_TOAST_TITLES: Record<ToastKind, string> = {
 
 export const useToastStore = create<ToastState>((set, get) => ({
   toasts: [],
-  push: (kind, message, title) => {
+  push: (kind, message, title, action) => {
     const id = ++toastSeq;
     set(state => ({
-      toasts: [...state.toasts, { id, kind, message, title: title?.trim() || DEFAULT_TOAST_TITLES[kind] }],
+      toasts: [...state.toasts, {
+        id,
+        kind,
+        message,
+        title: title?.trim() || DEFAULT_TOAST_TITLES[kind],
+        ...(action ? { action } : {}),
+      }],
     }));
     if (kind !== 'loading') {
       const timer = setTimeout(() => get().dismiss(id), 3600);
@@ -60,8 +67,8 @@ export function toastError(message: string, title?: string) {
   useToastStore.getState().push('error', message, title);
 }
 
-export function toastWarning(message: string, title?: string) {
-  useToastStore.getState().push('warning', message, title);
+export function toastWarning(message: string, title?: string, action?: ToastItem['action']) {
+  useToastStore.getState().push('warning', message, title, action);
 }
 
 export function toastInfo(message: string, title?: string) {
@@ -108,6 +115,16 @@ function ToastItemView({ item }: { item: ToastItem }) {
           <span className="toast-message">{item.message}</span>
         )}
       </span>
+      {item.action && (
+        <button
+          type="button"
+          className="toast-action"
+          onClick={() => {
+            item.action?.onClick();
+            dismiss(item.id);
+          }}
+        >{item.action.label}</button>
+      )}
       <button className="toast-close" onClick={() => dismiss(item.id)} aria-label="关闭提示">×</button>
     </div>
   );

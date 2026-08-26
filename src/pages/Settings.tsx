@@ -14,6 +14,7 @@ import { RELEASE_INFO } from '../config/release';
 import { useAIProviderStore } from '../features/aiProviders/store';
 import AgentProviderSettings from '../features/aiProviders/AgentProviderSettings';
 import AiModelUsageSettings from '../features/aiRouting/AiModelUsageSettings';
+import RuntimeSkillCenter from '../features/vision/skills/RuntimeSkillCenter';
 import type {
   AgentEndpointCheckResult,
   AgentStyleTemplate,
@@ -46,13 +47,14 @@ type SettingsSection =
   | 'agents'
   | 'vision'
   | 'airouting'
+  | 'aiskills'
   | 'imagegen'
   | 'files'
   | 'postprocess'
   | 'diagnostics'
   | 'update';
 
-type EditableSection = Exclude<SettingsSection, 'agents' | 'vision' | 'airouting' | 'diagnostics' | 'update'>;
+type EditableSection = Exclude<SettingsSection, 'agents' | 'vision' | 'airouting' | 'aiskills' | 'diagnostics' | 'update'>;
 
 const SETTINGS_NAV: { key: SettingsSection; label: string; desc: string }[] = [
   { key: 'general', label: '常规', desc: '主题外观与智能体模板入口。' },
@@ -60,6 +62,7 @@ const SETTINGS_NAV: { key: SettingsSection; label: string; desc: string }[] = [
   { key: 'agents', label: 'AI 智能体', desc: '管理 AI 模型服务（对话 / 任务规划 / 提示词优化）。' },
   { key: 'vision', label: '视觉模型', desc: '管理图片理解模型服务（视觉理解 / 反向 Prompt / 高复刻评审）。' },
   { key: 'airouting', label: 'AI 模型使用', desc: '查看并调整每项 AI 能力实际使用的模型。' },
+  { key: 'aiskills', label: 'AI 技能中心', desc: '视觉理解与复刻工作流的运行时技能（可解释执行层）。' },
   { key: 'imagegen', label: '图片生成', desc: '默认尺寸、质量与输出格式。' },
   { key: 'files', label: '图片与文件', desc: '生成目录与图片库素材目录。' },
   { key: 'postprocess', label: '后处理工具', desc: 'remove.bg 与 Topaz API Key。' },
@@ -1058,6 +1061,7 @@ export default function Settings() {
       case 'airouting': return (
         <AiModelUsageSettings onNavigateSection={section => { setActiveSection(section); setSettingsStatus(''); }} />
       );
+      case 'aiskills': return <RuntimeSkillCenter />;
       case 'imagegen': return renderImageGen();
       case 'files': return renderFiles();
       case 'postprocess': return renderPostprocess();

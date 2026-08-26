@@ -612,3 +612,49 @@
 .history-model-row-value {
   color: var(--text-primary);
 }
+
+/* ===== AI 技能与规则（V4.2：生成时冻结的技能快照） ===== */
+.history-skill-summary {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12px;
+}
+
+.history-skill-summary li.is-applied { color: var(--accent-success, #059669); }
+.history-skill-summary li.is-skipped { color: var(--text-secondary, #666); }
+.history-skill-summary li.is-failed { color: var(--accent-danger, #dc2626); }
+.history-skill-summary li.is-overridden { color: var(--badge-warn-text, #92400e); }
+
+/* 动漫角色一致性 · 角色卡摘要（生成时冻结；History 只读快照） */
+.history-anime-character {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-default, #e5e7eb);
+  border-radius: 8px;
+  background: var(--bg-hover, rgba(0, 0, 0, 0.03));
+  font-size: 12px;
+}
+
+.history-anime-character strong {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--text-primary, #333);
+}
+
+.history-anime-character p { margin: 4px 0; color: var(--text-secondary, #666); }
+
+.history-anime-character ul {
+  margin: 4px 0;
+  padding-left: 16px;
+  color: var(--text-secondary, #666);
+}
+
+.history-empty-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-secondary, #666);
+}

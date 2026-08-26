@@ -175,6 +175,25 @@ fn open_db(path: &PathBuf) -> Option<Connection> {
         );
         CREATE INDEX IF NOT EXISTS idx_image_evaluations_task_id
             ON image_evaluations(task_id);
+        CREATE TABLE IF NOT EXISTS anime_consistency_evaluations (
+            asset_id TEXT PRIMARY KEY,
+            asset_path TEXT NOT NULL DEFAULT '',
+            task_id TEXT NOT NULL DEFAULT '',
+            overall_score INTEGER,
+            hair_consistency INTEGER,
+            bangs_consistency INTEGER,
+            face_consistency INTEGER,
+            eye_consistency INTEGER,
+            clothing_consistency INTEGER,
+            expression_consistency INTEGER,
+            issues_json TEXT NOT NULL DEFAULT '[]',
+            suggestion TEXT NOT NULL DEFAULT '',
+            character_facts_json TEXT NOT NULL DEFAULT '{}',
+            evaluated_by TEXT NOT NULL DEFAULT '',
+            evaluated_at TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL DEFAULT ''
+        );
         CREATE TABLE IF NOT EXISTS visual_projects (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,

@@ -28,6 +28,8 @@ export interface GenerationDirectiveInput {
   clothingPolicy: ClothingPolicy;
   /** 自定义服装描述（clothingPolicy === 'custom'）。 */
   customClothing?: string;
+  /** 模板服装令牌（use_subject_reference 时用于显式排斥模板服装元素）。 */
+  templateClothingTokens?: ReadonlyArray<string>;
 }
 
 /** 图片序号（1 起）→ 指令行中的称呼。 */
@@ -51,6 +53,10 @@ function describeRoleLine(ref: GenerationImageReference, index: number, personEn
     case 'person_reference':
       return `- ${ordinal}（@${label}，人物身份参考）：主体人物身份的唯一主来源——${PERSON_IDENTITY}必须以该图为准；`
         + '主体人物必须整体替换为该图中的人物，不得保留画面模板图原人物的脸部身份或面部特征。';
+    case 'anime_character_reference':
+      return `- ${ordinal}（@${label}，动漫角色参考）：本图全部动漫区域（主动漫角色、次要动漫主体与全部动漫局部插图 / 头像框）的唯一视觉角色设计来源——`
+        + '发型与刘海结构、卷度、发色、脸型、眼型、瞳色、服装基底与配饰一律以该图为准；'
+        + '任何动漫层不得另行解释或重新设计人物；该图不提供姿势、动作、构图、背景与镜头（这些以画面模板为准）。';
     case 'background_reference':
       return `- ${ordinal}（@${label}，背景参考）：仅提供背景 / 环境参照，不提供人物身份。`;
     case 'style_reference':
@@ -65,7 +71,10 @@ function describeRoleLine(ref: GenerationImageReference, index: number, personEn
 function clothingRuleLine(input: GenerationDirectiveInput, templateOrdinal: string, personOrdinal: string): string {
   switch (input.clothingPolicy) {
     case 'use_subject_reference':
-      return `服装规则：服装 / 造型同样以${personOrdinal}（人物身份参考）为准（身份与服装都来自人物参考图）。`;
+      // 注意：禁令不得枚举具体模板服装词——枚举本身会把令牌写进正向 Prompt，
+      // 违反「最终 Prompt 不含模板服装元素」验收口径（具体令牌只进负面词）
+      return `服装规则：服装 / 造型同样以${personOrdinal}（人物身份参考）为准（身份与服装都来自人物参考图）；`
+        + `模板原服装、配饰与装饰件一律不得出现在画面中。`;
     case 'custom': {
       const custom = input.customClothing?.trim();
       return `服装规则：服装 / 造型按自定义描述执行${custom ? `——${custom}` : ''}；人物身份仍必须来自${personOrdinal}（人物身份参考）。`;
@@ -119,7 +128,11 @@ export function buildGenerationImageDirective(input: GenerationDirectiveInput): 
 export function buildGenerationNegativeAddendum(input: GenerationDirectiveInput): string {
   const hasPerson = input.imageReferences.some(ref => ref.path?.trim() && ref.role === 'person_reference');
   if (!input.personReplacementEnabled || !hasPerson) return '';
-  return '画面模板图原人物的脸部身份、五官与面部特征';
+  const parts = ['画面模板图原人物的脸部身份、五官与面部特征'];
+  if (input.clothingPolicy === 'use_subject_reference' && input.templateClothingTokens?.length) {
+    parts.push(`模板服装与配饰（${input.templateClothingTokens.slice(0, 6).join('、')}）`);
+  }
+  return parts.join('，');
 }
 
 /** 拼接负面提示词（去重：追加项已存在时不重复添加）。 */

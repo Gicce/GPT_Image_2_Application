@@ -13,6 +13,7 @@ import { useServerStatusStore, startHealthCheckLoop, startHeartbeatLoop, stopHea
 import { ensureTaskEventBridge } from './store/useTaskStore';
 import { useEvaluationStore } from './store/useEvaluationStore';
 import { ensureEvaluationWatcher } from './features/evaluation/evaluationService';
+import { ensureCharacterAssetWatcher } from './features/vision/project/animeCharacterAssetService';
 import { loadRuntimeConfig } from './services/runtimeTokenService';
 import { ensureServerModelSync } from './store/useServerModelStore';
 import { useRuntimeStore } from './store/useRuntimeStore';
@@ -88,6 +89,8 @@ export default function App() {
     // 统一图片评价：加载持久化评分缓存 + 挂任务完成后的异步自动评价（不阻塞生成）
     void useEvaluationStore.getState().loadAll();
     ensureEvaluationWatcher();
+    // V5 动漫角色参考图：任务完成回绑 watcher（Strict Visual Reference 资产落位）
+    ensureCharacterAssetWatcher();
     // 服务器模型同步单例：runtimeReady / 登录 / Server 切换 / 断网恢复 统一由 store 内部调度
     ensureServerModelSync();
     // 账号切换时同步各自头像（登出清空、登录恢复缓存）
@@ -179,6 +182,10 @@ export default function App() {
       if (detail.page === 'settings' && detail.section) {
         localStorage.setItem('cy_settings_section', detail.section);
         window.dispatchEvent(new CustomEvent('cy-settings-section'));
+      }
+      if (detail.page === 'account' && detail.section) {
+        localStorage.setItem('cy_account_section', detail.section);
+        window.dispatchEvent(new CustomEvent('cy-account-section'));
       }
       handleNavigate(detail.page);
     };

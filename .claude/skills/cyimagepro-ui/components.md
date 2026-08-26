@@ -71,6 +71,7 @@
 | resolveModelForRole | features/aiRouting/resolveModelForRole.ts | 所有 AI 功能模型解析唯一入口（manual/follow/default/fallback + 显式回退原因）；禁止业务组件自读全局默认模型 |
 | useAiModelRoutingStore | features/aiRouting/modelRoutingPolicy.ts | AI 路由配置持久层（ai_model_routing_v1：只存用户改过的条目）+ 进程内「最近使用」记录 |
 | EvaluationSummary / EvaluationPanel | features/evaluation/ | 评分摘要与详情（跟随选中缩略图；长文本 2~4 行折叠） |
+| Anime Character Reference Card | features/vision/project/ContextRail.tsx | Strict Visual Reference 紧凑状态卡（待创建/已就绪互斥；缓存复用零新增费用；重新生成再次报价），见 patterns.md §31 |
 | FavoriteButton（vision-result-quick 内） | features/evaluation/VisionResultSection.tsx | ♡/♥ 收藏 Toggle（与 👍 满意分离，落 image_evaluations.favorite） |
 | taskState.ts | utils/taskState.ts | 主任务状态聚合唯一纯函数（deriveTaskState 六态从 sub_tasks 派生 + resolveTaskStartedAt/resolveTaskFinishedAt/taskDurationMs + DERIVED_STATUS_META 状态词）；页面禁止自猜 task.status，见 patterns.md §20 |
 | taskFailure.ts | utils/taskFailure.ts | 图片生成失败 canonical classifier（classifyGenerationFailure：结构化 detail 优先 / 旧 string 回落；category→文案表见 copy.md §13；describeEndpoint 脱敏；attemptFailureHistory 尾部对齐）；旧 subtaskError.ts 已删除，禁止复活第二套分类 |

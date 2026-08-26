@@ -149,7 +149,7 @@ export const FINAL_PROMPT = {
   editorHint: '可直接编辑；手动修改后无需重新优化也能生成',
   statusReady: '最终 Prompt 已生成',
   statusManual: 'Prompt 已手动修改，可直接生成，也可重新优化',
-  statusDirty: '修改已记录，最终 Prompt 待重新生成',
+  statusDirty: '修改已记录，最终 Prompt 待重新生成；此前优化结果已保留，改回原条件可自动恢复',
   statusFailed: '本次优化失败',
   statusFailedFallback: '仍可使用上一次成功的 Prompt',
   useLastButton: '使用上一次 Prompt',

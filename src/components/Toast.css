@@ -120,6 +120,22 @@
   border-radius: 6px;
 }
 
+.toast-action {
+  flex-shrink: 0;
+  border: none;
+  background: none;
+  color: var(--text-link);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 4px 0;
+  white-space: nowrap;
+}
+
+.toast-action:hover {
+  color: var(--text-link-hover);
+}
+
 .toast-close:hover {
   background: var(--bg-hover);
   color: var(--text-primary);

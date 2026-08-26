@@ -1,5 +1,35 @@
 # cyimagepro-ui CHANGELOG
 
+## Skill 16.0.0 / UI System 1.2.0（2026-08-25，Visual Consistency V5）
+
+规则层（无 Token 变更，UI System 保持 1.2.0）：
+
+- SKILL.md 新增最高优先级规则 24（Visual Consistency V5）。
+- patterns.md 新增 §28-§31：Detail Group / Instance、Prompt Confirmation Progressive Disclosure、System Correction Toast Copy、Compact Reference Asset Card。
+- components.md 登记 Context Rail 的动漫角色参考紧凑卡。
+
+配套实现：实例级插图计数与绑定、Strict 资产报价/缓存/第三参考图、确认弹窗服务端预计点数与高级详情、可进入 Skill Trace 的用户语言修正 Toast、角色一致性评价与重试入口。
+
+---
+
+## Skill 15.0.0 / UI System 1.2.0（2026-08-25，V4.2 视觉一致性第五轮）
+
+规则层（无 Token 变更，UI System 保持 1.2.0）：
+
+- **SKILL.md 新增最高优先级规则 23（List State / Billing CTA / Canonical Reference 三铁律）**。
+- **patterns.md 新增 §25-§27**：
+  - §25 Project List State Transition Pattern：列表行三区固定网格（auto / minmax(0,1fr) / auto）；确认态整体替换操作区（禁止追加按钮）；删除确认态唯一事实源 = 列表级单值 `pendingDeleteProjectId`。历史缺陷锚点：确认删除后标题竖排单字（操作区 shrink 0 + 追加按钮）。
+  - §26 Billing Dialog CTA Pattern：余额不足时补救 CTA（去充值）进 footer 层级且为唯一 primary，确认生成 disabled；明细区补「还差 N 点」；导航 cyimage-navigate(account/recharge) + 一次性 returnContext。
+  - §27 Canonical Reference Pattern：同源实体跨区域统一 label / hover 预览 / 徽标；锁定类摘要（🔒 已统一角色卡）只在存在真实冻结合同时出现。
+
+配套代码（Canonical Anime Character V1 + Project Delete UI + Billing CTA）：
+
+- `src/features/vision/project/animeCharacter.ts`（新）：Canonical Anime Character 派生 / detail insert 绑定 / 一致性校验 / Prompt 冲突检测。
+- `VisualProjectLibrary.tsx` + `VisionUnderstanding.css`：三区网格 + 替换式确认态 + pendingDeleteProjectId 状态机。
+- `QuoteConfirmDialog.tsx` + `App.css` + `Account.tsx/css`：footer 三按钮 CTA 层级 + 还差行 + 返回继续生成。
+
+---
+
 ## Skill 14.0.0 / UI System 1.2.0（2026-08-24，V4.2 CY Credits Billing）
 
 规则层（无 Token 变更，UI System 保持 1.2.0）：

@@ -7,9 +7,9 @@ description: CyImagePro UI Design System（cyimagepro-ui）——本仓库所有
 
 ```text
 Skill ID:       cyimagepro-ui
-Skill Version:  13.0.0
+Skill Version:  16.0.0
 UI System Version: 1.2.0
-Last Updated:   2026-08-24
+Last Updated:   2026-08-25
 Owner Code:     src/App.css（Token 定义唯一事实源）
                 src/components/（公共组件）
 ```
@@ -86,6 +86,9 @@ Token → Primitive Component → Business Component → Page
 21. **Task Failure UX（V4.1 铁律）**：Friendly error summary MUST be separated from technical diagnostics（友好摘要与技术诊断分层；raw error 只进「技术详情」折叠区且必须保留，绝不删除）；TaskQueue is operational status UI, History is full audit UI（任务队列只做状态 / 重试 / 时间，完整审计进历史记录详情，禁止第二套 Task Detail——深链 `openTaskDetailFromQueue`）；Terminal tasks MUST expose a terminal timestamp（终态任务必须显示真实结束时间，唯一入口 `resolveTaskFinishedAt`（completed_at），缺失显示「—」，禁止 Date.now() 伪值）；Native browser/system alerts MUST NOT be used for task retry feedback（重试反馈一律应用内 Toast）。主任务状态聚合唯一入口 `deriveTaskState(task)`（sub_tasks 事实派生六态，页面禁止自猜 task.status）；失败分类唯一入口 `classifyGenerationFailure`（canonical failure model：Rust 结构化 `error_detail` 优先、旧 string 回落解析；禁止各页面 substring 自分类）。详见 patterns.md §20 与 copy.md §13。
 
 22. **Generation Quote & Pricing Transparency（V4.2 铁律）**：All paid image generation entries MUST obtain a server quote and show the QuoteConfirmDialog before authorize（所有付费生成入口提交前必须取服务端报价并弹确认层：单张/预计/余额/剩余）；Client MUST NEVER compute 数量×单价 by itself（报价与按钮价格标注一律来自服务端）；用户生成前 MUST 知道预计点数、生成后 MUST 看到实际点数、失败释放 MUST 在点数流水中可见；采购成本/毛利率/Provider 内部定价 MUST NOT 出现在普通用户界面。详见 patterns.md §21-§24。
+
+23. **List State / Billing CTA / Canonical Reference（V4.2 铁律）**：Interactive list rows MUST preserve layout geometry across normal / confirm / loading states（列表行三区固定网格，确认态整体替换操作区，删除确认态唯一事实源 = 列表级单值状态；详见 patterns.md §25）；When the primary action is blocked by a recoverable account state, the remediation CTA belongs in the footer action hierarchy（余额不足时「去充值」进 footer 且为唯一 primary，确认生成 disabled，明细区补「还差 N 点」；详见 patterns.md §26）；The same source entity shown in multiple areas MUST share one canonical label / hover preview / viewer / status badge（同源实体跨区域统一 label/预览/徽标，锁定类摘要只在存在真实冻结合同时出现；详见 patterns.md §27）。
+24. **Visual Consistency V5（角色与插图一致性铁律）**：Detail Group != Detail Instance（数量、绑定、Prompt、Trace 一律按真实画框实例；缺实例时用户触发受限补充识别，禁止打开项目自动调用 AI）；Prompt confirmation uses progressive disclosure（默认只显示来源/编辑/参考图/一致性/生成模型/尺寸数量/服务端预计点数，模型链路/任务 ID/路径/完整 Prompt 默认折叠）；System correction Toast uses user language and links to Skill Trace（禁止把 Guard/Contract/字段名暴露给普通用户）；Strict Visual Reference 使用紧凑「动漫角色参考」卡，缓存命中明确显示复用且零新增费用，重建必须再次报价确认。详见 patterns.md §28-§31。
 
 ## 5. 版本与升级
 

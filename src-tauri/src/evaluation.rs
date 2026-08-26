@@ -221,6 +221,20 @@ fn build_evaluation_user_text(request: &EvaluateImageRequest) -> String {
 
 /// 评审 JSON 解析：剥围栏 → 首个平衡对象 → 兼容 evaluation 包裹键。
 fn parse_evaluation_text(text: &str) -> Result<RawEvaluationScores, String> {
+    let value = extract_balanced_json_object(text, "评审")?;
+    let target = if value.get("evaluation").is_some() {
+        value.get("evaluation").cloned().unwrap_or(value)
+    } else {
+        value
+    };
+    serde_json::from_value::<RawEvaluationScores>(target)
+        .map_err(|e| format!("评审结构不符合约定：{}", e))
+}
+
+/// 平衡 JSON 对象提取器（共享 Response Normalizer：剥 ``` 围栏 → 字符串/转义
+/// 感知的深度扫描 → 首个闭合 {...}）。所有模型 JSON 解析统一走这里，
+/// 禁止在各命令复制新的脆弱 parser（V5 一致性评价复用同一实现）。
+pub fn extract_balanced_json_object(text: &str, label: &str) -> Result<serde_json::Value, String> {
     let trimmed = text.trim();
     let without_fence = if trimmed.starts_with("```") {
         trimmed
@@ -236,7 +250,7 @@ fn parse_evaluation_text(text: &str) -> Result<RawEvaluationScores, String> {
     let start = bytes
         .iter()
         .position(|b| *b == b'{')
-        .ok_or_else(|| "评审未返回 JSON 对象".to_string())?;
+        .ok_or_else(|| format!("{}未返回 JSON 对象", label))?;
     let mut depth = 0i32;
     let mut in_string = false;
     let mut escaped = false;
@@ -260,19 +274,11 @@ fn parse_evaluation_text(text: &str) -> Result<RawEvaluationScores, String> {
             _ => {}
         }
     }
-    let end = end.ok_or_else(|| "评审 JSON 未闭合".to_string())?;
+    let end = end.ok_or_else(|| format!("{} JSON 未闭合", label))?;
     let json_text = without_fence
         .get(start..=end)
-        .ok_or_else(|| "评审 JSON 截取失败".to_string())?;
-    let value: serde_json::Value = serde_json::from_str(json_text)
-        .map_err(|e| format!("评审 JSON 解析失败：{}", e))?;
-    let target = if value.get("evaluation").is_some() {
-        value.get("evaluation").cloned().unwrap_or(value)
-    } else {
-        value
-    };
-    serde_json::from_value::<RawEvaluationScores>(target)
-        .map_err(|e| format!("评审结构不符合约定：{}", e))
+        .ok_or_else(|| format!("{} JSON 截取失败", label))?;
+    serde_json::from_str(json_text).map_err(|e| format!("{} JSON 解析失败：{}", label, e))
 }
 
 // ======================= 持久化（app.db image_evaluations） =======================
@@ -706,6 +712,338 @@ pub fn set_image_favorite(
 }
 
 // ======================= 测试 =======================
+
+// ======================= V5 Anime Character Consistency Evaluation =======================
+
+const ANIME_CONSISTENCY_SYSTEM_PROMPT: &str = r#"你是「动漫角色一致性评审器」。用户会给你第 1 张图（角色设计事实来源：人物参考图或动漫角色参考图）、第 2 张图（生成结果），以及一份结构化角色设计事实。你的任务：评价生成结果中**全部动漫人物区域**（主动漫角色 + 各局部插图 / 头像框 / 特写框）是否与角色设计事实完全一致。
+
+评分规则：
+- 每个维度 0~100 整数；逐区域对照：主角色一个分数口径，各插图只允许裁切差异，设计差异必须扣分。
+- hair_consistency：发型整体（长度 / 卷度 / 发色 / 轮廓）。
+- bangs_consistency：刘海形态（分缝 / 刘海样式 / 边缘走向）。
+- face_consistency：脸型与五官结构。
+- eye_consistency：眼型与瞳色。
+- clothing_consistency：服装基底与配饰。
+- expression_consistency：表情基线（无表情基线事实时返回 null）。
+- issues：具体偏差（哪个区域、哪项不一致，最多 5 条，可行动）。
+- suggestion：一句话改进建议。
+- 画面中没有该维度可评时返回 null，绝不硬造 0 分。
+- 严格只输出一个 JSON 对象，不要解释或 Markdown 围栏。
+
+JSON 结构：
+{"hair_consistency": 0, "bangs_consistency": 0, "face_consistency": 0, "eye_consistency": 0, "clothing_consistency": 0, "expression_consistency": 0, "issues": ["…"], "suggestion": "…"}"#;
+
+/// 动漫角色一致性评价（V5 Foundation：持久化于 anime_consistency_evaluations，
+/// asset_id 主键；失败不阻塞生成——只返回 ok=false 由 UI 显示「评价失败，可重新评价」）。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AnimeConsistencyEvaluation {
+    pub asset_id: String,
+    pub asset_path: String,
+    pub task_id: String,
+    pub overall_score: Option<i32>,
+    pub hair_consistency: Option<i32>,
+    pub bangs_consistency: Option<i32>,
+    pub face_consistency: Option<i32>,
+    pub eye_consistency: Option<i32>,
+    pub clothing_consistency: Option<i32>,
+    pub expression_consistency: Option<i32>,
+    pub issues: Vec<String>,
+    pub suggestion: String,
+    /// 评价依据的角色设计事实（复评对照；JSON 字符串快照）。
+    pub character_facts_json: String,
+    pub evaluated_by: String,
+    pub evaluated_at: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct EvaluateAnimeConsistencyRequest {
+    pub asset_id: String,
+    pub asset_path: String,
+    pub task_id: String,
+    /// 角色设计事实来源图（动漫角色参考图优先；缺失时回落人物参考图）。
+    pub character_reference_path: String,
+    /// 角色设计事实 JSON（resolved facts 编译后的文本）。
+    pub character_facts: String,
+    pub base_url: String,
+    pub token: String,
+    pub model: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EvaluateAnimeConsistencyResult {
+    pub ok: bool,
+    pub evaluation: Option<AnimeConsistencyEvaluation>,
+    pub error_kind: Option<String>,
+    pub error_message: Option<String>,
+    pub status: Option<u16>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct RawAnimeConsistencyScores {
+    hair_consistency: Option<f64>,
+    bangs_consistency: Option<f64>,
+    face_consistency: Option<f64>,
+    eye_consistency: Option<f64>,
+    clothing_consistency: Option<f64>,
+    expression_consistency: Option<f64>,
+    #[serde(default)]
+    issues: Vec<String>,
+    #[serde(default)]
+    suggestion: String,
+}
+
+const ANIME_CONSISTENCY_COLUMNS: &str = "asset_id, asset_path, task_id, overall_score, \
+hair_consistency, bangs_consistency, face_consistency, eye_consistency, clothing_consistency, \
+expression_consistency, issues_json, suggestion, character_facts_json, evaluated_by, evaluated_at, \
+created_at, updated_at";
+
+fn row_to_anime_consistency(row: &rusqlite::Row<'_>) -> rusqlite::Result<AnimeConsistencyEvaluation> {
+    Ok(AnimeConsistencyEvaluation {
+        asset_id: row.get("asset_id")?,
+        asset_path: row.get("asset_path")?,
+        task_id: row.get("task_id")?,
+        overall_score: row.get("overall_score")?,
+        hair_consistency: row.get("hair_consistency")?,
+        bangs_consistency: row.get("bangs_consistency")?,
+        face_consistency: row.get("face_consistency")?,
+        eye_consistency: row.get("eye_consistency")?,
+        clothing_consistency: row.get("clothing_consistency")?,
+        expression_consistency: row.get("expression_consistency")?,
+        issues: serde_json::from_str::<Vec<String>>(&row.get::<_, String>("issues_json")?)
+            .unwrap_or_default(),
+        suggestion: row.get("suggestion")?,
+        character_facts_json: row.get("character_facts_json")?,
+        evaluated_by: row.get("evaluated_by")?,
+        evaluated_at: row.get("evaluated_at")?,
+        created_at: row.get("created_at")?,
+        updated_at: row.get("updated_at")?,
+    })
+}
+
+#[tauri::command]
+pub async fn evaluate_anime_character_consistency(
+    app: AppHandle,
+    request: EvaluateAnimeConsistencyRequest,
+) -> Result<EvaluateAnimeConsistencyResult, String> {
+    println!(
+        "[AITransport] role=image_evaluation feature=anime-consistency model={}",
+        request.model
+    );
+    if request.model.trim().is_empty() || request.base_url.trim().is_empty() || request.token.trim().is_empty() {
+        return Ok(EvaluateAnimeConsistencyResult {
+            ok: false,
+            evaluation: None,
+            error_kind: Some("not_configured".into()),
+            error_message: Some("视觉模型服务未配置（Base URL / API Key / 模型缺失）".into()),
+            status: None,
+        });
+    }
+    if request.asset_path.trim().is_empty() || request.character_reference_path.trim().is_empty() {
+        return Ok(EvaluateAnimeConsistencyResult {
+            ok: false,
+            evaluation: None,
+            error_kind: Some("unsupported_image".into()),
+            error_message: Some("生成图或角色参考图缺失，无法评价角色一致性".into()),
+            status: None,
+        });
+    }
+    let reference_url = match encode_image_data_url(&request.character_reference_path) {
+        Ok(url) => url,
+        Err(message) => {
+            return Ok(EvaluateAnimeConsistencyResult {
+                ok: false,
+                evaluation: None,
+                error_kind: Some("unsupported_image".into()),
+                error_message: Some(format!("角色参考图处理失败：{}", message)),
+                status: None,
+            });
+        }
+    };
+    let asset_url = match encode_image_data_url(&request.asset_path) {
+        Ok(url) => url,
+        Err(message) => {
+            return Ok(EvaluateAnimeConsistencyResult {
+                ok: false,
+                evaluation: None,
+                error_kind: Some("unsupported_image".into()),
+                error_message: Some(format!("生成图处理失败：{}", message)),
+                status: None,
+            });
+        }
+    };
+    let user_text = format!(
+        "角色设计事实（Canonical Character）：{}\n图片顺序：第 1 张是角色设计参考，第 2 张是生成结果。请逐区域评审角色一致性。",
+        if request.character_facts.trim().is_empty() { "（未提供结构化事实，按第 1 张图评审）".to_string() } else { request.character_facts.trim().to_string() }
+    );
+    let text = match call_vision_model(
+        &request.base_url,
+        &request.token,
+        request.model.trim(),
+        ANIME_CONSISTENCY_SYSTEM_PROMPT,
+        &user_text,
+        &[reference_url, asset_url],
+        2000,
+    )
+    .await
+    {
+        Ok(text) => text,
+        Err(error) => {
+            return Ok(EvaluateAnimeConsistencyResult {
+                ok: false,
+                evaluation: None,
+                error_kind: Some(error.kind),
+                error_message: Some(error.message),
+                status: error.status,
+            });
+        }
+    };
+    let raw: RawAnimeConsistencyScores = match extract_balanced_json_object(&text, "评审") {
+        Ok(value) => match serde_json::from_value(value) {
+            Ok(parsed) => parsed,
+            Err(e) => {
+                return Ok(EvaluateAnimeConsistencyResult {
+                    ok: false,
+                    evaluation: None,
+                    error_kind: Some("invalid_response".into()),
+                    error_message: Some(format!("评审结构不符合约定：{}", e)),
+                    status: None,
+                });
+            }
+        },
+        Err(message) => {
+            return Ok(EvaluateAnimeConsistencyResult {
+                ok: false,
+                evaluation: None,
+                error_kind: Some("invalid_response".into()),
+                error_message: Some(format!("评审返回格式无效：{}", message)),
+                status: None,
+            });
+        }
+    };
+    let mut evaluation = AnimeConsistencyEvaluation {
+        asset_id: request.asset_id.clone(),
+        asset_path: request.asset_path.clone(),
+        task_id: request.task_id.clone(),
+        overall_score: None,
+        hair_consistency: normalize_score(raw.hair_consistency),
+        bangs_consistency: normalize_score(raw.bangs_consistency),
+        face_consistency: normalize_score(raw.face_consistency),
+        eye_consistency: normalize_score(raw.eye_consistency),
+        clothing_consistency: normalize_score(raw.clothing_consistency),
+        expression_consistency: normalize_score(raw.expression_consistency),
+        issues: raw.issues,
+        suggestion: raw.suggestion,
+        character_facts_json: request.character_facts.clone(),
+        evaluated_by: request.model.trim().to_string(),
+        evaluated_at: chrono::Local::now().to_rfc3339(),
+        ..AnimeConsistencyEvaluation::default()
+    };
+    let dims = [
+        evaluation.hair_consistency,
+        evaluation.bangs_consistency,
+        evaluation.face_consistency,
+        evaluation.eye_consistency,
+        evaluation.clothing_consistency,
+        evaluation.expression_consistency,
+    ];
+    let scored: Vec<i32> = dims.iter().filter_map(|v| *v).collect();
+    if scored.is_empty() {
+        return Ok(EvaluateAnimeConsistencyResult {
+            ok: false,
+            evaluation: None,
+            error_kind: Some("invalid_response".into()),
+            error_message: Some("评审未返回任何有效维度分数".into()),
+            status: None,
+        });
+    }
+    evaluation.overall_score =
+        Some((scored.iter().sum::<i32>() as f64 / scored.len() as f64).round() as i32);
+
+    let conn = match storage::open_app_db(&app) {
+        Ok(conn) => conn,
+        Err(message) => {
+            return Ok(EvaluateAnimeConsistencyResult {
+                ok: false,
+                evaluation: None,
+                error_kind: Some("storage".into()),
+                error_message: Some(format!("评价保存失败：{}", message)),
+                status: None,
+            });
+        }
+    };
+    let now = chrono::Local::now().to_rfc3339();
+    let created_at: String = conn
+        .query_row(
+            "SELECT created_at FROM anime_consistency_evaluations WHERE asset_id = ?1",
+            rusqlite::params![evaluation.asset_id],
+            |row| row.get(0),
+        )
+        .unwrap_or_else(|_| now.clone());
+    let issues_json = serde_json::to_string(&evaluation.issues).map_err(|e| e.to_string())?;
+    conn.execute(
+        "INSERT OR REPLACE INTO anime_consistency_evaluations (
+            asset_id, asset_path, task_id, overall_score,
+            hair_consistency, bangs_consistency, face_consistency, eye_consistency,
+            clothing_consistency, expression_consistency, issues_json, suggestion,
+            character_facts_json, evaluated_by, evaluated_at, created_at, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+        rusqlite::params![
+            evaluation.asset_id,
+            evaluation.asset_path,
+            evaluation.task_id,
+            evaluation.overall_score,
+            evaluation.hair_consistency,
+            evaluation.bangs_consistency,
+            evaluation.face_consistency,
+            evaluation.eye_consistency,
+            evaluation.clothing_consistency,
+            evaluation.expression_consistency,
+            issues_json,
+            evaluation.suggestion,
+            evaluation.character_facts_json,
+            evaluation.evaluated_by,
+            evaluation.evaluated_at,
+            created_at,
+            now,
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(EvaluateAnimeConsistencyResult {
+        ok: true,
+        evaluation: Some(evaluation),
+        error_kind: None,
+        error_message: None,
+        status: None,
+    })
+}
+
+/// 查询动漫角色一致性评价（asset_ids 缺省 = 全量；旧任务无记录 = UI 不显示，绝不发明分数）。
+#[tauri::command]
+pub fn get_anime_consistency_evaluations(
+    app: AppHandle,
+    asset_ids: Option<Vec<String>>,
+) -> Result<Vec<AnimeConsistencyEvaluation>, String> {
+    let conn = storage::open_app_db(&app)?;
+    let sql = format!(
+        "SELECT {} FROM anime_consistency_evaluations{} ORDER BY updated_at DESC",
+        ANIME_CONSISTENCY_COLUMNS,
+        if asset_ids.is_some() { " WHERE asset_id IN (SELECT value FROM json_each(?1))" } else { "" },
+    );
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let rows = match &asset_ids {
+        Some(ids) => {
+            let ids_json = serde_json::to_string(ids).map_err(|e| e.to_string())?;
+            stmt.query_map(rusqlite::params![ids_json], row_to_anime_consistency)
+                .map_err(|e| e.to_string())?
+        }
+        None => stmt
+            .query_map([], row_to_anime_consistency)
+            .map_err(|e| e.to_string())?,
+    };
+    Ok(rows.filter_map(Result::ok).collect())
+}
 
 #[cfg(test)]
 mod tests {

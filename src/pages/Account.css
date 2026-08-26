@@ -191,11 +191,33 @@
   margin-bottom: 20px;
 }
 
+/* 深链聚焦充值区（QuoteConfirmDialog 去充值）时的短暂高亮 */
+.account-section.is-focus-flash {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 3px var(--accent-primary-soft, rgba(99, 102, 241, 0.18));
+}
+
 .account-section h3 {
   font-size: 15px;
   font-weight: 600;
   color: var(--text-primary);
   margin-bottom: 16px;
+}
+
+/* 「去充值」带回的返回入口（一次性消费；充值完成可一键回生成页） */
+.account-return-link {
+  border: none;
+  background: none;
+  color: var(--accent-primary-text, var(--accent-primary));
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+  margin: -8px 0 12px;
+}
+
+.account-return-link:hover {
+  text-decoration: underline;
 }
 
 .account-actions {

@@ -67,6 +67,9 @@ const SUBJECT_FIELDS: &[(&str, FieldKind)] = &[
     ("appearance", FieldKind::StrList),
     ("pose", FieldKind::OptStr),
     ("action", FieldKind::OptStr),
+    ("gesture", FieldKind::OptStr),
+    ("facial_expression", FieldKind::OptStr),
+    ("gaze", FieldKind::OptStr),
     ("position", FieldKind::OptRegion),
     ("orientation", FieldKind::OptStr),
     ("clothing", FieldKind::StrList),
@@ -736,6 +739,9 @@ mod tests {
                 "appearance": ["银白色短发", "红色眼睛"],
                 "pose": ["站立", "身体微微前倾"],
                 "action": "回头看镜头",
+                "gesture": ["右手", "比V字手势"],
+                "facial_expression": "右眼闭合的wink眨眼",
+                "gaze": null,
                 "position": {"x": "0.5", "y": 0.4, "width": 0.3, "height": 0.6},
                 "clothing": {"description": "黑色连帽外套", "details": ["深色百褶裙"]},
                 "relations": null
@@ -757,6 +763,13 @@ mod tests {
         assert_eq!(analysis.summary, "一名银发少女站在城市夜景街头");
         assert_eq!(analysis.subjects[0].count, Some(1));
         assert_eq!(analysis.subjects[0].pose.as_deref(), Some("站立；身体微微前倾"));
+        // 表情分离字段：数组合并为单句、null 保持 None（表情锁定链路的独立维度）
+        assert_eq!(analysis.subjects[0].gesture.as_deref(), Some("右手；比V字手势"));
+        assert_eq!(
+            analysis.subjects[0].facial_expression.as_deref(),
+            Some("右眼闭合的wink眨眼")
+        );
+        assert_eq!(analysis.subjects[0].gaze, None);
         assert_eq!(analysis.subjects[0].clothing, vec!["黑色连帽外套", "深色百褶裙"]);
         assert_eq!(analysis.subjects[0].relations, Vec::<String>::new());
         assert_eq!(analysis.subjects[0].position.as_ref().unwrap().x, 0.5);

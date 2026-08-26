@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { api } from '../services/api';
+import { serverApi, type BillingQuote } from '../services/serverApi';
 import { toastError, toastInfo, toastSuccess, toastWarning } from '../components/Toast';
 import { useAIProviderStore, resolveByokVisionConfig } from '../features/aiProviders/store';
 import { getAvailableVisionModels, resolveModelSelectionOrFirst } from '../features/aiProviders/modelUsability';
@@ -32,11 +33,17 @@ import {
   markOptimizing,
   markRecreationDirty,
   needsOptimization,
+  PLAN_FIELD_LABELS,
   revertToLastSuccessfulPrompt,
   togglePlanFieldLock,
   type RecreationFieldKey,
   type RecreationState,
 } from '../features/vision/recreationPlan';
+import {
+  lockBaselineValues,
+  lockedDimensionKeys,
+  validateDimensionLockContract,
+} from '../features/vision/project/dimensionLock';
 import {
   buildModificationInstruction,
   clearPersonReplacement,
@@ -48,6 +55,7 @@ import {
   setPersonReplacement,
   toggleModificationDimension,
   toggleReplicationBoost,
+  modificationDimensionLabel,
   type ModificationDraft,
   type ModificationDimension,
   type PersonReplacement,
@@ -109,7 +117,7 @@ import { describeFallback } from '../features/aiRouting/aiRoutingLog';
 import { useAiModelRoutingStore } from '../features/aiRouting/modelRoutingPolicy';
 import { useImageViewerStore } from '../store/useImageViewerStore';
 import { useVisionViewStore } from '../store/useVisionViewStore';
-import type { ImageMeta, ImageRecord } from '../types';
+import type { GenerationImageReference, ImageMeta, ImageRecord } from '../types';
 import { SIZES, QUALITIES, QUALITY_LABELS } from '../types';
 import './VisionUnderstanding.css';
 import { useVisualProjectStore } from '../store/useVisualProjectStore';
@@ -122,11 +130,34 @@ import {
 } from '../features/vision/project/project';
 import { mergePersonContract } from '../features/vision/project/personContract';
 import { enabledRasterRegions } from '../features/vision/project/region';
-import { isLegacyWorkspaceMigratable, migrateLegacyWorkspace } from '../features/vision/project/migrate';
+import { isLegacyWorkspaceMigratable, isLegacyWorkspaceAlreadyMigrated, migrateLegacyWorkspace } from '../features/vision/project/migrate';
+import VisualProjectLibrary from '../features/vision/project/VisualProjectLibrary';
+import SkillTraceDrawer from '../features/vision/skills/SkillTraceDrawer';
+import { buildSkillExecutionSnapshot, compiledSectionsOf } from '../features/vision/skills/engine';
+import { useRuntimeSkillStore } from '../store/useRuntimeSkillStore';
 import { validateGenerationContract } from '../features/vision/project/validators';
 import { buildOptimizerHardContractLines } from '../features/vision/project/optimizerContract';
 import { mergeFinalGenerationPrompt } from '../features/vision/project/promptCompiler';
-import { describeTemplateSnapshot } from '../features/vision/project/template';
+import {
+  bindDetailInsertsToCharacter,
+  characterAssetFingerprint,
+  isCharacterAssetReusable,
+  referenceAppearanceMatches,
+  validateAnimeCharacterConsistency,
+} from '../features/vision/project/animeCharacter';
+import { applyDetailInsertInstances, countInsertInstances } from '../features/vision/project/detailInsert';
+import { ensureReferenceAppearance } from '../features/vision/project/referenceAppearanceService';
+import {
+  animeCharacterReferenceImage,
+  requestCharacterAssetGeneration,
+  withAnimeCharacterReference,
+} from '../features/vision/project/animeCharacterAssetService';
+import {
+  CLOTHING_CONFLICT_ERROR,
+  extractTemplateClothingTokens,
+  clothingSourceIsPersonReference,
+} from '../features/vision/project/clothingGuard';
+import { describeTemplateProvenance, describeTemplateSnapshot } from '../features/vision/project/template';
 import { exportMaskPngBase64 } from '../features/vision/region/regionMask';
 import RegionEditorPanel from '../features/vision/region/RegionEditorPanel';
 import ContextRail from '../features/vision/project/ContextRail';
@@ -240,6 +271,50 @@ export default function VisionUnderstanding() {
   const [meta, setMeta] = useState<ImageMeta | null>(null);
   /** 图库弹层用途：source = 更换参考图；person = 人物替换参考；mention = @引用加入当前任务。 */
   const [galleryOpen, setGalleryOpen] = useState(false);
+  const [libraryOpen, setLibraryOpen] = useState(false);
+  /** Skill Trace Drawer（skills = 技能执行过程；prompt = Prompt 来源反查）。 */
+  const [skillTraceMode, setSkillTraceMode] = useState<'skills' | 'prompt' | null>(null);
+  /** Prompt 来源实况预览（打开时按当前方案确定性编译一次；不落库、不加修订）。 */
+  const [livePromptSections, setLivePromptSections] = useState<ReturnType<typeof compiledSectionsOf> | null>(null);
+
+  /** 打开 Prompt 来源反查（§39/§40：默认纯文本 Prompt，来源在侧栏按段标识）。 */
+  const openPromptSource = () => {
+    if (!activeProject) return;
+    const currentDraft = useVisionWorkspaceStore.getState().modificationDraft;
+    const wstore = useVisionWorkspaceStore.getState();
+    const personRefPath = personHasImage(currentDraft.person)
+      ? currentDraft.person!.path
+      : (mentionResolution.person?.origin === 'mention' ? mentionResolution.person.path : undefined);
+    const refs = resolveGenerationImageReferences({
+      draft: currentDraft,
+      sourcePath: wstore.sourcePath || undefined,
+      sourceAssetId: wstore.sourceAssetId || undefined,
+      templateLabel: mentionResolution.template?.label,
+      personMention: !currentDraft.person && mentionResolution.person?.origin === 'mention'
+        ? {
+          path: mentionResolution.person.path,
+          assetId: mentionResolution.person.assetId,
+          label: mentionResolution.person.label,
+        }
+        : undefined,
+    });
+    const personEnabled = !!refs.some(ref => ref.role === 'person_reference')
+      && (!!currentDraft.person || !!personRefPath);
+    const compiled = mergeFinalGenerationPrompt({
+      project: activeProject,
+      finalDescription: wstore.promptDraft.trim(),
+      negativePrompt: wstore.negativeDraft.trim(),
+      imageReferences: refs,
+      personReplacementEnabled: personEnabled,
+      styleDirection: currentDraft.activeDimensions.includes('style') ? currentDraft.freeText.trim().slice(0, 40) : undefined,
+      includeRegions: useRuntimeSkillStore.getState().isSkillDisabled('region_replacement') ? false : undefined,
+      ...(activeProject.workspace.fullPromptOverride?.trim()
+        ? { fullPromptOverride: activeProject.workspace.fullPromptOverride }
+        : {}),
+    });
+    setLivePromptSections(compiledSectionsOf(compiled));
+    setSkillTraceMode('prompt');
+  };
   const [galleryPurpose, setGalleryPurpose] = useState<'source' | 'person' | 'mention' | 'region-person'>('source');
   /** @弹层「从图片库选择」回填（一次消费，IntentMentionInput 在记忆光标处插入）。 */
   const [pendingGalleryImage, setPendingGalleryImage] = useState<{ assetId?: string; path: string; label?: string } | null>(null);
@@ -249,7 +324,11 @@ export default function VisionUnderstanding() {
   const [galleryUrls, setGalleryUrls] = useState<Record<string, string>>({});
   const [autoEvaluate, setAutoEvaluate] = useState(() => readEvaluationSettings().autoEvaluate);
   const [generateConfirmOpen, setGenerateConfirmOpen] = useState(false);
+  const [generateQuote, setGenerateQuote] = useState<BillingQuote | null>(null);
+  const [generateQuoteLoading, setGenerateQuoteLoading] = useState(false);
   const [restartConfirmOpen, setRestartConfirmOpen] = useState(false);
+  /** 删除当前项目确认（应用内弹窗，替代原生 confirm——Tauri 下不可靠且违反应用弹窗规范）。 */
+  const [pickerDeleting, setPickerDeleting] = useState<{ id: string; name: string } | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const cancelRef = useRef(false);
   const intentInputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -355,32 +434,42 @@ export default function VisionUnderstanding() {
     void (async () => { try { setImages(await api.getImages()); } catch { /* 图库不可用不阻塞 */ } })();
   }, []);
 
-  // 项目生命周期：挂载刷新列表；legacy workspace（有分析结果）→ 未命名视觉项目（§36，绝不重新分析）
+  // 项目生命周期：挂载恢复索引（空列表 → 扫描修复摘要列漂移 → 一次性 Toast）；
+  // legacy workspace（有分析结果且未迁移过）→ 未命名视觉项目（§36，绝不重新分析）。
+  // 迁移幂等：marker 指纹命中即跳过（同一次识别会话绝不复制第二个项目）。
   useEffect(() => {
-    void useVisualProjectStore.getState().refreshList();
+    void (async () => {
+      const recovered = await useVisualProjectStore.getState().ensureProjectIndex();
+      if (recovered > 0) toastSuccess(`已恢复 ${recovered} 个视觉项目`, '项目索引已修复');
+    })();
     const wstate = useVisionWorkspaceStore.getState();
-    if (!useVisualProjectStore.getState().active && isLegacyWorkspaceMigratable(wstate) && wstate.analysis) {
-      const migrated = migrateLegacyWorkspace({
-        sourcePath: wstate.sourcePath,
-        sourceAssetId: wstate.sourceAssetId,
-        profileId: wstate.profileId,
-        modelId: wstate.modelId,
-        analysis: wstate.analysis,
-        originalPromptDraft: wstate.originalPromptDraft,
-        promptDraft: wstate.promptDraft,
-        negativeDraft: wstate.negativeDraft,
-        modificationDraft: wstate.modificationDraft,
-        recreation: wstate.recreation,
-        visionTaskId: wstate.visionTaskId,
-        sessionId: wstate.sessionId,
-      });
-      if (migrated) void useVisualProjectStore.getState().createFromAnalysis(migrated as never);
+    const legacyInput = {
+      sourcePath: wstate.sourcePath,
+      sourceAssetId: wstate.sourceAssetId,
+      profileId: wstate.profileId,
+      modelId: wstate.modelId,
+      analysis: wstate.analysis,
+      originalPromptDraft: wstate.originalPromptDraft,
+      promptDraft: wstate.promptDraft,
+      negativeDraft: wstate.negativeDraft,
+      modificationDraft: wstate.modificationDraft,
+      recreation: wstate.recreation,
+      visionTaskId: wstate.visionTaskId,
+      sessionId: wstate.sessionId,
+    };
+    if (!useVisualProjectStore.getState().active
+      && isLegacyWorkspaceMigratable(wstate) && wstate.analysis
+      && !isLegacyWorkspaceAlreadyMigrated(legacyInput)) {
+      const migrated = migrateLegacyWorkspace(legacyInput);
+      if (migrated) void useVisualProjectStore.getState().adoptProject(migrated);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // workspace → 项目镜像（项目打开期间，工作区语义字段变化同步进项目文档并防抖落库；
   // hydrate 期间跳过，避免 project → workspace → project 回写循环）
+  // analysis / reverseResult / 任务关联必须入依赖：分析完成若不触发镜像，
+  // 持久化文档会永远保留旧 analysis（重新打开 = 又要求重新理解）
   useEffect(() => {
     if (!activeProject || hydratingProjectRef.current) return;
     useVisualProjectStore.getState().syncFromWorkspace();
@@ -392,6 +481,10 @@ export default function VisionUnderstanding() {
     promptDraft,
     negativeDraft,
     originalPromptDraft,
+    analysis,
+    reverseResult,
+    visionTaskId,
+    sessionId,
     genParams,
     generationMode,
     selectedProfileId,
@@ -682,6 +775,9 @@ export default function VisionUnderstanding() {
         const keepModification = pstate.active.sourceAsset.path === wstore.sourcePath
           ? true
           : pendingTemplateModeRef.current === 'keep';
+        // Canonical Restore 修复：重新分析后 workspace（analysis / 编译产物 / 复刻方案）
+        // 必须随模板重建一起落进项目文档——否则保存的文档永远带着旧 analysis
+        const wstateReapply = useVisionWorkspaceStore.getState();
         pstate.updateActive('template', draft => reapplyTemplateFromAnalysis(draft, {
           analysis: analysisSnapshot,
           plan: nextRecreation.plan,
@@ -689,6 +785,25 @@ export default function VisionUnderstanding() {
           sourceAsset,
           keepModification,
           analysisModel,
+          workspace: {
+            profileId: wstateReapply.profileId,
+            modelId: wstateReapply.modelId,
+            mode: wstateReapply.mode,
+            analysis: analysisSnapshot,
+            reverseResult: compiled,
+            originalPromptDraft: wstateReapply.originalPromptDraft,
+            promptDraft: wstateReapply.promptDraft,
+            negativeDraft: wstateReapply.negativeDraft,
+            recreation: nextRecreation,
+            genParams: nextGenParams,
+            generationMode: wstateReapply.generationMode,
+            hfTarget: wstateReapply.hfTarget,
+            hfMaxIterations: wstateReapply.hfMaxIterations,
+            report: null,
+            iterations: [],
+            visionTaskId: taskId,
+            sessionId: newSessionId,
+          },
         }));
       } else {
         const wstateAfter = useVisionWorkspaceStore.getState();
@@ -757,12 +872,153 @@ export default function VisionUnderstanding() {
       return;
     }
     setGenerateConfirmOpen(true);
+    setGenerateQuote(null);
+    setGenerateQuoteLoading(true);
+    void serverApi.createQuote('image', genParams.count)
+      .then(quote => setGenerateQuote(quote))
+      .catch(() => setGenerateQuote(null))
+      .finally(() => setGenerateQuoteLoading(false));
   };
 
   const intentSummary = useMemo(() => {
     const instruction = recreation?.adjustInstruction?.trim();
     return instruction ? `修改意图 → ${instruction.slice(0, 80)}${instruction.length > 80 ? '…' : ''}` : '未修改，直接复刻参考图方案';
   }, [recreation]);
+
+  // ===== V5 动漫角色一致性（模式切换 / 角色参考图 / 局部插图补充识别）=====
+
+  const [assetRequesting, setAssetRequesting] = useState(false);
+  const [insertRepairing, setInsertRepairing] = useState(false);
+
+  /** 动漫一致性模式切换（standard / strict_visual_reference；语义修改 → 项目修订）。 */
+  const setAnimeConsistencyMode = (mode: 'standard' | 'strict_visual_reference') => {
+    const pstate = useVisualProjectStore.getState();
+    const current = pstate.active;
+    if (!current) return;
+    if (mode === 'strict_visual_reference') {
+      pstate.updateActive('rendering_contract', draft => ({
+        ...draft,
+        animeConsistency: {
+          mode,
+          ...(draft.animeConsistency?.characterAsset
+            && draft.animeConsistency.characterAsset.fingerprint === characterAssetFingerprint(draft)
+            ? { characterAsset: draft.animeConsistency.characterAsset }
+            : {}),
+        },
+      }));
+      if (!isCharacterAssetReusable(current)) {
+        toastInfo('强一致性会先创建一张「动漫角色参考图」（按 1 张图片生成计费，创建前会再次确认）；同条件再次生成将复用，不重复计费。', '动漫角色强一致性');
+      }
+    } else {
+      pstate.updateActive('rendering_contract', draft => ({
+        ...draft,
+        animeConsistency: { mode, ...(draft.animeConsistency?.characterAsset ? { characterAsset: draft.animeConsistency.characterAsset } : {}) },
+      }));
+    }
+  };
+
+  /** 生成 / 重新生成动漫角色参考图（报价确认 → 任务创建 → 完成后自动回绑）。 */
+  const generateCharacterAsset = async (force = false) => {
+    const project = useVisualProjectStore.getState().active;
+    if (!project || assetRequesting) return;
+    setAssetRequesting(true);
+    try {
+      const outcome = await requestCharacterAssetGeneration(project, { force });
+      if (outcome.ok) {
+        toastSuccess(
+          outcome.reused
+            ? '已复用现有动漫角色参考图，本次不会新增费用。'
+            : '已提交动漫角色参考图生成任务，完成后将自动绑定到当前项目。',
+          '动漫角色参考',
+        );
+      } else if (!outcome.cancelled) {
+        toastError(outcome.errorMessage ?? '角色参考图任务创建失败。', '动漫角色参考');
+      }
+    } finally {
+      setAssetRequesting(false);
+    }
+  };
+
+  /**
+   * 受限局部插图补充识别（V5 §8）：只补实例，不重写模板快照——
+   * 每个不完整层一次 vision 提取，成功后合入 templateSnapshot + renderingContract。
+   */
+  const repairDetailInsertInstances = async () => {
+    const pstate = useVisualProjectStore.getState();
+    const project = pstate.active;
+    if (!project || insertRepairing) return;
+    const counts = countInsertInstances(project.renderingContract);
+    if (counts.incompleteRegions.length === 0) return;
+    const config = resolveByokVisionConfig({
+      profileId: project.workspace.profileId || undefined,
+      modelId: project.workspace.modelId || undefined,
+    });
+    if (!config.ok) {
+      toastError(config.error, '暂时不能补充识别');
+      return;
+    }
+    setInsertRepairing(true);
+    try {
+      let merged = project.templateSnapshot;
+      if (!merged) {
+        toastError('当前模板信息不完整，请重新分析模板后再补充识别。', '暂时不能补充识别');
+        return;
+      }
+      let repaired = 0;
+      let failed = 0;
+      for (const region of counts.incompleteRegions) {
+        try {
+          const result = await api.visionExtractDetailInserts({
+            imagePath: project.sourceAsset.path,
+            baseUrl: config.baseUrl,
+            token: config.token,
+            model: config.model,
+            layerLabel: region.label,
+            layerDescription: region.description ?? '',
+          });
+          if (result.ok && result.instances?.length) {
+            merged = applyDetailInsertInstances(merged, region.id, result.instances.map(instance => ({
+              label: instance.label?.trim() || '局部插图',
+              cropType: (instance.crop_type?.trim() || 'other') as 'face' | 'eyes' | 'hair' | 'expression' | 'clothing' | 'feet' | 'body' | 'other',
+              mediaType: (instance.media_type?.trim() || region.renderingMode) as never,
+              ...(instance.position && typeof instance.position.x === 'number'
+                ? {
+                  bounds: {
+                    x: instance.position.x,
+                    y: instance.position.y ?? 0,
+                    width: instance.position.width ?? 0.2,
+                    height: instance.position.height ?? 0.2,
+                  },
+                }
+                : {}),
+              ...(instance.description?.trim() ? { description: instance.description.trim() } : {}),
+            })));
+            repaired += 1;
+          } else {
+            failed += 1;
+          }
+        } catch {
+          failed += 1;
+        }
+      }
+      if (repaired > 0) {
+        useVisualProjectStore.getState().updateActiveMeta(draft => ({
+          ...draft,
+          templateSnapshot: merged,
+          renderingContract: merged.mediaStructure ?? draft.renderingContract,
+        }));
+        const after = countInsertInstances(merged.mediaStructure);
+        toastSuccess(
+          `已补充识别 ${repaired} 个插图层（现在共 ${after.total} 个局部插图实例${after.incompleteRegions.length > 0 ? `；仍有 ${after.incompleteRegions.length} 层未识别` : ''}）。`,
+          '局部插图识别',
+        );
+      } else {
+        toastWarning('本次没有识别到新的插图实例，可以稍后重试或重新分析模板。', '局部插图识别');
+      }
+    } finally {
+      setInsertRepairing(false);
+    }
+  };
 
   const generateFromPlan = async () => {
     const readiness = canGenerateFromRecreation(recreation);
@@ -792,13 +1048,19 @@ export default function VisionUnderstanding() {
         toastError(contractErrors[0], '生成前需处理');
         return;
       }
+      // Dimension Lock §20：锁定维度与模板基线冲突 ⇒ 阻断生成，绝不偷偷继续
+      const lockErrors = validateDimensionLockContract(project);
+      if (lockErrors.length > 0) {
+        toastError(lockErrors[0], '生成前需处理');
+        return;
+      }
     }
     const personPath = personHasImage(currentDraft.person)
       ? currentDraft.person!.path
       : (mentionResolution.person?.origin === 'mention' ? mentionResolution.person.path : undefined);
     // V4.0.9.1 生成参考图唯一解析：顺序 = 最终提交顺序（模板 → 人物 → 其余 @引用），
     // 同一份清单同时喂给溯源快照与生成 carry —— 快照与 payload 永不失配。
-    const imageReferences = resolveGenerationImageReferences({
+    let imageReferences = resolveGenerationImageReferences({
       draft: currentDraft,
       sourcePath: sourcePath || undefined,
       sourceAssetId: sourceAssetId || undefined,
@@ -811,6 +1073,39 @@ export default function VisionUnderstanding() {
         }
         : undefined,
     });
+    // V5 Strict Visual Reference：可复用角色参考图作为第三参考图
+    // （模板 -> 人物 -> 动漫角色参考 -> 其余 @引用；序号与合同中的图片N一致）
+    if (project) {
+      const animeReference = animeCharacterReferenceImage(project);
+      if (animeReference) {
+        const personIndex = imageReferences.findIndex(ref => ref.role === 'person_reference');
+        const animeRef: GenerationImageReference = {
+          path: animeReference.path,
+          label: animeReference.label,
+          role: 'anime_character_reference',
+          ...(project.animeConsistency?.characterAsset?.libraryAssetId
+            ? { assetId: project.animeConsistency.characterAsset.libraryAssetId }
+            : {}),
+        };
+        imageReferences = withAnimeCharacterReference(imageReferences, animeRef);
+      }
+    }
+    // V5 人物参考外貌事实：绑定人物参考但快照缺失/过期 -> 生成前解析一次并缓存
+    // （失败不阻断：角色卡回落来源指示语义；下一次生成会再尝试）
+    if (project && personPath && !referenceAppearanceMatches(project)) {
+      const appearance = await ensureReferenceAppearance(project, {
+        modelId: selectedModelId || undefined,
+        displayName: selectedOption?.displayName ?? selectedModelId ?? undefined,
+        providerName: selectedOption?.profileName,
+      });
+      if (appearance.ok && appearance.snapshot) {
+        useVisualProjectStore.getState().updateActiveMeta(draft => ({
+          ...draft,
+          referenceAppearance: appearance.snapshot,
+        }));
+        project.referenceAppearance = appearance.snapshot;
+      }
+    }
     if (import.meta.env.DEV) {
       // 开发态安全诊断（不含 base64 / token）：确认人物参考真实进入生成链
       console.info('[VisionGeneration]', {
@@ -906,23 +1201,76 @@ export default function VisionUnderstanding() {
     if (project) {
       const personEnabled = !!imageReferences.some(ref => ref.role === 'person_reference')
         && (!!currentDraft.person || !!personPath);
+      // V5 动漫一致性硬门禁（实例完整性 / strict 资产）：阻断文案 = 用户语言
+      const animeErrors = validateAnimeCharacterConsistency(project);
+      if (animeErrors.length > 0) {
+        toastError(animeErrors[0], '生成前需处理');
+        return;
+      }
       const compiled = mergeFinalGenerationPrompt({
         project,
         finalDescription: promptDraft.trim(),
         negativePrompt: negativeDraft.trim(),
+        // V5 完整 Prompt 手动覆盖（Prompt Editor「完整 Prompt」模式冻结产物）
+        ...(project.workspace.fullPromptOverride?.trim()
+          ? { fullPromptOverride: project.workspace.fullPromptOverride }
+          : {}),
         negativeAddendum: buildGenerationNegativeAddendum({
           imageReferences,
           personReplacementEnabled: personEnabled,
           clothingPolicy: currentDraft.clothingPolicy,
           customClothing: currentDraft.customClothing,
+          ...(clothingSourceIsPersonReference(project) && extractTemplateClothingTokens(project).length > 0
+            ? { templateClothingTokens: extractTemplateClothingTokens(project) }
+            : {}),
         }),
         imageReferences,
         personReplacementEnabled: personEnabled,
         styleDirection: currentDraft.activeDimensions.includes('style') ? currentDraft.freeText.trim().slice(0, 40) : undefined,
+        // 区域替换技能停用 = 真实效果：区域合同不编译进最终 Prompt
+        includeRegions: useRuntimeSkillStore.getState().isSkillDisabled('region_replacement') ? false : undefined,
       });
       finalPromptText = compiled.prompt;
       finalNegativeText = compiled.negativePrompt;
       promptCompiled = true;
+      // Clothing Source Guard（E4 兜底）：服装来源 = 人物参考图时，最终 Prompt
+      // 仍含模板服装元素 ⇒ 阻断生成（编译层已净化，这里是不可绕过的最后闸门）
+      if (compiled.clothingConflicts.length > 0) {
+        toastError(CLOTHING_CONFLICT_ERROR, '服装来源冲突');
+        return;
+      }
+      // Anime Character Consistency Guard（§22 兜底）：修正剥离后最终 Prompt
+      // 仍许可「第二套动漫设计」⇒ 阻断生成（不得静默放行）
+      if (compiled.animeConflicts.length > 0) {
+        toastError(compiled.animeConflicts[0], '动漫角色一致性冲突');
+        return;
+      }
+      if (compiled.animeGuard && compiled.animeGuard.removedSentences.length > 0) {
+        toastWarning(
+          `已移除 ${compiled.animeGuard.removedSentences.length} 处会导致发型、脸型或服装变化的描述。`,
+          '已保持动漫角色一致',
+          { label: '查看执行过程', onClick: () => setSkillTraceMode('skills') },
+        );
+      }
+      if (compiled.clothingGuard && compiled.clothingGuard.removedSentences.length > 0) {
+        toastWarning(
+          `已移除 ${compiled.clothingGuard.removedSentences.length} 处模板服装描述。`,
+          '已保持人物参考服装',
+          { label: '查看执行过程', onClick: () => setSkillTraceMode('skills') },
+        );
+      }
+      // Dimension Lock §20 正文层守卫：锁定维度的漂移句已被拦截并回退模板基线——
+      // 必须显式告知（不静默改写用户可见的最终 Prompt）
+      if (compiled.lockGuard && compiled.lockGuard.removedSentences.length > 0) {
+        const dimText = compiled.lockGuard.guardedDimensions
+          .map(key => (key === 'pose' ? '动作' : key === 'camera' ? '镜头' : key))
+          .join('、');
+        toastWarning(
+          `已移除 ${compiled.lockGuard.removedSentences.length} 处冲突描述，并保持模板中的${dimText}不变。`,
+          '已保持锁定内容',
+          { label: '查看执行过程', onClick: () => setSkillTraceMode('skills') },
+        );
+      }
       // Region V1 真实 mask：启用中的栅格区域合成 combined mask（透明 = 可编辑）
       if (generationMode === 'i2i' && meta?.width && meta?.height) {
         const rasterRegions = enabledRasterRegions(project.regions);
@@ -941,7 +1289,61 @@ export default function VisionUnderstanding() {
           mask: maskImagePath ?? null,
           imageCount: imageReferences.length,
         });
+        // §46 Character Diff 调试：canonical 角色卡 + 插图绑定（仅开发日志，不进正式 UI）
+        const animeBinding = bindDetailInsertsToCharacter(project);
+        if (animeBinding) {
+          console.info('[AnimeCharacter]', {
+            canonical: animeBinding.character,
+            detailInsertBindings: animeBinding.bindings,
+          });
+        }
       }
+      // Runtime Skill Trace（§34）：生成时刻冻结技能快照 + 编译分段进任务溯源
+      // —— History「AI 技能与规则」读这里（当时版本，绝不读项目当前态重推断）
+      const skillSnapshot = buildSkillExecutionSnapshot({
+        project,
+        imageReferences,
+        disabledSkillIds: useRuntimeSkillStore.getState().disabledSkillIds,
+        compiled,
+      });
+      provenance.skillExecutionSnapshot = skillSnapshot;
+      // Canonical Anime Character（§43 Provenance）：角色卡 + 插图绑定随任务冻结
+      // —— History 由此解释「这个相框为什么跟动漫主角色」；旧任务无此字段 = 功能前生成
+      const animeBinding = bindDetailInsertsToCharacter(project);
+      if (animeBinding) {
+        const { character, bindings } = animeBinding;
+        provenance.animeCharacterSnapshot = {
+          id: character.id,
+          sourceSubjectLabel: character.sourceSubjectLabel,
+          identitySource: { kind: character.identitySource.kind, ...(character.identitySource.label ? { label: character.identitySource.label } : {}) },
+          designSource: character.designSource,
+          hair: character.hair.description,
+          face: character.face.description,
+          eyes: character.eyes.description,
+          clothing: character.clothing.canonicalDescription,
+          ...(character.expression.description ? { expression: character.expression.description } : {}),
+          ...(character.hair.facts ? { hairFacts: character.hair.facts as unknown as Record<string, string> } : {}),
+          consistencyMode: project.animeConsistency?.mode ?? 'standard',
+        };
+        provenance.detailInsertBindings = bindings.map(binding => ({
+          instanceId: binding.instanceId,
+          insertLabel: binding.insertLabel,
+          mediaType: binding.mediaType,
+          ...(binding.cropType ? { cropType: binding.cropType } : {}),
+          ...(binding.positionLabel ? { positionLabel: binding.positionLabel } : {}),
+          ...(binding.characterRef ? { characterRef: binding.characterRef } : {}),
+          lockedAspects: binding.lockedAspects,
+          allowedVariation: binding.allowedVariation,
+        }));
+      }
+      useVisualProjectStore.getState().updateActiveMeta(draft => ({
+        ...draft,
+        skillExecution: skillSnapshot,
+        enabledSkillIds: skillSnapshot.skills
+          .filter(record => record.status === 'applied')
+          .map(record => record.skillId),
+        ...(animeBinding ? { animeCharacter: animeBinding.character } : {}),
+      }));
     }
     const carry = buildGenerationCarry(
       {
@@ -1184,8 +1586,21 @@ export default function VisionUnderstanding() {
     wstore.setPromptDraft(next.optimizedPrompt ?? '');
     wstore.setNegativeDraft(next.optimizedNegativePrompt ?? '');
     wstore.setModificationDraft({ ...EMPTY_MODIFICATION_DRAFT });
+    useVisualProjectStore.getState().updateActiveMeta(draft => ({
+      ...draft,
+      workspace: { ...draft.workspace, fullPromptOverride: undefined },
+    }));
     persistRecreation(next);
     toastSuccess(FINAL_PROMPT.useLastToast);
+  };
+
+  /** FinalPromptEditor 手动编辑 = 完整 Prompt 冻结；确认、提交与历史都读取同一文本。 */
+  const editFinalPrompt = (value: string) => {
+    ws.setPromptDraft(value);
+    useVisualProjectStore.getState().updateActiveMeta(draft => ({
+      ...draft,
+      workspace: { ...draft.workspace, fullPromptOverride: value },
+    }));
   };
 
   /** 手动编辑原始复刻 Prompt = 结构化修改 → 需要重新优化。 */
@@ -1218,12 +1633,18 @@ export default function VisionUnderstanding() {
       toastWarning(clothingError, '服装描述未填写');
       return;
     }
-    const instruction = buildModificationInstruction(wstore.modificationDraft, {
-      template: mentionResolution.template ? { label: mentionResolution.template.label } : undefined,
-      personMention: !wstore.modificationDraft.person && mentionResolution.person?.origin === 'mention'
-        ? { label: mentionResolution.person.label }
-        : undefined,
-    });
+    const instruction = buildModificationInstruction(
+      // 复刻度增强技能停用 = 真实效果：优化指令不含复刻增强条款（工作台开关不受影响）
+      useRuntimeSkillStore.getState().isSkillDisabled('replication_boost')
+        ? { ...wstore.modificationDraft, replicationBoost: false }
+        : wstore.modificationDraft,
+      {
+        template: mentionResolution.template ? { label: mentionResolution.template.label } : undefined,
+        personMention: !wstore.modificationDraft.person && mentionResolution.person?.origin === 'mention'
+          ? { label: mentionResolution.person.label }
+          : undefined,
+      },
+    );
     if (!instruction.trim()) {
       toastInfo(force ? REOPTIMIZE_ACTION.emptyInstruction : OPTIMIZE_TOAST.emptyInstruction, '请先输入修改要求');
       return;
@@ -1241,13 +1662,27 @@ export default function VisionUnderstanding() {
     // 快捷 Chip 启用的维度 = 用户显式要求修改（方案行 must-change 标记，优化器必须执行）
     const forcedDimensions = wstore.modificationDraft.activeDimensions as RecreationFieldKey[];
     let outcome: Awaited<ReturnType<typeof optimizeVisionRecreation>>;
+    // V4.1 §14：项目硬合同行（人物决策 / 服装来源 / 维度 / 区域 / 媒介结构）
+    // 随请求进入【硬性合同】块——优化器只能表达，不能重新决定
+    const activeProjectNow = useVisualProjectStore.getState().active;
+    const hardContractLines = activeProjectNow
+      ? buildOptimizerHardContractLines(activeProjectNow)
+      : undefined;
+    // Skill Trace 快照用生成链路同源的角色清单（模板 → 人物 → 其余引用）
+    const traceImageReferences = resolveGenerationImageReferences({
+      draft: wstore.modificationDraft,
+      sourcePath: wstore.sourcePath || undefined,
+      sourceAssetId: wstore.sourceAssetId || undefined,
+      templateLabel: mentionResolution.template?.label,
+      personMention: !wstore.modificationDraft.person && mentionResolution.person?.origin === 'mention'
+        ? {
+          path: mentionResolution.person.path,
+          assetId: mentionResolution.person.assetId,
+          label: mentionResolution.person.label,
+        }
+        : undefined,
+    });
     try {
-      // V4.1 §14：项目硬合同行（人物决策 / 服装来源 / 维度 / 区域 / 媒介结构）
-      // 随请求进入【硬性合同】块——优化器只能表达，不能重新决定
-      const activeProjectNow = useVisualProjectStore.getState().active;
-      const hardContractLines = activeProjectNow
-        ? buildOptimizerHardContractLines(activeProjectNow)
-        : undefined;
       outcome = await optimizeVisionRecreation({
         originalRecreationPrompt: wstore.originalPromptDraft,
         structuredRecreationPlan: optimizingState.plan,
@@ -1272,12 +1707,69 @@ export default function VisionUnderstanding() {
       toastError(optimizeFailureMessage(outcome.error), force ? '重新优化失败' : '优化失败');
       return;
     }
-    const next = applyOptimizationResult(optimizingState, outcome.result);
+    const projectAtApply = useVisualProjectStore.getState().active;
+    const next = applyOptimizationResult(optimizingState, {
+      ...outcome.result,
+      // Dimension Lock §21：优化器输出先过锁定清洗——锁定维度的越权改写被忽略
+      dimensionLocks: projectAtApply
+        ? {
+          lockedKeys: lockedDimensionKeys(projectAtApply),
+          baseline: lockBaselineValues(projectAtApply),
+        }
+        : undefined,
+    });
     const latest = useVisionWorkspaceStore.getState();
     latest.setRecreation(next);
     latest.setPromptDraft(next.optimizedPrompt ?? '');
     latest.setNegativeDraft(next.optimizedNegativePrompt ?? '');
+    useVisualProjectStore.getState().updateActiveMeta(draft => ({
+      ...draft,
+      workspace: { ...draft.workspace, fullPromptOverride: undefined },
+    }));
     persistRecreation(next);
+    // Runtime Skill Trace（§33）：优化完成 → 冻结技能执行快照进项目当前态
+    // （History 的「当时态」在生成时刻另经 provenance.skillExecutionSnapshot 冻结）
+    const projectForTrace = useVisualProjectStore.getState().active;
+    if (projectForTrace) {
+      const snapshot = buildSkillExecutionSnapshot({
+        project: { ...projectForTrace, optimizedRevision: next.optimizedRevision },
+        imageReferences: traceImageReferences,
+        disabledSkillIds: useRuntimeSkillStore.getState().disabledSkillIds,
+        optimizer: {
+          applied: true,
+          triggeredBy: force ? 'user' : 'auto',
+          model: {
+            displayName: outcome.result.modelName,
+            modelId: outcome.result.optimizerModelId,
+            providerName: outcome.result.providerName,
+            source: outcome.result.optimizerSource,
+          },
+          hardContractLineCount: hardContractLines?.length ?? 0,
+          ignoredViolations: next.optimizerViolations,
+          fallback: outcome.result.optimizerSource === 'fallback'
+            ? {
+              requestedModel: outcome.result.optimizerRequestedModelId || '原模型',
+              actualModel: outcome.result.modelName,
+              reason: outcome.result.optimizerFallbackReason,
+            }
+            : null,
+        },
+      });
+      const optimizerAnimeCharacter = bindDetailInsertsToCharacter(projectForTrace)?.character;
+      useVisualProjectStore.getState().updateActiveMeta(draft => ({
+        ...draft,
+        skillExecution: snapshot,
+        enabledSkillIds: snapshot.skills
+          .filter(record => record.status === 'applied')
+          .map(record => record.skillId),
+        ...(optimizerAnimeCharacter ? { animeCharacter: optimizerAnimeCharacter } : {}),
+      }));
+    }
+    if (next.optimizerViolations && next.optimizerViolations.length > 0) {
+      // 越权必须显式告知：优化器试图改写锁定维度，已强制以模板基线为准
+      const labels = next.optimizerViolations.map(key => PLAN_FIELD_LABELS[key] ?? key).join('、');
+      toastWarning(`已忽略优化器对锁定维度的改动（${labels}）——以画面模板基线为准`, '模板锁定生效');
+    }
     toastSuccess(OPTIMIZE_TOAST.success, force ? '重新优化完成' : '优化完成');
     // 显式回退必须让用户看见（不得只留在开发日志）
     if (outcome.result.optimizerSource === 'fallback') {
@@ -1317,6 +1809,30 @@ export default function VisionUnderstanding() {
     cancelRef.current = true;
     setRunning(false);
     setStageDetail('');
+  };
+
+  /**
+   * 删除项目统一入口（项目库 / 项目头部共用）：
+   *  - 失败 → lastError 已由 store 写入，这里补 Toast（Library 弹层不显示 lastError）；
+   *  - 删除当前打开项目 → 原子清理：关 Library / 关技能抽屉 / 重置工作区回空态
+   *    （绝不留下「无项目但工作区仍满载」的僵尸态——重进页面会被 legacy 迁移复活）；
+   *  - 删除非当前项目 → 列表即时刷新，不打断当前工作。
+   */
+  const handleDeleteProject = (id: string) => {
+    const wasActive = useVisualProjectStore.getState().active?.id === id;
+    void useVisualProjectStore.getState().deleteProject(id).then(() => {
+      const failure = useVisualProjectStore.getState().lastError;
+      if (failure) {
+        toastError(failure, '项目删除失败');
+        return;
+      }
+      if (wasActive) {
+        setLibraryOpen(false);
+        setSkillTraceMode(null);
+        restartWorkspace();
+      }
+      toastSuccess('项目已删除');
+    });
   };
 
   // ===== 高复刻循环 =====
@@ -1548,6 +2064,7 @@ export default function VisionUnderstanding() {
       <ProjectHeaderBar
         project={activeProject}
         projects={projectStore.projects}
+        listError={projectStore.lastError}
         thumbUrl={previewUrl}
         visionModelLabel={selectedOption ? `${selectedOption.profileName} / ${selectedOption.displayName}` : (selectedModelId || '')}
         saving={projectStore.listLoading}
@@ -1577,9 +2094,45 @@ export default function VisionUnderstanding() {
             }
           });
         }}
+        onOpenLibrary={() => setLibraryOpen(true)}
+        onRetryList={() => { void useVisualProjectStore.getState().refreshList(); }}
         onNewProject={() => { restartWorkspace(); }}
-        onDeleteProject={id => { void useVisualProjectStore.getState().deleteProject(id).then(() => restartWorkspace()); }}
+        onDeleteProject={id => {
+          setPickerDeleting({ id, name: activeProject?.name ?? '未命名视觉项目' });
+        }}
       />
+
+      {/* ===== 全部项目（§8：筛选 / 项目卡 / 打开 / 重命名 / 复制 / 派生 / 删除确认） ===== */}
+      {libraryOpen && (
+        <VisualProjectLibrary
+          projects={projectStore.projects}
+          activeProjectId={activeProject?.id}
+          onClose={() => setLibraryOpen(false)}
+          onOpenProject={id => {
+            void useVisualProjectStore.getState().openProject(id).then(project => {
+              if (project) {
+                hydratingProjectRef.current = true;
+                useVisualProjectStore.getState().hydrateWorkspaceFromActive();
+                hydratingProjectRef.current = false;
+              }
+            });
+          }}
+          onRenameProject={(id, name) => { void useVisualProjectStore.getState().renameProjectById(id, name); }}
+          onDuplicateProject={id => {
+            void useVisualProjectStore.getState().duplicateProjectById(id).then(copy => {
+              if (copy) toastSuccess(`已复制为「${copy.name}」`);
+              else toastError('项目复制失败');
+            });
+          }}
+          onDeriveProject={id => {
+            void useVisualProjectStore.getState().deriveProjectById(id).then(derived => {
+              if (derived) toastSuccess(`已创建「${derived.name}」，在项目列表中打开它`);
+            });
+          }}
+          onDeleteProject={handleDeleteProject}
+          onNewProject={() => { restartWorkspace(); }}
+        />
+      )}
 
       <div className="vision-workbench">
       <div className="vision-main">
@@ -1682,7 +2235,12 @@ export default function VisionUnderstanding() {
               <h3>{UNDERSTANDING.title}</h3>
               <p className="vision-understanding-summary">{analysis.summary}</p>
               {activeProject?.templateSnapshot && (
-                <p className="vision-understanding-media" title="模板基线媒介结构（修改风格不会改变各层媒介）">
+                <p
+                  className="vision-understanding-media"
+                  title="模板基线媒介结构与视觉分析溯源（修改风格不会改变各层媒介）"
+                >
+                  {describeTemplateProvenance(activeProject.templateSnapshot)}
+                  {' · '}
                   {describeTemplateSnapshot(activeProject.templateSnapshot)}
                 </p>
               )}
@@ -1936,6 +2494,14 @@ export default function VisionUnderstanding() {
                 <div className="vision-final-head">
                   <span className="vision-final-title">{FINAL_PROMPT.title}</span>
                   <span className="vision-final-status">{finalPromptStatusText}</span>
+                  {activeProject && (
+                    <button
+                      type="button"
+                      className="vision-btn vision-btn-sm vision-final-source-btn"
+                      title="按段查看最终 Prompt 的合同来源与归属技能"
+                      onClick={openPromptSource}
+                    >查看 Prompt 来源</button>
+                  )}
                   {recreation.optimizedBy === 'optimizer' && recreation.modelName && (
                     <span
                       className="vision-final-provenance"
@@ -1999,7 +2565,7 @@ export default function VisionUnderstanding() {
                       aria-label={FINAL_PROMPT.title}
                       value={promptDraft}
                       disabled={busy || running || optimizing}
-                      onChange={e => ws.setPromptDraft(e.target.value)}
+                      onChange={e => editFinalPrompt(e.target.value)}
                       rows={8}
                     />
                     <p className="vision-hint vision-final-editor-hint">{FINAL_PROMPT.editorHint}</p>
@@ -2355,24 +2921,80 @@ export default function VisionUnderstanding() {
             </div>
             <p className="vision-modal-desc">{GENERATE_DIALOG.desc}</p>
             <div className="vision-modal-body">
-              <ul className="vision-confirm-facts">
-                <li>来源：视觉理解复刻方案{visionTaskId ? `（视觉理解任务 #${visionTaskId.slice(0, 8)}）` : ''}</li>
-                <li>生成方式：{generationMode === 'i2i' ? `图生图 · ${GENERATION_MODE.i2iFact}` : `文生图 · ${GENERATION_MODE.t2iFact}`}</li>
-                <li>操作摘要：{intentSummary}</li>
-                <li>视觉分析：{selectedOption?.displayName ?? selectedModelId ?? '—'}</li>
-                <li>Prompt 优化：{optimizerResolution.ok
-                  ? `${optimizerResolution.resolved.displayName}${optimizerSourceSuffix || ' · 系统默认'}`
-                  : (recreation.optimizedBy === 'optimizer' && recreation.modelName ? `${recreation.modelName}（历史优化）` : '未优化（原始复刻 Prompt）')}</li>
-                <li>图片生成：gpt-image-2（服务端计费）</li>
-                <li>AI 评价：{evaluationResolution.ok ? evaluationResolution.resolved.displayName : '未配置视觉模型（生成后不评价）'}</li>
-                <li>当前最终 Prompt {recreation.editState === 'optimized' ? '已按你的修改意图优化完成' : '为提取的原始复刻 Prompt（未修改）'}</li>
-                <li>生成参数：比例 {ratioOfSize(genParams.size) || '—'} · 尺寸 {genParams.size} · 质量 {QUALITY_LABELS[genParams.quality] || genParams.quality} · 数量 {genParams.count} 张</li>
-                <li>进入图片工作室后提交生成，不会再次执行 AI 优化；完成后自动进行 AI 评价（可在高级设置关闭）。</li>
+              <ul className="vision-confirm-facts vision-confirm-summary">
+                <li>来源：视觉理解方案</li>
+                <li>编辑：{(() => {
+                  const labels = (modificationDraft.activeDimensions ?? [])
+                    .map(key => modificationDimensionLabel(key)).filter(Boolean);
+                  return labels.length > 0 ? labels.join('、') : '未修改（直接复刻）';
+                })()}</li>
+                <li>参考图：{(() => {
+                  const personBound = personHasImage(modificationDraft.person)
+                    || mentionResolution.person?.origin === 'mention';
+                  const strict = activeProject?.animeConsistency?.mode === 'strict_visual_reference';
+                  const assetReady = !!activeProject?.animeConsistency?.characterAsset?.localPath;
+                  const count = (sourcePath ? 1 : 0) + (personBound ? 1 : 0) + (strict && assetReady ? 1 : 0);
+                  const base = `${sourcePath ? '模板' : ''}${sourcePath && personBound ? ' + ' : ''}${personBound ? '人物参考' : ''}`;
+                  return strict
+                    ? assetReady ? `${base} + 动漫角色参考（共 ${count} 张）` : `${base}（强一致性：角色参考图待生成）`
+                    : `${base}（共 ${count} 张）`;
+                })()}</li>
+                <li>角色一致性：{activeProject?.animeConsistency?.mode === 'strict_visual_reference'
+                  ? `强一致性${activeProject.animeConsistency?.characterAsset?.localPath ? '（角色参考图已就绪，将随图提交）' : '（需先生成动漫角色参考图）'}`
+                  : '标准'}</li>
+                <li>生成模型：gpt-image-2</li>
+                <li>尺寸与数量：{genParams.size} · {genParams.count} 张</li>
+                <li>预计点数：{generateQuoteLoading
+                  ? '正在获取服务端报价…'
+                  : generateQuote ? `${generateQuote.estimated_credits} 点` : '将在提交前按服务端报价确认'}</li>
               </ul>
+              <details className="vision-confirm-advanced">
+                <summary>高级详情</summary>
+                <ul className="vision-confirm-facts">
+                  <li>来源任务：{visionTaskId ? `#${visionTaskId.slice(0, 8)}` : '—'}</li>
+                  <li>操作摘要：{intentSummary}</li>
+                  <li>生成方式：{generationMode === 'i2i' ? '图生图' : '文生图'} · 比例 {ratioOfSize(genParams.size) || '—'} · 质量 {QUALITY_LABELS[genParams.quality] || genParams.quality}</li>
+                  <li>视觉理解：{selectedOption?.displayName ?? selectedModelId ?? '—'}</li>
+                  <li>Prompt 优化：{optimizerResolution.ok
+                    ? `${optimizerResolution.resolved.displayName}${optimizerSourceSuffix || ' · 系统默认'}`
+                    : (recreation.optimizedBy === 'optimizer' && recreation.modelName ? `${recreation.modelName}（历史优化）` : '未优化（原始复刻 Prompt）')}</li>
+                  <li>AI 评价：{evaluationResolution.ok ? evaluationResolution.resolved.displayName : '未配置视觉模型（生成后不评价）'}</li>
+                  <li title={sourcePath || undefined}>模板路径：{sourcePath || '—'}</li>
+                </ul>
+                <div className="vision-confirm-prompt">
+                  <span>最终生图 Prompt</span>
+                  <pre>{activeProject?.workspace.fullPromptOverride?.trim() || finalPrompt}</pre>
+                </div>
+              </details>
             </div>
             <div className="vision-modal-footer">
               <button className="vision-btn" onClick={() => setGenerateConfirmOpen(false)}>取消</button>
               <button className="vision-btn vision-btn-primary" onClick={generateFromPlan}>{GENERATE_DIALOG.confirmLabel}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===== 删除当前项目确认（区域 mask 一并清理；已生成图片不受影响） ===== */}
+      {pickerDeleting && (
+        <div className="vision-modal-overlay" onClick={() => setPickerDeleting(null)}>
+          <div className="vision-modal" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="删除项目">
+            <div className="vision-modal-header">
+              <h3>删除项目</h3>
+            </div>
+            <p className="vision-modal-desc">
+              确认删除项目「{pickerDeleting.name}」？该项目的区域 mask 将一并清理，已生成的图片不受影响。此操作不可撤销。
+            </p>
+            <div className="vision-modal-footer">
+              <button className="vision-btn" onClick={() => setPickerDeleting(null)}>取消</button>
+              <button
+                className="vision-btn vision-btn-danger"
+                onClick={() => {
+                  const id = pickerDeleting.id;
+                  setPickerDeleting(null);
+                  handleDeleteProject(id);
+                }}
+              >确认删除</button>
             </div>
           </div>
         </div>
@@ -2451,8 +3073,21 @@ export default function VisionUnderstanding() {
         onReoptimize={() => void optimizeRecreationPrompt(true)}
         onOptimize={() => void optimizeRecreationPrompt(false)}
         onGenerate={openGenerateConfirm}
+        onGenerateCharacterAsset={force => void generateCharacterAsset(force)}
+        characterAssetRequesting={assetRequesting}
+        onOpenSkillTrace={() => setSkillTraceMode('skills')}
       />
       </div>{/* .vision-workbench 结束 */}
+
+      {/* ===== Skill Trace Drawer（§24：五阶段——发现/建议/用户选择/系统强制/Prompt 写入） ===== */}
+      <SkillTraceDrawer
+        open={skillTraceMode !== null}
+        mode={skillTraceMode ?? 'skills'}
+        snapshot={activeProject?.skillExecution ?? null}
+        liveSections={livePromptSections}
+        projectName={activeProject?.name}
+        onClose={() => setSkillTraceMode(null)}
+      />
 
       {/* ===== 更换识别图确认（§5：保留修改意图 / 重新开始） ===== */}
       {sourceChangeConfirm && (
@@ -2488,12 +3123,15 @@ export default function VisionUnderstanding() {
                     title={img.file_name}
                     onClick={() => {
                       setGalleryOpen(false);
+                      // 展示名优先用方案标题 / 描述（生成图 file_name 是哈希名，
+                      // 直接显示会变成 @5d41e489bf…jpg 这类不可读 chip）
+                      const pickLabel = img.description?.trim() || img.file_name;
                       if (galleryPurpose === 'person') {
                         onPersonChange({
                           source: 'gallery',
                           assetId: img.id,
                           path: img.local_path,
-                          label: img.file_name,
+                          label: pickLabel,
                         });
                       } else if (galleryPurpose === 'region-person') {
                         const regionId = pendingRegionRefIdRef.current;
@@ -2504,7 +3142,7 @@ export default function VisionUnderstanding() {
                             const refId = existing?.id ?? `ref-${crypto.randomUUID().slice(0, 8)}`;
                             const references = existing
                               ? project.references
-                              : [...project.references, { id: refId, assetId: img.id, path: img.local_path, label: img.file_name, kind: 'person' as const, source: 'gallery' as const }];
+                              : [...project.references, { id: refId, assetId: img.id, path: img.local_path, label: pickLabel, kind: 'person' as const, source: 'gallery' as const }];
                             return {
                               ...project,
                               status: 'modified',
@@ -2523,10 +3161,10 @@ export default function VisionUnderstanding() {
                         if (!exists) {
                           useVisionWorkspaceStore.getState().setModificationDraft({
                             ...current,
-                            extraImageRefs: [...current.extraImageRefs, { assetId: img.id, path: img.local_path, label: img.file_name }],
+                            extraImageRefs: [...current.extraImageRefs, { assetId: img.id, path: img.local_path, label: pickLabel }],
                           });
                         }
-                        setPendingGalleryImage({ assetId: img.id, path: img.local_path, label: img.file_name });
+                        setPendingGalleryImage({ assetId: img.id, path: img.local_path, label: pickLabel });
                       } else {
                         applySourceSelection(img.local_path, img.id);
                       }

@@ -51,8 +51,10 @@ describe('buildOptimizerHardContractLines（§14 优化器收权：合同行生�
     expect(lines.some(line => line.includes('动漫对应角色=动漫插画') && line.includes('与主体同一人物'))).toBe(true);
   });
 
-  it('空项目（无人物 / 无维度 / 单一媒介）：仅剩单一媒介合同行（防媒介漂移）', () => {
+  it('空项目（无人物 / 无维度 / 单一媒介）：动作锁定 + 单一媒介合同行（防动作 / 媒介漂移）', () => {
     const lines = buildOptimizerHardContractLines(fixtureProject({ analysis: fixtureAnalysis() }));
-    expect(lines).toEqual(['媒介结构：单一媒介（真人摄影），全图保持一致']);
+    // Dimension Lock §13/§14：动作未启用修改 ⇒ 逐主体姿态基线进入硬合同
+    expect(lines.some(line => line.startsWith('动作锁定（分主体，你无权改写）') && line.includes('腾空上篮'))).toBe(true);
+    expect(lines.filter(line => line.startsWith('媒介结构'))).toEqual(['媒介结构：单一媒介（真人摄影），全图保持一致']);
   });
 });

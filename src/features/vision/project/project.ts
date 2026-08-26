@@ -19,7 +19,7 @@ import {
 } from '../modificationIntent';
 import { normalizePersonReplacementContract, migrateLegacyPerson } from './personContract';
 import { normalizeRegion } from './region';
-import { buildTemplateSnapshot, normalizeTemplateSnapshot } from './template';
+import { buildTemplateSnapshot, normalizeTemplateSnapshot, restoreAnalysisFromSnapshot } from './template';
 import type {
   ModificationContract,
   PersonReplacementContract,
@@ -160,6 +160,14 @@ export function normalizeVisualProject(project: VisualProject | null | undefined
     regions,
     revision: Number.isFinite(project.revision) ? project.revision : 0,
     optimizedRevision: Number.isFinite(project.optimizedRevision as number) ? project.optimizedRevision : undefined,
+    skillExecution: project.skillExecution && Array.isArray(project.skillExecution.skills)
+      ? project.skillExecution
+      : undefined,
+    animeCharacter: project.animeCharacter && typeof project.animeCharacter === 'object'
+      && project.animeCharacter.id
+      ? project.animeCharacter
+      : undefined,
+    enabledSkillIds: Array.isArray(project.enabledSkillIds) ? project.enabledSkillIds : undefined,
     createdAt: project.createdAt || new Date().toISOString(),
     updatedAt: project.updatedAt || new Date().toISOString(),
     projectVersion: 1,
@@ -217,6 +225,8 @@ export function reapplyTemplateFromAnalysis(
     sourceAsset: VisualProjectAsset;
     keepModification: boolean;
     analysisModel?: { modelId?: string; displayName?: string; providerName?: string };
+    /** 重新分析后的 workspace 快照（ Canonical Restore：workspace.analysis 必须随模板同步刷新）。 */
+    workspace?: VisualProjectWorkspace;
   },
 ): VisualProject {
   const templateSnapshot = buildTemplateSnapshot({
@@ -236,11 +246,45 @@ export function reapplyTemplateFromAnalysis(
     modification: input.keepModification ? project.modification : EMPTY_MODIFICATION_CONTRACT,
     regions: input.keepModification ? project.regions : [],
     references: input.keepModification ? project.references : [],
+    // Canonical Restore 修复：重新分析后 workspace（含 analysis）同步落位，
+    // 否则持久化文档永远保留旧 analysis（旧缺陷的根因之一）
+    workspace: input.workspace ?? {
+      ...project.workspace,
+      analysis: input.analysis,
+      recreation: input.recreation,
+    },
     // 模板重建是语义事件（§6 白名单：模板）
     revision: project.revision + 1,
     status: 'modified',
     updatedAt: new Date().toISOString(),
   };
+}
+
+/**
+ * Canonical Restore Rule（§5）：项目是否可直接恢复「已理解」状态。
+ * 满足以下全部条件时，打开项目绝不需要重新调用视觉分析 API：
+ *  - templateSnapshot 存在（normalize 已保证 sourcePath 有效）；
+ *  - 快照源图身份与 project.sourceAsset 匹配（换图后旧模板 = stale，须重新分析）；
+ *  - schemaVersion 受支持。
+ */
+export function canRestoreAnalyzedTemplate(project: VisualProject | null | undefined): boolean {
+  const snapshot = project?.templateSnapshot;
+  if (!project || !snapshot) return false;
+  if (snapshot.schemaVersion !== 1) return false;
+  if (!project.sourceAsset.path?.trim() || snapshot.sourcePath !== project.sourceAsset.path) return false;
+  const snapshotAssetId = snapshot.sourceAssetId?.trim();
+  const projectAssetId = project.sourceAsset.assetId?.trim();
+  if (snapshotAssetId && projectAssetId) return snapshotAssetId === projectAssetId;
+  return true;
+}
+
+/** 打开项目时的工作区分析恢复（优先真实 analysis，缺失落快照重建）。 */
+export function resolveRestoredAnalysis(project: VisualProject | null | undefined): VisionAnalysis | null {
+  if (!project) return null;
+  if (project.workspace.analysis) return project.workspace.analysis;
+  return canRestoreAnalyzedTemplate(project)
+    ? restoreAnalysisFromSnapshot(project.templateSnapshot!)
+    : null;
 }
 
 export type SemanticChangeReason =

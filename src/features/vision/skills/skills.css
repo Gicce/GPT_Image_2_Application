@@ -1,0 +1,230 @@
+/* Runtime Skill Trace（V4.2）—— Drawer / Trace 内容 / Prompt 来源反查。
+   语义色只走 App.css badge Token（info=建议 / success=采用 / muted=拒绝 /
+   warn=系统强制 / danger=失败），禁止硬编码 hex。 */
+
+.vision-skill-drawer-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  justify-content: flex-end;
+}
+
+.vision-skill-drawer {
+  width: min(520px, calc(100vw - 32px));
+  height: 100%;
+  background: var(--bg-dialog, #fff);
+  border-left: 1px solid var(--border-default, #e5e7eb);
+  display: flex;
+  flex-direction: column;
+}
+
+.vision-skill-drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border-default, #e5e7eb);
+}
+
+.vision-skill-drawer-header h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-heading, #1a1a2e);
+}
+
+.vision-skill-drawer-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.vision-skill-drawer-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 14px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.vision-skill-trace-summary {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-secondary, #666);
+}
+
+.vision-skill-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 24px 0;
+}
+
+/* ===== 单技能记录（五阶段） ===== */
+
+.vision-skill-record {
+  border: 1px solid var(--border-default, #e5e7eb);
+  border-radius: 10px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--bg-card, #fff);
+}
+
+.vision-skill-record-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.vision-skill-record-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.vision-skill-version {
+  font-size: 11px;
+  color: var(--text-muted, #888);
+}
+
+.vision-skill-status {
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 999px;
+}
+
+.vision-skill-status.is-applied { background: var(--badge-success-bg, #d1fae5); color: var(--badge-success-text, #065f46); }
+.vision-skill-status.is-skipped { background: var(--badge-muted-bg, #f3f4f6); color: var(--text-secondary, #666); }
+.vision-skill-status.is-overridden { background: var(--badge-warn-bg, #fef3c7); color: var(--badge-warn-text, #92400e); }
+.vision-skill-status.is-failed { background: var(--badge-danger-bg, #fee2e2); color: var(--badge-danger-text, #991b1b); }
+
+.vision-skill-skip-reason {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted, #888);
+}
+
+.vision-skill-phase {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.vision-skill-phase-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted, #888);
+}
+
+.vision-skill-phase-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.vision-skill-phase-items li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  border-left: 2px solid var(--border-default, #e5e7eb);
+  border-radius: 0 6px 6px 0;
+}
+
+.vision-skill-phase-items li.is-important,
+.vision-skill-phase-items li.is-critical { border-left-color: var(--accent-primary, #6366f1); }
+.vision-skill-phase-items li.is-suggestion { border-left-color: var(--accent-primary, #6366f1); }
+.vision-skill-phase-items li.is-accepted { border-left-color: var(--accent-success, #059669); }
+.vision-skill-phase-items li.is-rejected { border-left-color: var(--border-default, #e5e7eb); opacity: 0.7; }
+.vision-skill-phase-items li.is-forced { border-left-color: var(--badge-warn-text, #92400e); }
+.vision-skill-phase-items li.is-prompt { border-left-color: var(--accent-primary, #6366f1); }
+
+.vision-skill-phase-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary, #1a1a1a);
+}
+
+.vision-skill-phase-desc {
+  font-size: 11px;
+  color: var(--text-secondary, #666);
+}
+
+.vision-skill-prompt-text summary {
+  font-size: 11px;
+  color: var(--accent-primary-text, #4f46e5);
+  cursor: pointer;
+  margin-top: 2px;
+}
+
+.vision-skill-prompt-text pre {
+  margin: 4px 0 0;
+  padding: 8px;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--bg-hover, rgba(0, 0, 0, 0.04));
+  border-radius: 6px;
+  color: var(--text-secondary, #666);
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+/* ===== Prompt 来源反查（§40：Prompt 本体保持纯文本，来源在侧栏按段标识） ===== */
+
+.vision-skill-prompt-source {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.vision-skill-source-block {
+  border: 1px solid var(--border-default, #e5e7eb);
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.vision-skill-source-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.vision-skill-source-name {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.vision-skill-source-attribution {
+  font-size: 11px;
+  color: var(--accent-primary-text, #4f46e5);
+}
+
+.vision-skill-source-text {
+  margin: 0;
+  padding: 8px;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--bg-hover, rgba(0, 0, 0, 0.04));
+  border-radius: 6px;
+  color: var(--text-secondary, #666);
+  max-height: 180px;
+  overflow-y: auto;
+}

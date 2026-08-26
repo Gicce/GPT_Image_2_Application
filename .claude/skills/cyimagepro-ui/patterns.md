@@ -259,4 +259,64 @@ Understand → Modify → Optimize → Review Prompt → Generate → Evaluate �
 
 - **用户生成前 MUST 知道预计点数消耗；生成后 MUST 能看到实际消耗；失败释放 MUST 在流水中可见。**
 - **采购成本 / 毛利率 / Provider 内部定价 MUST NOT 出现在普通用户界面**（仅管理后台授权接口）；客户端代码禁止引用任何成本字段。
+
+## 25. Project List State Transition Pattern（项目行状态迁移，V4.2 铁律）
+
+**Interactive list rows MUST preserve layout geometry across normal / confirm / loading states.**
+（交互列表行在 普通 / 确认 / 加载 各状态之间切换时必须保持布局几何；状态变化绝不把内容列压成不可读宽度。）
+
+实例：`src/features/vision/project/VisualProjectLibrary.tsx`（全部项目弹层）。规则：
+
+1. 行内三区固定网格：`grid-template-columns: auto minmax(0, 1fr) auto`（缩略图 / 内容 / 操作）；内容列 `min-width: 0`，标题与 meta 行 `nowrap + ellipsis`。操作区可换行收缩（`flex-wrap: wrap` + `max-width` 上限），但绝不挤压内容列。
+2. 确认态（如删除确认）**整体替换**操作区内容（`确认删除 / 取消`），禁止在原按钮组旁边追加按钮——追加会瞬间扩大操作列、把标题挤成竖排单字。
+3. 删除确认态唯一事实源 = 列表级单值状态（`pendingDeleteProjectId`），禁止每张卡各自维护 `isDeleting`（多卡同时进入确认态 = 状态错位）。Escape / 取消 / 提交后回落 `null`。
+4. 历史缺陷锚点：确认删除后标题「单字符纵向排列」= 操作区 `flex: 0 0 auto`（shrink 0）+ 确认态按钮**追加**导致；修复 = 三区网格 + 替换式操作区。
+
+## 26. Billing Dialog CTA Pattern（计费弹层 CTA 层级，V4.2 铁律）
+
+**When the primary action is blocked by a recoverable account state, the remediation CTA belongs in the footer action hierarchy.**
+（当主操作被可恢复的账户状态阻断时，补救 CTA 必须进入 footer 操作区层级。）
+
+实例：`src/components/QuoteConfirmDialog.tsx`。规则：
+
+1. 点数不足时 footer 为三按钮层级：`[取消 secondary] [去充值 primary] [确认生成 disabled]`——补救动作（去充值）与主操作（确认生成）同居 footer，禁止把去充值孤零零放在明细行区域。
+2. 余额不足时全弹层**只允许一个 primary**（= 去充值）；确认生成转 disabled 并带 title 说明；余额充足时不渲染补救按钮。
+3. 明细区补足决策信息：不足时增加「还差 N 点」行（还差 = 预计消耗 − 当前余额，向下取整不小于 0）。
+4. 去充值导航走全局事件 `cyimage-navigate { page: 'account', section: 'recharge' }`（App Shell 写 `cy_account_section` + 派发 `cy-account-section`；Account 页滚动到 `#account-recharge` 并短暂高亮）。可带一次性 returnContext（sessionStorage `cy_recharge_return`），账户充值区据此显示「返回继续生成」，消费即清。
+
+## 27. Canonical Reference Pattern（同源实体统一引用，V4.2 铁律）
+
+**The same source entity shown in multiple areas MUST share one canonical label / hover preview / viewer / status badge.**
+（同一来源实体在多个区域展示时统一：label、hover 预览、查看器、状态徽标。）
+
+实例：`src/features/vision/project/effectivePlan.ts`（Effective Plan 行 + refs）、`animeCharacter.ts`（Canonical Anime Character）。规则：
+
+1. 同一实体（人物参考图 / 动漫角色卡）在不同 UI 区域（Context Rail 行、Skill Trace、History、确认弹层）出现时，展示名与徽标一律来自同一构建入口（如 `buildPlanSourceRef` / `AnimeCharacterSnapshot`），禁止各组件自行拼装第二份描述。
+2. hover 预览绑定真实图片路径（refs 侧车），无图片时 fullLabel 承载摘要文本；实体是派生概念（如动漫角色卡）时，预览回落到其身份来源图 + 摘要 roleNote。
+3. 状态徽标语义固定：`已替换（success）/ 不保留（warn）/ 🔒 已锁定`；锁定类摘要（如 `🔒 已统一角色卡`）只在存在真实冻结合同时出现，禁止装饰性锁标。
 - 扣费标准弹窗：单张 N 点（约 ¥X）+ 费目明细（每笔 M 点）；旧 `$` 口径仅历史数据回退显示。
+
+## 28. Detail Group / Instance Pattern（V5 铁律）
+
+- `RenderingRegion` 是插图组，`DetailInsertInstance` 才是画面中的真实画框；计数、角色绑定、Prompt 行、Skill Trace 与历史快照全部按 instance 展平，禁止用组数冒充插图数。
+- 一个组可同时包含动漫、真人与图形实例：仅动漫实例绑定 Canonical Anime Character；真人与图形实例镜像所属主体，不为凑数绑定动漫角色。
+- 旧快照只有组且描述为单插图时允许单实例兼容兜底；描述明确包含多个画框却无 instances 时必须阻断生成，并提供用户主动的「补充识别局部插图」入口。打开/恢复项目不得自动发起 AI 修复。
+
+## 29. Prompt Confirmation Progressive Disclosure（V5 铁律）
+
+- 确认生成默认摘要固定为：来源、编辑目标、参考图数量与角色、一致性模式、生成模型、尺寸与数量、服务端预计点数。
+- 视觉理解/Prompt 优化/评价模型、任务 ID、文件路径、质量参数与完整最终 Prompt 进入默认折叠的「高级详情」；展开/收起是纯视图状态，绝不增加项目修订。
+- 预计点数只能来自服务端 quote；取价失败显示「将在提交前按服务端报价确认」，禁止客户端数量乘单价。
+- FinalPromptEditor 手动完整 Prompt 必须是 Confirm = Submitted = History 的同一冻结文本；确认或跳转图片工作室不得再次拼接合同或优化。
+
+## 30. System Correction Toast Copy（V5 铁律）
+
+- 普通用户只看到结果：`已保持动漫角色一致` / `已保持人物参考服装` / `已保持锁定内容`；正文说明移除了多少处冲突描述。
+- 禁止用户可见标题出现 Guard / Contract / `characterRef` / 「守卫生效」/ 内部字段名。
+- 修正 Toast 提供「查看执行过程」动作，进入 Runtime Skill Trace；技术原因与被移除文本留在 Trace，不塞进短 Toast。
+
+## 31. Compact Reference Asset Card（V5 铁律）
+
+- Strict Visual Reference 在 Context Rail 使用一张紧凑「动漫角色参考」卡：待创建时说明创建前报价；已就绪时说明最终生成自动复用、不重复计费。
+- 卡片动作只有当前状态需要的一个命令：待创建=`生成角色参考图`，已就绪=`重新生成角色参考图`；重新生成必须强制新报价，普通继续生成命中缓存不得报价或创建任务。
+- 角色参考图作为 `anime_character_reference` 排在模板与人物参考之后、其它引用之前；最终 Prompt 明确其为所有动漫区域唯一视觉设计来源。

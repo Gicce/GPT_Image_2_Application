@@ -1,6 +1,6 @@
 # Changelog
 
-## v4.2.0（2026-08-24）
+## v4.2.0（2026-08-25）
 
 ### Added（CY Credits Billing V1）
 
@@ -13,6 +13,28 @@
 - **新用户试用一次性领取（Trial Entitlement）**：入口仅当服务端 trial_available=true 时显示；同邮箱一生仅可领取一次（服务端 claim ledger 判定，删除账号重注册不可重复领取）；成功即到账试用点数
 - **扣费标准点数化**：扣费标准弹窗与费目明细全部以点数展示（旧美元口径仅历史数据回退显示）
 
+### Added（视觉项目工作台 / Runtime Skills / 一致性体系）
+
+- **视觉项目工作台（Visual Projects，ADR-016）**：视觉理解页升级为可持久化的项目工作区--保存项目 / 恢复项目 / 重命名 / 复制 / 基于此方案新建 / 删除（应用内确认弹窗 + 确认态整体替换操作区）；项目库「查看全部项目」（筛选 全部 / 最近使用 / 已理解 / 已修改 / 已生成 + 项目卡缩略图）；重开项目直接显示既有分析结果（分析状态 canonical 收口到项目文档，绝不重调分析 API）；项目索引恢复命令（rebuild_visual_project_index，修复摘要列漂移不删行）
+- **Runtime Skill Engine（ADR-022）**：Contract 系统升级为可解释执行层--15 个内置技能（分析 / 约束 / 优化 / 编译四类，注册表带 priority + dependsOn 依赖拓扑，执行顺序派生且受测试守护）；Skill Trace 五阶段呈现（发现 / 建议 / 用户选择 / 系统强制 / Prompt 写入），快照双冻结（优化完成 -> 项目、生成时刻 -> provenance，History 只读冻结态，旧任务如实标注「无技能记录」）；「AI 技能中心」（核心技能始终启用无假开关，可停用技能具有真实编译门控效果）；执行过程一键复制 / Markdown 导出（buildSkillTraceMarkdown：头部元信息 + 每技能五阶段 + 最终 Prompt 分段附录）
+- **维度锁定合同（ADR-019 / ADR-020）**：locked / modified 二态语义（未选维度 = 锁定，LOCKED ≠ 尽量沿用）；TemplateSnapshot 逐主体姿态 / 朝向 / 归一化锚点（混合媒介真人层与动漫层分别锁定，构图恒锁）；优化器越权结构化清洗（optimizerViolations + Toast 可见）+ 正文级守卫（lockedDimensionGuard 动作 / 镜头词库句级拦截，基线含词豁免）；生成前 validateDimensionLockContract 并入 blockingErrors 双门禁；优化快照自动恢复（optimizationHistory 上限 8 + planSignature 条件签名，复刻度开关往返零损耗）
+- **表情 / 手势 / 视线锁定（ADR-021）**：Rust 分析 schema 新增 facial_expression / gesture / gaze 三字段全链路（DTO / 系统提示词 / 归一化 / TS / 姿态快照分列冻结 / 持久化恢复）；wink 家族按「闭合的那只眼」判左右；编译器新增 expression_lock 装配层（强语义合同，优先级高于风格氛围）；局部插图 mirrors 确定性继承同一表情基线
+- **服装来源守卫（ADR-023）**：clothingPolicy=use_subject_reference 时三通道反回灌--模板保留合同行内净化、媒介结构合同层剥离、最终画面描述逐句剥离；装配后 clothingConflicts 兜底校验（非空 = 生成门禁阻断）；same_as_primary 媒介层显式「服装基底来自人物参考图，只做媒介转换」；负面追加词含模板服装令牌
+- **Canonical Anime Character（ADR-024）**：三层概念铁律（Person Identity ≠ Anime Character Design ≠ Detail Insert Crop）；AnimeCharacterSnapshot 一修订一角色卡（发型 / 脸型 / 眼型 / 服装冻结，revision 过期即重派生，纯函数零模型调用）；Prompt Compiler 新增【动漫角色一致性合同】+【细节插图同步合同】两级装配；两级守卫（许可句剥离 animeGuard + 整 Prompt 复检 animeConflicts 非空阻断）进 blockingErrors；provenance 冻结角色卡 + 插图绑定（History 角色卡摘要，旧任务兼容文案）
+- **Strict Visual Reference / Detail Instance（Visual Consistency V5）**：动漫脸部 / 眼睛 / 发型画框逐实例绑定 + 生成门禁，缺失实例只允许用户触发受限补充识别；角色参考图接入统一报价 / 预留 / 失败释放（缓存命中零新增费用）；人物 / 服装 / 风格及已解析外貌事实进入稳定指纹（动作 / 镜头 / 背景 / 构图不触发重建）；提交顺序固定为模板、人物、动漫角色参考、其它引用
+- **Prompt Truth Source / 确认弹层渐进披露**：手动完整 Prompt 贯穿确认预览 / 提交 / 历史；生成链路单次编译断言入测（mergeFinalGenerationPrompt 恰一次，compiled.prompt 直进 carry）；确认弹层默认仅显示决策摘要，高级模型 / 任务 ID / 路径 / 完整 Prompt 默认折叠；系统修正 Toast 与紧凑角色参考卡可进入 Skill Trace
+- **方案卡来源显示与规则中心**：@token 渲染为交互 chip（hover 缩略图预览 / 点击打开内置 ImageViewer / 完整名 + 角色说明浮层）；buildPlanSourceRef 唯一构建入口（显式名 > basename > 角色兜底名）；锁定维度 / 人物替换 / 服装行携带真实图片 refs 徽标（「已替换」/「使用 @人物参考 的服装」等）；规则中心（ruleRegistry 常驻 + 按状态启用共 10 项规则可视，含 expression_lock / detail_insert_binding）
+- **点数不足充值入口与 Billing CTA 层级**：QuoteConfirmDialog 余额不足时「去充值」Primary CTA -> 账户充值区锚点 + 高亮，充值完成可返回继续生成（一次性 returnContext）；充值 CTA 移入 footer 操作区（不足时全弹层唯一 primary），明细补「还差 N 点」行
+- **评价系统增强**：角色一致性评价只读取生成时冻结快照；评价失败不影响生成并提供重试；旧任务不伪造评分
+
+### Fixed
+
+- **已保存项目从列表消失（P0）**：Rust list_visual_projects SQL 把 COALESCE 误写成 COALES，prepare 恒失败导致列表恒空--数据未丢，SQL 提取 LIST_SQL 常量修正 + 新增「执行生产常量本身」的 Rust 回归测试；列表 Popover 显式失败态 + 重试
+- **项目删除「复活」（P0）**：store 会话级 deletedProjectIds 墓碑（防抖 / 在途落库迟到不再复活已删项目）+ flushPersist 等待 in-flight；删除当前项目原子清理（关 Library / 关技能抽屉 / 工作区回空态 + 成败 Toast）；legacy 迁移幂等（workspaceIdentityFingerprint + localStorage marker，杜绝重复复制「未命名视觉项目」）+ adoptProject 收养迁移产物
+- **混合媒介动漫角色不一致（P0）**：主动漫角色与相框插图生成出不同发型 / 脸型 / 眼型的三根因修复（same_as_primary 关系语义 / 插图镜像误绑真人主体 / 外貌事实未冻结），见上方 Canonical Anime Character
+- **Quote 确认弹层主题**：幽灵 token（--bg-surface 等）全部替换为真实语义 token，源码守卫测试防回归
+- **技能引擎确定性**：userDecisions[].decidedAt 派生决策改空串（同一项目状态两次执行产出一致）
+
 ### Compatibility
 
 - V4.0.x 旧客户端继续可用：USD 充值入口与余额镜像由服务端兼容窗口保障
@@ -22,8 +44,10 @@
 
 - 新增 useQuoteStore（报价确认全局弹层状态）/ useTaskBillingStore（任务计费展示侧车，localStorage 持久化）/ QuoteConfirmDialog / AccountLedgerPanel / TaskBillingBadge
 - serverApi 新增：billing/quote、billing/wallet、billing/ledger、trial/status、trial/claim、pay/create_order_cny；authorize 携 quote_id 冻结报价
-- cyimagepro-ui Skill 13.0.0 → 14.0.0：新增规则 22（Generation Quote & Pricing Transparency 铁律）与 patterns §21-§24（Credits Billing / Trial Entitlement / Generation Quote / Wallet-Ledger / Pricing Transparency）
-- 测试：Vitest 1152 → 1165（新增报价 store / 计费侧车 / 流水方向契约）
+- 新模块群：project/（animeCharacter / animeCharacterAssetService / clothingGuard / detailInsert / dimensionLock / lockedDimensionGuard / referenceAppearanceService / ruleRegistry / subjectExpression）、skills/（Runtime Skill 引擎 + exportTrace）、useRuntimeSkillStore、VisualProjectLibrary
+- cyimagepro-ui Skill 13.0.0 → 16.0.0：规则 22（Generation Quote & Pricing Transparency）/ 23（Canonical Reference）+ patterns §21-§31（Credits Billing / Trial / Quote / Wallet-Ledger / Project List State Transition / Billing Dialog CTA / Canonical Reference / Detail Group-Instance / Prompt Confirmation Progressive Disclosure / System Correction Toast / Compact Reference Asset Card）
+- Rust：VisionSubject 新增 facial_expression / gesture / gaze；visual_projects SQL 常量回归测试；rebuild_visual_project_index 命令
+- 测试：Vitest 1165 → 1406（视觉项目 / 技能引擎 / 维度锁定 / 表情锁定 / 服装守卫 / 动漫角色 / V5 实例绑定 / 计费 CTA 等）；cargo 213 → 214（生产 SQL 常量回归）
 
 
 ## v4.0.9（2026-08-24）

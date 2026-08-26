@@ -81,3 +81,61 @@ export const ISSUE_TAG_OPTIONS = [
 ] as const;
 
 export type IssueTag = typeof ISSUE_TAG_OPTIONS[number];
+
+// ===== V5 动漫角色一致性评价（AnimeCharacterConsistencyEvaluation Foundation）=====
+
+/** Rust evaluation.rs AnimeConsistencyEvaluation 镜像（snake_case 直出）。 */
+export interface AnimeConsistencyEvaluationRecord {
+  asset_id: string;
+  asset_path: string;
+  task_id: string;
+  overall_score: number | null;
+  hair_consistency: number | null;
+  bangs_consistency: number | null;
+  face_consistency: number | null;
+  eye_consistency: number | null;
+  clothing_consistency: number | null;
+  expression_consistency: number | null;
+  issues: string[];
+  suggestion: string;
+  character_facts_json: string;
+  evaluated_by: string;
+  evaluated_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** 角色一致性评价请求（evaluate_anime_character_consistency）。 */
+export interface AnimeConsistencyEvaluatePayload {
+  asset_id: string;
+  asset_path: string;
+  task_id: string;
+  character_reference_path: string;
+  character_facts: string;
+  base_url: string;
+  token: string;
+  model: string;
+}
+
+export interface AnimeConsistencyEvaluateOutcome {
+  ok: boolean;
+  evaluation: AnimeConsistencyEvaluationRecord | null;
+  error_kind: string | null;
+  error_message: string | null;
+  status: number | null;
+}
+
+/** 一致性维度展示行（UI 唯一口径；null = 未评 / 不适用，绝不发明分数）。 */
+export const ANIME_CONSISTENCY_DIMENSION_LABELS: Array<{
+  key: keyof Pick<AnimeConsistencyEvaluationRecord,
+    'hair_consistency' | 'bangs_consistency' | 'face_consistency'
+    | 'eye_consistency' | 'clothing_consistency' | 'expression_consistency'>;
+  label: string;
+}> = [
+  { key: 'hair_consistency', label: '发型' },
+  { key: 'bangs_consistency', label: '刘海' },
+  { key: 'face_consistency', label: '脸型' },
+  { key: 'eye_consistency', label: '眼型' },
+  { key: 'clothing_consistency', label: '服装' },
+  { key: 'expression_consistency', label: '表情' },
+];

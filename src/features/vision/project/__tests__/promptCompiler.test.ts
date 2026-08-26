@@ -27,6 +27,20 @@ function person(partial: Partial<PersonReplacementContract> = {}): PersonReplace
 }
 
 describe('mergeFinalGenerationPrompt（分层合同编译）', () => {
+  it('完整 Prompt 手动覆盖原样冻结，不在确认后再次拼接合同', () => {
+    const project = fixtureProject();
+    const manual = 'MANUAL FULL PROMPT\n第二行保持原样。';
+    const compiled = mergeFinalGenerationPrompt({
+      project,
+      finalDescription: '这段不应进入提交值',
+      fullPromptOverride: manual,
+      imageReferences: refs,
+      personReplacementEnabled: false,
+    });
+    expect(compiled.prompt).toBe(manual);
+    expect(compiled.sections).toEqual(['full_prompt_override']);
+    expect(compiled.prompt).not.toContain('最终画面描述');
+  });
   it('strictPersonReplacementRemovesTemplateIdentity：strict 合同显式排除模板人物身份', () => {
     const project = setProjectPersonContract(fixtureProject(), person());
     const compiled = mergeFinalGenerationPrompt({
@@ -99,7 +113,9 @@ describe('mergeFinalGenerationPrompt（分层合同编译）', () => {
     expect(compiled.prompt).toContain('真人主体');
     expect(compiled.prompt).toContain('真人摄影');
     expect(compiled.prompt).toContain('动漫插画');
-    expect(compiled.prompt).toContain('与主体人物为同一人物');
+    // 动漫层身份升级为引用唯一 Canonical Anime Character（Person Identity ≠ Anime Design）
+    expect(compiled.prompt).toContain('引用唯一 Canonical Anime Character');
+    expect(compiled.prompt).toContain('【动漫角色一致性合同（强制执行）】');
   });
 
   it('styleChangeDoesNotChangeRenderingMode：风格方向只改表达，媒介层模式不变', () => {

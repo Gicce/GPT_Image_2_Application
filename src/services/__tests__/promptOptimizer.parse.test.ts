@@ -236,7 +236,7 @@ describe('parseVisionOptimizerJson（结构化维度意图协议）', () => {
     });
     expect(content).toContain('用户手动锁定（最高优先级：必须保持不变）');
     expect(content).toContain('用户手动开放（允许按调整要求修改）');
-    expect(content).toContain('自动（由你按调整要求判断');
+    expect(content).toContain('模板锁定（未启用修改');
     expect(content).toContain('让人物做一个比心动作');
     expect(content).toContain('changed_dimensions');
   });

@@ -138,7 +138,8 @@ describe('buildVisionRecreationUserContent（用户手动锁定真正进入优�
     expect(content).toContain('【用户手动锁定项');
     expect(content).toContain('色彩');
     expect(content).toContain('用户手动锁定（最高优先级：必须保持不变）');
-    expect(content).toContain('自动（由你按调整要求判断');
+    // Dimension Lock：未启用修改的默认维度 = 模板锁定（不再交给 AI 自行判断）
+    expect(content).toContain('模板锁定（未启用修改');
     expect(content).toContain('gpt-image-2');
     expect(content).toContain('changed_dimensions');
   });
@@ -232,8 +233,8 @@ describe('forcedDimensions（V4.1：Chip 启用维度必须真实修改）', () 
     expect(content).toContain('动作［用户显式要求修改（必须真实修改该维度并列入 changed_dimensions');
     expect(content).toContain('背景 / 场景［用户显式要求修改（必须真实修改该维度并列入 changed_dimensions');
     expect(content).toContain('绝不保持原值');
-    // 未启用维度仍走自动判断口径
-    expect(content).toContain('自动（由你按调整要求判断');
+    // Dimension Lock：未启用维度 = 模板锁定（禁止修改 / 禁止列入 changed_dimensions / 禁止重新描述）
+    expect(content).toContain('模板锁定（未启用修改');
   });
 
   it('user_override 锁定优先：手动锁定维度不受 forcedDimensions 影响', () => {

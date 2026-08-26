@@ -231,6 +231,61 @@ export function buildRecreationPlan(analysis: VisionAnalysis): VisualRecreationP
  */
 export type RecreationEditState = 'ready' | 'dirty' | 'optimizing' | 'optimized';
 
+/**
+ * 优化快照（Replication Boost 解耦 §B）：一次成功优化 = 一份「条件 → 产物」快照。
+ * 条件签名 = 合成指令原文 + 复刻方案结构签名（维度 / 锁定 / 值）。
+ * 用户把条件改回历史快照的一致状态（例如仅取消「提高复刻度」）时，
+ * 直接恢复对应产物——附加可逆意图绝不破坏已优化成功的可用方案。
+ */
+export interface OptimizationSnapshotEntry {
+  /** 产出该结果的合成指令原文（adjustInstruction）。 */
+  instruction: string;
+  /** 产出该结果时的复刻方案结构签名（恢复时必须仍一致）。 */
+  planSignature: string;
+  optimizedPrompt: string;
+  optimizedNegativePrompt: string;
+  summary?: string;
+  optimizedAt: string;
+  providerName?: string;
+  modelName?: string;
+  optimizerModelId?: string;
+}
+
+/** 快照保留上限（同一指令去重更新；超出裁剪最旧）。 */
+const OPTIMIZATION_SNAPSHOT_LIMIT = 8;
+
+/** 复刻方案结构签名（维度 key + 锁定 + 锁定来源 + 当前值；纯函数）。 */
+export function signatureOfRecreationPlan(plan: VisualRecreationPlan): string {
+  return JSON.stringify(
+    plan.fields.map(field => [field.key, field.locked ? 1 : 0, field.lockSource ?? 'default', field.value]),
+  );
+}
+
+/** 快照合法化（持久化恢复：形状校验，无效条目丢弃）。 */
+function normalizeOptimizationHistory(raw: unknown): OptimizationSnapshotEntry[] {
+  if (!Array.isArray(raw)) return [];
+  const entries: OptimizationSnapshotEntry[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const record = item as Record<string, unknown>;
+    const instruction = typeof record.instruction === 'string' ? record.instruction.trim() : '';
+    const prompt = typeof record.optimizedPrompt === 'string' ? record.optimizedPrompt.trim() : '';
+    if (!instruction || !prompt) continue;
+    entries.push({
+      instruction,
+      planSignature: typeof record.planSignature === 'string' ? record.planSignature : '',
+      optimizedPrompt: prompt,
+      optimizedNegativePrompt: typeof record.optimizedNegativePrompt === 'string' ? record.optimizedNegativePrompt : '',
+      summary: typeof record.summary === 'string' && record.summary.trim() ? record.summary : undefined,
+      optimizedAt: typeof record.optimizedAt === 'string' ? record.optimizedAt : new Date().toISOString(),
+      providerName: typeof record.providerName === 'string' ? record.providerName : undefined,
+      modelName: typeof record.modelName === 'string' ? record.modelName : undefined,
+      optimizerModelId: typeof record.optimizerModelId === 'string' ? record.optimizerModelId : undefined,
+    });
+  }
+  return entries;
+}
+
 export interface RecreationState {
   plan: VisualRecreationPlan;
   /** 视觉理解编译出的原始复刻 Prompt（描述事实，保留展示）。 */
@@ -264,6 +319,16 @@ export interface RecreationState {
   optimizerProviderId?: string;
   optimizerSource?: 'manual' | 'follow' | 'default' | 'fallback';
   optimizerFallbackReason?: string;
+  /**
+   * Dimension Lock（§21）：本轮优化器试图改写锁定维度而被强制忽略的 key
+   * （存在即说明优化器越权；最终值一律采用模板基线，绝不采纳其改写）。
+   */
+  optimizerViolations?: RecreationFieldKey[];
+  /**
+   * 优化快照史（Replication Boost 解耦）：每次优化成功按指令去重落一份；
+   * 条件改回历史一致状态（如仅取消「提高复刻度」）时自动恢复，无需重新优化。
+   */
+  optimizationHistory?: OptimizationSnapshotEntry[];
 }
 
 /** 初始状态：分析完成即 ready（未修改不强制空跑优化）。 */
@@ -291,12 +356,16 @@ export function initialRecreationState(
  * 旧 `modified: true` → 语义修订领先 1（保持「已修改待优化」语义），否则双双归 0。
  */
 export function normalizeRecreationState(state: RecreationState): RecreationState {
-  if (typeof state.semanticRevision === 'number' && typeof state.optimizedRevision === 'number') {
-    return state;
+  const history = normalizeOptimizationHistory(state.optimizationHistory);
+  const withHistory: RecreationState = history.length > 0
+    ? { ...state, optimizationHistory: history }
+    : state;
+  if (typeof withHistory.semanticRevision === 'number' && typeof withHistory.optimizedRevision === 'number') {
+    return withHistory;
   }
-  const legacyModified = (state as RecreationState & { modified?: boolean }).modified === true;
+  const legacyModified = (withHistory as RecreationState & { modified?: boolean }).modified === true;
   return {
-    ...state,
+    ...withHistory,
     semanticRevision: legacyModified ? 1 : 0,
     optimizedRevision: 0,
   };
@@ -319,19 +388,66 @@ export function markRecreationDirty(state: RecreationState): RecreationState {
 
 /**
  * 结构化修改意图合成指令落位（V4.1 修改意图 = 自由文本 + 快捷维度 + 人物替换 + 服装策略）：
- *  - 有内容 → dirty（revision +1，记录合成指令，清空历史失败原因）；
+ *  - 有内容且与某份优化快照的条件完全一致（指令 + 方案结构签名）→ 直接恢复该快照
+ *    （Replication Boost 解耦：仅取消「提高复刻度」回到既有条件 ⇒ 自动复原已优化结果，
+ *    绝不强迫用户重新优化一次）；
+ *  - 有内容但无匹配快照 → dirty（revision +1，记录合成指令，清空历史失败原因）；
  *  - 内容清空且无待消化修改 → 维持现状（优化产物仍有效，绝不空指令卡死在 dirty）；
  *  - 内容清空但有待消化修改 → 对齐 revision（用户放弃未优化的修改，保留当前生效 Prompt）。
  */
 export function applyModificationInstruction(state: RecreationState, instruction: string): RecreationState {
   const next = instruction.trim();
   if (next) {
+    const snapshot = findRestorableSnapshot(state, next);
+    if (snapshot) {
+      return restoreOptimizationSnapshot(state, next, snapshot);
+    }
     return { ...markRecreationDirty(state), adjustInstruction: next };
   }
   if (!needsOptimization(state)) {
     return { ...state, adjustInstruction: '', optimizeError: undefined };
   }
   return { ...revertToLastSuccessfulPrompt(state), adjustInstruction: '' };
+}
+
+/** 条件完全一致的快照才可恢复：指令相同 + 方案结构签名相同（有产物）。 */
+export function findRestorableSnapshot(
+  state: RecreationState,
+  instruction: string,
+): OptimizationSnapshotEntry | null {
+  const target = instruction.trim();
+  const signature = signatureOfRecreationPlan(state.plan);
+  const entries = state.optimizationHistory ?? [];
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const entry = entries[i];
+    if (entry.instruction === target && entry.planSignature === signature && entry.optimizedPrompt.trim()) {
+      return entry;
+    }
+  }
+  return null;
+}
+
+/** 恢复快照：修订对齐 + 优化产物 / 溯源字段整体回贴（保持 optimized 语义完整）。 */
+function restoreOptimizationSnapshot(
+  state: RecreationState,
+  instruction: string,
+  entry: OptimizationSnapshotEntry,
+): RecreationState {
+  return {
+    ...state,
+    editState: 'optimized',
+    semanticRevision: state.optimizedRevision,
+    adjustInstruction: instruction.trim(),
+    optimizeError: undefined,
+    optimizedPrompt: entry.optimizedPrompt,
+    optimizedNegativePrompt: entry.optimizedNegativePrompt,
+    summary: entry.summary,
+    optimizedBy: 'optimizer',
+    optimizedAt: entry.optimizedAt,
+    providerName: entry.providerName,
+    modelName: entry.modelName,
+    optimizerModelId: entry.optimizerModelId,
+  };
 }
 
 /** 兼容旧调用名：统一「调整要求」输入框变更（语义同 applyModificationInstruction）。 */
@@ -352,20 +468,24 @@ export function togglePlanFieldLock(state: RecreationState, key: RecreationField
  *  - changedDimensions = 本轮优化中 AI 判定「按用户修改意图需要修改」的维度；
  *  - 优先级强制：user_override 字段保持用户设定（锁定值与原值都不动，即使 AI 报告改了它）；
  *  - 其余字段：在 changed 内 → 解锁（lockSource=intent）+ 更新维度值；不在 → 锁定（default）；
+ *  - lockedBaseline（Dimension Lock §21）：锁定维度的值强制回填模板 canonical 基线
+ *    （修复历史漂移：旧会话被越权改写的锁定值在下一次优化时回归模板）；
  *  - 未知 key 一律忽略；dimensionValues 缺失时仅更新锁定状态，不改值。
  */
 export function applyDimensionIntent(
   state: RecreationState,
   changedDimensions: RecreationFieldKey[],
   dimensionValues?: Partial<Record<RecreationFieldKey, string>>,
+  lockedBaseline?: Partial<Record<RecreationFieldKey, string>>,
 ): RecreationState {
   const changed = new Set(changedDimensions.filter(key => RECREATION_FIELD_KEYS.includes(key)));
   const fields = state.plan.fields.map(field => {
     if (field.lockSource === 'user_override') return field;
     const isChanged = changed.has(field.key);
+    const baseline = lockedBaseline?.[field.key]?.trim();
     const nextValue = isChanged
       ? (dimensionValues?.[field.key] ?? field.value).trim() || field.value
-      : field.value;
+      : baseline ?? field.value;
     return {
       ...field,
       locked: !isChanged,
@@ -374,6 +494,40 @@ export function applyDimensionIntent(
     };
   });
   return { ...state, plan: { ...state.plan, fields } };
+}
+
+// ===== Dimension Lock Enforcement（§21：优化器输出无权改写锁定维度） =====
+
+export interface DimensionLockEnforcement {
+  /** 模板锁定维度（用户未启用修改且未手动开放）。 */
+  lockedKeys: RecreationFieldKey[];
+  /** 锁定维度的模板 canonical 基线（清洗后回填）。 */
+  baseline: Partial<Record<RecreationFieldKey, string>>;
+}
+
+/**
+ * 优化器结果强制清洗（结构性守门，不依赖模型自觉）：
+ *  - changed_dimensions 里的锁定维度 → 剔除并记入 violations；
+ *  - dimension_values 里的锁定维度 → 丢弃（模板没有的值绝不引入，§24）；
+ *  - 违规记录落在 state.optimizerViolations，最终值一律 = 模板基线。
+ */
+export function enforceOptimizerDimensionLocks(
+  changedDimensions: ReadonlyArray<RecreationFieldKey>,
+  dimensionValues: Partial<Record<RecreationFieldKey, string>>,
+  locks: DimensionLockEnforcement,
+): {
+  changedDimensions: RecreationFieldKey[];
+  dimensionValues: Partial<Record<RecreationFieldKey, string>>;
+  violations: RecreationFieldKey[];
+} {
+  const locked = new Set(locks.lockedKeys);
+  const violations = changedDimensions.filter(key => locked.has(key));
+  const changed = changedDimensions.filter(key => !locked.has(key));
+  const values: Partial<Record<RecreationFieldKey, string>> = {};
+  for (const key of Object.keys(dimensionValues) as RecreationFieldKey[]) {
+    if (!locked.has(key)) values[key] = dimensionValues[key];
+  }
+  return { changedDimensions: changed, dimensionValues: values, violations };
 }
 
 /**
@@ -499,9 +653,12 @@ export function describeRecreationStatus(state: RecreationState | null): Recreat
     }
     return {
       key: 'dirty',
-      label: '已修改，待优化',
+      label: '已修改，待重新优化',
       tone: 'orange',
-      note: '已记录你的调整要求。请点击「优化复刻 Prompt」重建最终 Prompt，再确认生成图片。',
+      note: '已记录你的调整要求（因为你修改了条件）。请点击「优化复刻 Prompt」重建最终 Prompt。'
+        + ((state.optimizationHistory ?? []).length > 0
+          ? '此前的优化结果已保留：把条件改回上一次（例如仅取消「提高复刻度」）会自动恢复对应优化结果，不会丢失。'
+          : ''),
     };
   }
   if (state.editState === 'optimized') {
@@ -539,11 +696,43 @@ export function applyOptimizationResult(
     changedDimensions?: RecreationFieldKey[];
     /** V4.1：AI 重建后的各维度值（维度 Diff 的「新」侧；只对非 user_override 字段生效）。 */
     dimensionValues?: Partial<Record<RecreationFieldKey, string>>;
+    /** Dimension Lock（§21）：传入即先做锁定清洗——优化器对锁定维度的改写被忽略。 */
+    dimensionLocks?: DimensionLockEnforcement;
   },
 ): RecreationState {
-  const withIntent = result.changedDimensions
-    ? applyDimensionIntent(state, result.changedDimensions, result.dimensionValues)
-    : state;
+  const enforced = result.dimensionLocks && result.changedDimensions
+    ? enforceOptimizerDimensionLocks(result.changedDimensions, result.dimensionValues ?? {}, result.dimensionLocks)
+    : null;
+  const withIntent = enforced
+    ? applyDimensionIntent(
+      state,
+      enforced.changedDimensions,
+      enforced.dimensionValues,
+      result.dimensionLocks?.baseline,
+    )
+    : result.changedDimensions
+      ? applyDimensionIntent(state, result.changedDimensions, result.dimensionValues)
+      : state;
+  const optimizedAt = new Date().toISOString();
+  // 优化快照（Replication Boost 解耦）：按指令去重落一份「条件 → 产物」，
+  // 条件改回一致状态时 applyModificationInstruction 直接恢复（无需重新优化）。
+  const instruction = withIntent.adjustInstruction.trim();
+  const nextHistory = [
+    ...(withIntent.optimizationHistory ?? []).filter(entry => entry.instruction !== instruction),
+    ...(instruction && result.optimizedPrompt.trim()
+      ? [{
+        instruction,
+        planSignature: signatureOfRecreationPlan(withIntent.plan),
+        optimizedPrompt: result.optimizedPrompt,
+        optimizedNegativePrompt: result.optimizedNegativePrompt,
+        summary: result.summary,
+        optimizedAt,
+        providerName: result.providerName,
+        modelName: result.modelName,
+        optimizerModelId: result.optimizerModelId,
+      }]
+      : []),
+  ].slice(-OPTIMIZATION_SNAPSHOT_LIMIT);
   return {
     ...withIntent,
     editState: 'optimized',
@@ -554,13 +743,15 @@ export function applyOptimizationResult(
     optimizedNegativePrompt: result.optimizedNegativePrompt,
     summary: result.summary,
     optimizedBy: 'optimizer',
-    optimizedAt: new Date().toISOString(),
+    optimizedAt,
     providerName: result.providerName,
     modelName: result.modelName,
     optimizerModelId: result.optimizerModelId,
     optimizerProviderId: result.optimizerProviderId,
     optimizerSource: result.optimizerSource,
     optimizerFallbackReason: result.optimizerFallbackReason,
+    optimizerViolations: enforced && enforced.violations.length > 0 ? enforced.violations : undefined,
+    ...(nextHistory.length > 0 ? { optimizationHistory: nextHistory } : {}),
   };
 }
 

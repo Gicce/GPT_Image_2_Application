@@ -43,6 +43,13 @@ pub struct VisionSubject {
     #[serde(default)]
     pub action: Option<String>,
     #[serde(default)]
+    pub gesture: Option<String>,
+    /// 面部表情（动作锁定链路：wink 等表情必须独立于姿态捕获，具体到睁闭眼状态）
+    #[serde(default)]
+    pub facial_expression: Option<String>,
+    #[serde(default)]
+    pub gaze: Option<String>,
+    #[serde(default)]
     pub position: Option<NormalizedRegion>,
     #[serde(default)]
     pub orientation: Option<String>,
@@ -168,7 +175,27 @@ pub struct TextElement {
     pub style: String,
 }
 
-/// 媒介结构（V4.1 混合媒介契约；旧模型缺失 = None，前端按 style 兜底推断）
+/// detail insert 实例（V5 Group/Instance 分离：一个画框 = 一个 instance）。
+/// 层（region）描述「一类插图」，实例描述「画面里真实存在的那一个」。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MediaStructureRegionInstance {
+    #[serde(default)]
+    pub label: String,
+    /// face / eyes / hair / expression / clothing / feet / body / other
+    #[serde(default)]
+    pub crop_type: String,
+    /// 该实例自身的媒介（photorealistic / anime_illustration / illustration / 3d_render / graphic_design）
+    #[serde(default)]
+    pub media_type: String,
+    #[serde(default)]
+    pub position: Option<NormalizedRegion>,
+    /// 该插图展示的主体角色（primary_subject / secondary_subject）
+    #[serde(default)]
+    pub target_subject_role: String,
+    #[serde(default)]
+    pub description: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct MediaStructureRegion {
     #[serde(default)]
@@ -181,6 +208,9 @@ pub struct MediaStructureRegion {
     pub identity_relation: String,
     #[serde(default)]
     pub description: String,
+    /// detail_insert 层的实例清单（一个画框 = 一个 instance；V5 实例分离）
+    #[serde(default)]
+    pub instances: Vec<MediaStructureRegionInstance>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -707,12 +737,13 @@ const ANALYSIS_SYSTEM_PROMPT: &str = r##"你是一名「生成式图像复现工
 3. 使用可生成的视觉语言（主体、数量、姿势、构图、景别、镜头、光源、色温、材质、风格），不堆砌 "4K / masterpiece / 高清" 之类的空洞关键词。
 4. 字段类型必须严格遵守：除 appearance / clothing / relations / attributes / dominant_palette / fine_details / generation_risks 是字符串数组、count 是整数、rule_of_thirds 是布尔值外，其余字段一律输出单个 JSON 字符串（多个特征合并成一句描述，禁止返回数组，禁止返回对象）。
 5. media_structure 只在能判定时返回：画面确实由多种媒介构成（如真人摄影主体 + 动漫角色 + 涂鸦版式拼贴）才输出 overall_mode="mixed_media" 并给出每层 regions 清单（identity_relation 用于动漫对应角色时用 same_as_primary）；纯照片 / 纯动漫 / 纯 3D 等单一媒介输出 overall_mode="single_media"（regions 可省）或省略整个字段——绝不强行把单一媒介判成混合媒介。
+5a. detail_insert 层必须逐实例枚举（Group ≠ Instance）：语义角色为 detail_insert 的层，regions[].instances 列出画面里每一个真实存在的独立插图 / 相框 / 特写框——一个画框 = 一个 instance（如四角各有头像框则 instances 有 4 项），每项带 position（归一化 0~1）、crop_type（face/eyes/hair/expression/clothing/feet/body/other）、media_type（该插图自身的媒介，动漫头像框为 anime_illustration、真人手部特写为 photorealistic、贴纸图形为 graphic_design）、target_subject_role（该插图展示的主体）与 description（该插图自身内容，如 左上动漫眼部特写框）。实例数量必须来自画面真实观察，禁止合并成一个「细节插图层」笼统描述，也禁止固定套用某个数量。
 6. 严格只输出一个 JSON 对象，不要输出任何解释、Markdown 围栏或多余文本。
 
 JSON 结构（字段可省略但不能改名；数组元素用中文短语）：
 {
   "summary": "一句话概述画面",
-  "subjects": [{ "label": "主体名", "count": 1, "appearance": ["外形描述"], "pose": "姿势", "action": "动作", "position": { "x": 0.5, "y": 0.4, "width": 0.3, "height": 0.6 }, "orientation": "朝向", "clothing": ["服饰"], "relations": ["与其他对象的关系"] }],
+  "subjects": [{ "label": "主体名", "count": 1, "appearance": ["外形描述"], "pose": "姿势（仅身体姿态）", "action": "动作", "gesture": "手势（手部动作，如 右手比V）", "facial_expression": "面部表情（具体到睁闭眼状态，如 右眼闭合左眼睁开的wink眨眼、微笑；纯中性表情写 中性），与姿态分开描述", "gaze": "视线方向（看向哪里）", "position": { "x": 0.5, "y": 0.4, "width": 0.3, "height": 0.6 }, "orientation": "朝向", "clothing": ["服饰"], "relations": ["与其他对象的关系"] }],
   "objects": [{ "label": "客体名", "count": 1, "position": { "x": 0, "y": 0, "width": 0.2, "height": 0.2 }, "attributes": ["属性"] }],
   "scene": { "environment": "环境", "location": "地点", "time_of_day": "时段", "weather": "天气", "background": "背景", "foreground": "前景" },
   "composition": { "subject_placement": "主体位置与占比", "symmetry": "对称性", "rule_of_thirds": true, "horizon": "地平线位置", "negative_space": "留白", "crop": "裁切", "depth_layers": "前中后景层次" },
@@ -720,7 +751,7 @@ JSON 结构（字段可省略但不能改名；数组元素用中文短语）：
   "lighting": { "source": "光源", "direction": "方向", "softness": "软硬", "key_fill_rim": "主/辅/轮廓光", "contrast": "光比", "time_of_day": "时段", "exposure": "曝光" },
   "colors": { "dominant_palette": ["#RRGGBB"], "temperature": "色温倾向", "saturation": "饱和度倾向", "contrast": "色彩对比" },
   "style": { "category": "realistic / illustration / cinematic / 3d / flat 等其一", "medium": "媒介", "texture": "纹理质感", "rendering": "渲染特征", "photographic_characteristics": "摄影特征（非照片则描述对应媒介特征）" },
-  "media_structure": { "overall_mode": "single_media 或 mixed_media", "regions": [{ "label": "层名（如 真人主体 / 动漫角色 / 涂鸦版式）", "semantic_role": "primary_subject / secondary_subject / anime_counterpart / detail_insert / background / graphic_decoration", "rendering_mode": "photorealistic / anime_illustration / illustration / 3d_render / graphic_design", "identity_relation": "template_identity / person_reference / same_as_primary / none", "description": "该层内容" }] },
+  "media_structure": { "overall_mode": "single_media 或 mixed_media", "regions": [{ "label": "层名（如 真人主体 / 动漫角色 / 涂鸦版式）", "semantic_role": "primary_subject / secondary_subject / anime_counterpart / detail_insert / background / graphic_decoration", "rendering_mode": "photorealistic / anime_illustration / illustration / 3d_render / graphic_design", "identity_relation": "template_identity / person_reference / same_as_primary / none", "description": "该层内容", "instances": [{ "label": "插图实例名（如 左上动漫眼部特写框）", "crop_type": "face / eyes / hair / expression / clothing / feet / body / other", "media_type": "photorealistic / anime_illustration / illustration / 3d_render / graphic_design", "position": { "x": 0.1, "y": 0.1, "width": 0.2, "height": 0.2 }, "target_subject_role": "primary_subject / secondary_subject", "description": "该实例内容" }] }] },
   "text_elements": [{ "content": "画面文字原文", "position": { "x": 0.5, "y": 0.1, "width": 0.4, "height": 0.05 }, "style": "字体样式" }],
   "fine_details": ["对复刻重要的细节"],
   "generation_risks": ["反向生成难以还原的点（如小字、Logo、人脸身份等）"]
@@ -763,7 +794,7 @@ const REPAIR_SYSTEM_PROMPT: &str = r#"你是 JSON 结构修复器。用户会给
 
 const ANALYSIS_SCHEMA_SUMMARY: &str = r#"{
   "summary": string,
-  "subjects": [{ "label": string, "count": int, "appearance": string[], "pose": string, "action": string, "position": { "x": number, "y": number, "width": number, "height": number }, "orientation": string, "clothing": string[], "relations": string[] }],
+  "subjects": [{ "label": string, "count": int, "appearance": string[], "pose": string, "action": string, "gesture": string, "facial_expression": string, "gaze": string, "position": { "x": number, "y": number, "width": number, "height": number }, "orientation": string, "clothing": string[], "relations": string[] }],
   "objects": [{ "label": string, "count": int, "position": { "x": number, "y": number, "width": number, "height": number }, "attributes": string[] }],
   "scene": { "environment": string, "location": string, "time_of_day": string, "weather": string, "background": string, "foreground": string },
   "composition": { "subject_placement": string, "symmetry": string, "rule_of_thirds": bool, "horizon": string, "negative_space": string, "crop": string, "depth_layers": string },
@@ -771,7 +802,7 @@ const ANALYSIS_SCHEMA_SUMMARY: &str = r#"{
   "lighting": { "source": string, "direction": string, "softness": string, "key_fill_rim": string, "contrast": string, "time_of_day": string, "exposure": string },
   "colors": { "dominant_palette": string[], "temperature": string, "saturation": string, "contrast": string },
   "style": { "category": string, "medium": string, "texture": string, "rendering": string, "photographic_characteristics": string },
-  "media_structure"?: { "overall_mode": "single_media 或 mixed_media", "preserve_template_media_structure"?: bool, "regions": [{ "label": string, "semantic_role": string, "rendering_mode": string, "identity_relation": string, "description": string }] },
+  "media_structure"?: { "overall_mode": "single_media 或 mixed_media", "preserve_template_media_structure"?: bool, "regions": [{ "label": string, "semantic_role": string, "rendering_mode": string, "identity_relation": string, "description": string, "instances"?: [{ "label": string, "crop_type": string, "media_type": string, "position"?: { "x": number, "y": number, "width": number, "height": number }, "target_subject_role": string, "description": string }] }] },
   "text_elements": [{ "content": string, "position": { "x": number, "y": number, "width": number, "height": number }, "style": string }],
   "fine_details": string[],
   "generation_risks": string[]
@@ -787,7 +818,8 @@ const COMPARISON_SCHEMA_SUMMARY: &str = r#"{
 
 /// 修复输入只带必要内容：目标 Schema + 原始输出 + 校验错误（不重发图片与大量上下文）。
 fn build_repair_user_text(schema_summary: &str, failure: &SchemaParseFailure) -> String {
-    let clipped: String = failure.repair_input.chars().take(8000).collect();
+    // 为 Schema 与错误说明预留空间，保证整个修复请求稳定低于 10k 字符。
+    let clipped: String = failure.repair_input.chars().take(7000).collect();
     format!(
         "请把下面的模型原始输出修复为严格符合 Schema 的单个 JSON 对象。\n\n目标 Schema（字段可省略，类型必须正确）：\n{schema_summary}\n\n模型原始输出：\n{clipped}\n\n校验错误：{detail}\n\n只输出修复后的 JSON 对象。",
         schema_summary = schema_summary,
@@ -939,6 +971,257 @@ pub async fn vision_analyze_image(
                 }
             }
         }
+    }
+}
+
+// ======================= V5 Detail Insert Instance Extraction（受限补充，不重写快照） =======================
+
+const EXTRACT_INSERTS_SYSTEM_PROMPT: &str = r#"你是「细节插图实例枚举器」。用户给你一张模板图与其中一个「细节插图层」的既有描述。你的唯一任务：枚举画面中属于该层的每一个真实存在的独立插图 / 相框 / 特写框实例——一个画框 = 一个 instance。
+
+硬性规则：
+1. 只依据画面真实可见内容计数，禁止固定数量、禁止把多个画框合并成一项、禁止编造画面外实例。
+2. 每个实例的 position 为归一化坐标（0~1，相对整幅画面，x 向右、y 向下）。
+3. crop_type 只能取 face / eyes / hair / expression / clothing / feet / body / other。
+4. media_type 只能取 photorealistic / anime_illustration / illustration / 3d_render / graphic_design（该插图自身的媒介，不是整层媒介）。
+5. 严格只输出一个 JSON 对象：{"instances": [{"label": "实例名（如 左上动漫眼部特写框）", "crop_type": "eyes", "media_type": "anime_illustration", "position": {"x": 0.05, "y": 0.05, "width": 0.2, "height": 0.2}, "target_subject_role": "secondary_subject", "description": "该实例内容"}]}"#;
+
+#[derive(Debug, Deserialize)]
+pub struct VisionExtractInsertsRequest {
+    pub image_path: String,
+    pub base_url: String,
+    pub token: String,
+    pub model: String,
+    /// detail_insert 层的标签（既有分析产物）
+    pub layer_label: String,
+    /// detail_insert 层的描述（既有分析产物）
+    pub layer_description: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct VisionExtractInsertsResult {
+    pub ok: bool,
+    pub instances: Option<Vec<MediaStructureRegionInstance>>,
+    pub error_kind: Option<String>,
+    pub error_message: Option<String>,
+    pub status: Option<u16>,
+}
+
+/// 受限 Detail Insert Extraction Repair：只补充 instances，
+/// 绝不重写 TemplateSnapshot 的任何其它字段（V5 §8 契约）。
+#[tauri::command]
+pub async fn vision_extract_detail_inserts(
+    request: VisionExtractInsertsRequest,
+) -> Result<VisionExtractInsertsResult, String> {
+    println!(
+        "[AITransport] role=vision_analysis feature=detail-insert-extract model={}",
+        request.model
+    );
+    if request.model.trim().is_empty() {
+        return Ok(VisionExtractInsertsResult {
+            ok: false,
+            instances: None,
+            error_kind: Some("not_configured".into()),
+            error_message: Some("尚未选择视觉模型".into()),
+            status: None,
+        });
+    }
+    let data_url = match encode_image_data_url(&request.image_path) {
+        Ok(url) => url,
+        Err(message) => {
+            return Ok(VisionExtractInsertsResult {
+                ok: false,
+                instances: None,
+                error_kind: Some("unsupported_image".into()),
+                error_message: Some(message),
+                status: None,
+            });
+        }
+    };
+    let user_text = format!(
+        "模板图如下。既有分析把这一层标为「{}」：{}。请枚举画面中属于这一层的全部独立插图实例。",
+        request.layer_label.trim(),
+        if request.layer_description.trim().is_empty() { "（无描述）".to_string() } else { request.layer_description.trim().to_string() }
+    );
+    let model = request.model.trim().to_string();
+    let text = match call_vision_model(
+        &request.base_url,
+        &request.token,
+        &model,
+        EXTRACT_INSERTS_SYSTEM_PROMPT,
+        &user_text,
+        &[data_url],
+        2500,
+    )
+    .await
+    {
+        Ok(text) => text,
+        Err(error) => {
+            return Ok(VisionExtractInsertsResult {
+                ok: false,
+                instances: None,
+                error_kind: Some(error.kind),
+                error_message: Some(error.message),
+                status: error.status,
+            });
+        }
+    };
+    let parsed = extract_json_object_text(&text)
+        .and_then(|slice| serde_json::from_str::<serde_json::Value>(slice).ok());
+    let instances = parsed
+        .as_ref()
+        .and_then(|value| value.get("instances"))
+        .and_then(|value| serde_json::from_value::<Vec<MediaStructureRegionInstance>>(value.clone()).ok());
+    match instances {
+        Some(list) if !list.is_empty() => Ok(VisionExtractInsertsResult {
+            ok: true,
+            instances: Some(list),
+            error_kind: None,
+            error_message: None,
+            status: None,
+        }),
+        _ => Ok(VisionExtractInsertsResult {
+            ok: false,
+            instances: None,
+            error_kind: Some("schema_error".into()),
+            error_message: Some("插图实例识别没有返回有效结果，可以重新尝试。".into()),
+            status: None,
+        }),
+    }
+}
+
+// ======================= V5 Reference Appearance（人物参考外貌事实解析） =======================
+
+const REFERENCE_APPEARANCE_SYSTEM_PROMPT: &str = r#"你是「人物参考外貌事实提取器」。用户给你一张人物参考图。你的唯一任务：把画面中人物可观察的外貌设计事实提取为结构化 JSON——这些事实将作为动漫角色设计的唯一事实来源，必须客观、具体、可复现，绝不推测画面外内容。
+
+字段规则：
+- hair_length 只能取 short / shoulder / chest / waist / other（发长落在哪个区间）。
+- hair_texture 只能取 straight / soft_wave / large_wave / curly / other。
+- hair_parting 只能取 center / left / right / none / other。
+- hair_bangs 只能取 none / curtain / side / full / wispy / other（刘海形态）。
+- 颜色用中文日常色名（如 黑色 / 深棕 / 亚麻金）。
+- 观察不到的字段输出空字符串；accessories / clothing 为字符串数组（没有就空数组）。
+- 严格只输出一个 JSON 对象，不要解释或 Markdown。
+
+JSON 结构：
+{"hair_color": "黑色", "hair_length": "waist", "hair_texture": "large_wave", "hair_parting": "center", "hair_bangs": "curtain", "hair_silhouette": "整体轮廓一句话", "face_shape": "脸型", "eye_shape": "眼型", "iris_color": "瞳色", "eyelash_style": "睫毛风格", "accessories": [], "clothing": []}"#;
+
+/// 人物参考外貌事实（ReferenceAppearanceSnapshot 的事实体；TS 侧缓存并按指纹失效）。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ReferenceAppearanceFacts {
+    #[serde(default)]
+    pub hair_color: String,
+    #[serde(default)]
+    pub hair_length: String,
+    #[serde(default)]
+    pub hair_texture: String,
+    #[serde(default)]
+    pub hair_parting: String,
+    #[serde(default)]
+    pub hair_bangs: String,
+    #[serde(default)]
+    pub hair_silhouette: String,
+    #[serde(default)]
+    pub face_shape: String,
+    #[serde(default)]
+    pub eye_shape: String,
+    #[serde(default)]
+    pub iris_color: String,
+    #[serde(default)]
+    pub eyelash_style: String,
+    #[serde(default)]
+    pub accessories: Vec<String>,
+    #[serde(default)]
+    pub clothing: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct VisionReferenceAppearanceRequest {
+    pub image_path: String,
+    pub base_url: String,
+    pub token: String,
+    pub model: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct VisionReferenceAppearanceResult {
+    pub ok: bool,
+    pub facts: Option<ReferenceAppearanceFacts>,
+    pub error_kind: Option<String>,
+    pub error_message: Option<String>,
+    pub status: Option<u16>,
+}
+
+/// 解析人物参考图外貌事实（首次需要时调用一次，结果由 TS 侧按图片指纹缓存；
+/// 失败不阻断生成——角色卡回落为来源指示语义）。
+#[tauri::command]
+pub async fn vision_analyze_reference_appearance(
+    request: VisionReferenceAppearanceRequest,
+) -> Result<VisionReferenceAppearanceResult, String> {
+    println!(
+        "[AITransport] role=vision_analysis feature=reference-appearance model={}",
+        request.model
+    );
+    if request.model.trim().is_empty() {
+        return Ok(VisionReferenceAppearanceResult {
+            ok: false,
+            facts: None,
+            error_kind: Some("not_configured".into()),
+            error_message: Some("尚未选择视觉模型".into()),
+            status: None,
+        });
+    }
+    let data_url = match encode_image_data_url(&request.image_path) {
+        Ok(url) => url,
+        Err(message) => {
+            return Ok(VisionReferenceAppearanceResult {
+                ok: false,
+                facts: None,
+                error_kind: Some("unsupported_image".into()),
+                error_message: Some(message),
+                status: None,
+            });
+        }
+    };
+    let model = request.model.trim().to_string();
+    let text = match call_vision_model(
+        &request.base_url,
+        &request.token,
+        &model,
+        REFERENCE_APPEARANCE_SYSTEM_PROMPT,
+        "请提取这张人物参考图的外貌设计事实。",
+        &[data_url],
+        1500,
+    )
+    .await
+    {
+        Ok(text) => text,
+        Err(error) => {
+            return Ok(VisionReferenceAppearanceResult {
+                ok: false,
+                facts: None,
+                error_kind: Some(error.kind),
+                error_message: Some(error.message),
+                status: error.status,
+            });
+        }
+    };
+    let facts = extract_json_object_text(&text)
+        .and_then(|slice| serde_json::from_str::<ReferenceAppearanceFacts>(slice).ok());
+    match facts {
+        Some(value) => Ok(VisionReferenceAppearanceResult {
+            ok: true,
+            facts: Some(value),
+            error_kind: None,
+            error_message: None,
+            status: None,
+        }),
+        None => Ok(VisionReferenceAppearanceResult {
+            ok: false,
+            facts: None,
+            error_kind: Some("schema_error".into()),
+            error_message: Some("人物参考外貌解析没有返回有效结果。".into()),
+            status: None,
+        }),
     }
 }
 

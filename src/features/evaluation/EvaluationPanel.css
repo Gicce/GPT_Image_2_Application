@@ -291,3 +291,11 @@
 .eval-reevaluate {
   margin-top: -6px;
 }
+
+.eval-anime-section {
+  border-top: 1px solid var(--border-light);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 10px;
+}

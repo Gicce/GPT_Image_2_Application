@@ -8,7 +8,7 @@
  *  - liked = 满意（成功方案标记，只记录，不做任何自动训练 / Prompt 改写）。
  */
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { toastError, toastSuccess } from '../../components/Toast';
 import { useEvaluationStore } from '../../store/useEvaluationStore';
 import { useImageStore } from '../../store/useImageStore';
@@ -18,7 +18,18 @@ import {
   DIMENSION_ORDER,
   composeFeedbackInstruction,
 } from './evaluationModel';
-import { ISSUE_TAG_OPTIONS, type ImageEvaluation, type UserRating } from './types';
+import {
+  ANIME_CONSISTENCY_DIMENSION_LABELS,
+  ISSUE_TAG_OPTIONS,
+  type AnimeConsistencyEvaluationRecord,
+  type ImageEvaluation,
+  type UserRating,
+} from './types';
+import {
+  evaluateAnimeConsistencyAsset,
+  loadAnimeConsistencyEvaluation,
+  resolveAnimeConsistencyContext,
+} from './evaluationService';
 import './EvaluationPanel.css';
 
 interface EvaluationPanelProps {
@@ -57,8 +68,23 @@ export default function EvaluationPanel({
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [comment, setComment] = useState('');
   const [saving, setSaving] = useState(false);
+  const [animeEvaluation, setAnimeEvaluation] = useState<AnimeConsistencyEvaluationRecord | null>(null);
+  const [animePending, setAnimePending] = useState(false);
+  const [animeError, setAnimeError] = useState('');
 
   const rating = evaluation?.user_rating ?? null;
+  const animeContext = task ? resolveAnimeConsistencyContext(task) : null;
+
+  useEffect(() => {
+    let cancelled = false;
+    setAnimeEvaluation(null);
+    setAnimeError('');
+    if (!animeContext) return;
+    void loadAnimeConsistencyEvaluation(assetId).then(record => {
+      if (!cancelled) setAnimeEvaluation(record);
+    });
+    return () => { cancelled = true; };
+  }, [assetId, !!animeContext]);
 
   const canContinue = useMemo(
     () => !!onContinueAdjust && !!evaluation,
@@ -129,6 +155,25 @@ export default function EvaluationPanel({
 
   const continueAdjust = () => {
     if (evaluation && onContinueAdjust) onContinueAdjust(evaluation);
+  };
+
+  const evaluateAnimeConsistency = async () => {
+    if (!task || animePending) return;
+    const image = images.find(item => item.id === assetId);
+    if (!image) {
+      setAnimeError('图片尚未写入图片库，请稍后重试。');
+      return;
+    }
+    setAnimePending(true);
+    setAnimeError('');
+    const outcome = await evaluateAnimeConsistencyAsset(task, image);
+    setAnimePending(false);
+    if (outcome.ok && outcome.evaluation) {
+      setAnimeEvaluation(outcome.evaluation);
+      toastSuccess('角色一致性评价完成');
+    } else {
+      setAnimeError(outcome.error_message || '评价失败，可重新评价。');
+    }
   };
 
   return (
@@ -291,6 +336,53 @@ export default function EvaluationPanel({
             </button>
           )}
         </>
+      )}
+
+      {animeContext && (
+        <div className="eval-anime-section" data-testid="anime-consistency-evaluation">
+          <div className="eval-panel-head">
+            <span className="eval-panel-title">角色一致性</span>
+            {animeEvaluation?.overall_score != null && (
+              <span className="eval-panel-overall">综合 <strong>{animeEvaluation.overall_score}</strong></span>
+            )}
+          </div>
+          {animePending && <p className="eval-panel-state">正在评价角色一致性…</p>}
+          {!animePending && animeEvaluation && (
+            <>
+              <div className="eval-score-grid">
+                {ANIME_CONSISTENCY_DIMENSION_LABELS.map(({ key, label }) => {
+                  const score = animeEvaluation[key];
+                  return (
+                    <div key={key} className="eval-score-row">
+                      <span className="eval-score-label">{label}</span>
+                      <span className={`eval-score-value ${score == null ? 'is-na' : score >= 90 ? 'is-high' : score < 70 ? 'is-low' : ''}`}>
+                        {score == null ? '不适用' : score}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+              {animeEvaluation.issues.length > 0 && <p className="eval-panel-text">{animeEvaluation.issues.join('；')}。</p>}
+              {animeEvaluation.suggestion && (
+                <div className="eval-panel-suggestion">
+                  <span className="eval-panel-suggestion-label">下一轮建议</span>
+                  <p>{animeEvaluation.suggestion}</p>
+                </div>
+              )}
+            </>
+          )}
+          {!animePending && !animeEvaluation && (
+            <div className="eval-panel-empty">
+              <p className="eval-panel-state">暂无角色一致性评价</p>
+              {animeError && <p className="eval-panel-error">{animeError}</p>}
+            </div>
+          )}
+          {!animePending && (
+            <button className="eval-panel-action" onClick={() => void evaluateAnimeConsistency()}>
+              {animeEvaluation || animeError ? '重新评价角色一致性' : '评价角色一致性'}
+            </button>
+          )}
+        </div>
       )}
     </div>
   );

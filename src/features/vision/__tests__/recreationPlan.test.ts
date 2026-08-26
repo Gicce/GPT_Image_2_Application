@@ -296,9 +296,9 @@ describe('describeRecreationStatus（主状态栏：状态 / 标签 / 色调 / �
     expect(status.note).toContain('确认生成');
   });
 
-  it('输入调整要求 → 橙色「已修改，待优化」（dirty），引导语指向「优化复刻 Prompt」', () => {
+  it('输入调整要求 → 橙色「已修改，待重新优化」（dirty），引导语指向「优化复刻 Prompt」', () => {
     const status = describeRecreationStatus(applyAdjustmentInput(initialRecreationState(plan(), 'p', 'n'), '更亮'));
-    expect(status).toMatchObject({ key: 'dirty', label: '已修改，待优化', tone: 'orange' });
+    expect(status).toMatchObject({ key: 'dirty', label: '已修改，待重新优化', tone: 'orange' });
     expect(status.note).toContain('优化复刻 Prompt');
   });
 

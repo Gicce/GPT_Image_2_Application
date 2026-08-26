@@ -74,6 +74,7 @@ export type TaskBatchStrategy = 'repeat_same' | 'variant_set' | 'multi_input';
 export type GenerationImageRole =
   | 'template'
   | 'person_reference'
+  | 'anime_character_reference'
   | 'background_reference'
   | 'style_reference'
   | 'generic_reference';
@@ -182,6 +183,160 @@ export interface GenerationProvenanceSnapshot {
       identityRelation: string;
     }>;
   };
+  // ===== V4.2 Runtime Skill Trace（可选；旧任务缺省 = 无技能记录，禁止伪造）=====
+  /** 生成时刻冻结的技能执行快照（History「AI 技能与规则」唯一数据源）。 */
+  skillExecutionSnapshot?: SkillExecutionSnapshot;
+  // ===== V5 动漫角色参考图任务标记（可选；仅角色一致性准备任务携带）=====
+  /**
+   * 角色参考图回绑线索（Strict Visual Reference）：任务完成 watcher 据此把
+   * 产物图片绑回项目的 animeConsistency.characterAsset（指纹复核后落位）。
+   */
+  animeCharacterAssetRequest?: {
+    projectId: string;
+    fingerprint: string;
+  };
+  // ===== V4.2 Canonical Anime Character（可选；旧任务缺省 = 功能上线前生成，禁止伪造）=====
+  /** 生成时刻冻结的动漫角色卡（混合媒介动漫主体的唯一角色设计实例）。 */
+  animeCharacterSnapshot?: {
+    id: string;
+    sourceSubjectLabel: string;
+    identitySource: { kind: string; label?: string };
+    designSource: string;
+    hair: string;
+    face: string;
+    eyes: string;
+    clothing: string;
+    expression?: string;
+    /** V5：已解析的发型设计事实（缺省 = 功能前生成，禁止伪造）。 */
+    hairFacts?: Record<string, string>;
+    /** V5：动漫一致性模式（standard / strict_visual_reference；缺省 = standard）。 */
+    consistencyMode?: string;
+  };
+  /**
+   * 生成时刻冻结的插图实例绑定（V5：一个画框 = 一个 instance = 一条记录；
+   * characterRef 仅动漫实例携带；History 解释「这个相框跟谁」）。
+   */
+  detailInsertBindings?: Array<{
+    instanceId: string;
+    insertLabel: string;
+    /** 实例媒介（anime_illustration = 同步角色卡；photorealistic = 镜像真人主体）。 */
+    mediaType?: string;
+    cropType?: string;
+    /** 空间位置（「左上 / 右下中部」；分析未产出 = 缺省）。 */
+    positionLabel?: string;
+    characterRef?: string;
+    lockedAspects: string[];
+    allowedVariation: string[];
+  }>;
+}
+
+// ===== Runtime Skill Trace（V4.2）—— Contract 的可解释执行层 =====
+//
+// 铁律：Contract / Validator 仍是唯一业务真相；Skill 是执行与解释层，
+// 绝不另造一份平行业务状态（person_replacement 技能读 PersonReplacementContract，
+// pose_preservation 技能读 DimensionLock 合同，禁止 skillXxxState）。
+
+export type RuntimeSkillCategory = 'analysis' | 'constraint' | 'optimization' | 'compiler';
+
+/** 技能发现（「Skill 发现了什么」）。 */
+export interface SkillFinding {
+  id: string;
+  title: string;
+  description: string;
+  severity?: 'info' | 'important' | 'critical';
+  sourceDimension?: string;
+  sourceAssetId?: string;
+}
+
+/** 技能建议（「Skill 建议了什么」；硬合同类建议 = required，无需用户逐条确认）。 */
+export interface SkillSuggestion {
+  id: string;
+  title: string;
+  description: string;
+  type: 'recommendation' | 'required';
+  status: 'pending' | 'accepted' | 'rejected' | 'auto_applied';
+  relatedDimensions?: string[];
+}
+
+/** 用户对建议的裁决记录（从合同 / 草稿的用户选择确定性回填，不新增确认弹层）。 */
+export interface SkillUserDecision {
+  suggestionId: string;
+  decision: 'accepted' | 'rejected' | 'modified';
+  decidedAt: string;
+  modifiedValue?: unknown;
+}
+
+/** 系统硬约束（「系统强制了什么」；来自 DimensionLock / 合同，优化器无权推翻）。 */
+export interface SkillConstraint {
+  dimension: string;
+  mode: 'locked' | 'forced' | 'preserved';
+  source?: string;
+  value?: string;
+  reason: string;
+}
+
+/** 技能造成的确定性变更（状态 / 合同字段层面）。 */
+export interface SkillAppliedChange {
+  target: string;
+  description: string;
+}
+
+/** Prompt 块来源（「最终写进 Prompt 什么」；finalText 只在详情层展示）。 */
+export interface SkillPromptContribution {
+  block:
+    | 'image_roles'
+    | 'person_contract'
+    | 'clothing_contract'
+    | 'locked_template'
+    | 'expression_contract'
+    | 'media_contract'
+    | 'anime_character_contract'
+    | 'detail_insert_contract'
+    | 'region_contract'
+    | 'dimension_contract'
+    | 'negative_constraints'
+    | 'final_description';
+  summary: string;
+  finalText?: string;
+}
+
+export interface SkillExecutionRecord {
+  executionId: string;
+  skillId: string;
+  skillName: string;
+  skillVersion: string;
+  category: RuntimeSkillCategory;
+  status: 'applied' | 'skipped' | 'overridden' | 'failed';
+  triggeredBy: 'auto' | 'user' | 'system';
+  findings: SkillFinding[];
+  suggestions: SkillSuggestion[];
+  userDecisions: SkillUserDecision[];
+  hardConstraints: SkillConstraint[];
+  appliedChanges: SkillAppliedChange[];
+  promptContributions: SkillPromptContribution[];
+  skippedReason?: string;
+  startedAt: string;
+  completedAt?: string;
+}
+
+/** 编译产物分段（Prompt 来源反查：每段 ← 哪些技能）。 */
+export interface SkillCompiledSection {
+  block: SkillPromptContribution['block'];
+  skillIds: string[];
+  text: string;
+}
+
+/** 技能执行快照（优化 / 生成时冻结；项目演进不影响历史）。 */
+export interface SkillExecutionSnapshot {
+  schemaVersion: 1;
+  projectId: string;
+  projectRevision: number;
+  /** 冻结时对齐的 recreation.optimizedRevision（未优化 = 缺省）。 */
+  optimizationRevision?: number;
+  skills: SkillExecutionRecord[];
+  /** 生成链路冻结的编译分段（含 skill 归属；Prompt 来源反查用）。 */
+  compiledSections?: SkillCompiledSection[];
+  createdAt: string;
 }
 
 /**
@@ -1233,6 +1388,12 @@ export interface VisionSubject {
   appearance: string[];
   pose?: string | null;
   action?: string | null;
+  /** 手势（与姿态分离捕获；动作锁定链路的独立锁定维度）。 */
+  gesture?: string | null;
+  /** 面部表情（具体到睁闭眼状态，如 wink；动作锁定时独立锁定）。 */
+  facial_expression?: string | null;
+  /** 视线方向。 */
+  gaze?: string | null;
   position?: NormalizedRegion | null;
   orientation?: string | null;
   clothing: string[];
@@ -1325,6 +1486,15 @@ export interface VisionAnalysis {
       rendering_mode?: string;
       identity_relation?: string;
       description?: string;
+      /** V5 实例分离：detail_insert 层的实例清单（一个画框 = 一个 instance）。 */
+      instances?: Array<{
+        label?: string;
+        crop_type?: string;
+        media_type?: string;
+        position?: { x?: number; y?: number; width?: number; height?: number };
+        target_subject_role?: string;
+        description?: string;
+      }>;
     }>;
   };
   text_elements: TextElement[];

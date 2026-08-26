@@ -88,6 +88,11 @@ const DIMENSION_LABELS: Record<ModificationDimension, string> = {
 /** 维度中文标签（History「本次修改方案」等展示层共用，禁止各处另写一份）。 */
 export const MODIFICATION_DIMENSION_LABELS = DIMENSION_LABELS;
 
+/** 单个修改维度展示名（页面使用，避免复制映射表）。 */
+export function modificationDimensionLabel(key: ModificationDimension): string {
+  return DIMENSION_LABELS[key];
+}
+
 /**
  * 服装策略状态不变量（V4.0.9 状态模型修复）：
  *

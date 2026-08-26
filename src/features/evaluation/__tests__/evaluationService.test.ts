@@ -8,6 +8,8 @@ import type { ImageEvaluation } from '../types';
 vi.mock('../../../services/api', () => ({
   api: {
     evaluateImage: vi.fn(),
+    evaluateAnimeCharacterConsistency: vi.fn(),
+    getAnimeConsistencyEvaluations: vi.fn(),
     getImages: vi.fn(),
   },
 }));
@@ -62,13 +64,18 @@ vi.mock('../../../store/useTaskStore', () => ({
 import { api } from '../../../services/api';
 import {
   ensureEvaluationWatcher,
+  evaluateAnimeConsistencyAsset,
   evaluateTaskImages,
+  loadAnimeConsistencyEvaluation,
+  resolveAnimeConsistencyContext,
   resolveEvaluationContext,
 } from '../evaluationService';
 import { readEvaluationSettings, writeEvaluationSettings } from '../evaluationSettings';
 
 const evaluateImageMock = api.evaluateImage as ReturnType<typeof vi.fn>;
 const getImagesMock = api.getImages as ReturnType<typeof vi.fn>;
+const evaluateAnimeMock = api.evaluateAnimeCharacterConsistency as ReturnType<typeof vi.fn>;
+const getAnimeEvaluationsMock = api.getAnimeConsistencyEvaluations as ReturnType<typeof vi.fn>;
 
 function makeEvaluation(assetId: string, overrides: Partial<ImageEvaluation> = {}): ImageEvaluation {
   return {
@@ -295,5 +302,61 @@ describe('自动评价 watcher（生成完成后异步触发）', () => {
   it('关闭「生成后自动评价」后设置读取为 false', () => {
     writeEvaluationSettings({ autoEvaluate: false });
     expect(readEvaluationSettings().autoEvaluate).toBe(false);
+  });
+});
+
+describe('动漫角色一致性评价基础链路', () => {
+  const animeTask = {
+    id: 'task-anime',
+    provenance: {
+      schemaVersion: 1,
+      feature: 'vision_recreation',
+      imageRoles: [{ path: 'D:/character.png', label: '动漫角色参考', role: 'anime_character_reference' }],
+      animeCharacterSnapshot: {
+        id: 'canonical-anime-character',
+        sourceSubjectLabel: '动漫角色',
+        identitySource: { kind: 'person_reference', label: '人物参考' },
+        designSource: 'derived_from_person_reference',
+        hair: '黑色及肩微卷发',
+        face: '鹅蛋脸',
+        eyes: '杏眼、棕色瞳孔',
+        clothing: '蓝色夹克',
+        hairFacts: { baseColor: '黑色', length: 'shoulder' },
+      },
+    },
+  } as unknown as Task;
+
+  beforeEach(() => vi.clearAllMocks());
+
+  it('旧任务缺角色快照或角色参考图时不创建评价上下文、不发明分数', () => {
+    expect(resolveAnimeConsistencyContext({ id: 'old', provenance: null } as unknown as Task)).toBeNull();
+    expect(resolveAnimeConsistencyContext({
+      ...animeTask,
+      provenance: { ...animeTask.provenance!, imageRoles: [] },
+    })).toBeNull();
+  });
+
+  it('评价请求使用生成时冻结的角色参考与事实；失败结果不抛出', async () => {
+    const image = makeImage('img-anime', 'D:/result.png');
+    evaluateAnimeMock.mockResolvedValue({
+      ok: false,
+      evaluation: null,
+      error_kind: 'rate_limit',
+      error_message: '评价繁忙，请稍后重试。',
+      status: 429,
+    });
+    const result = await evaluateAnimeConsistencyAsset(animeTask, image);
+    expect(result.ok).toBe(false);
+    expect(evaluateAnimeMock).toHaveBeenCalledWith(expect.objectContaining({
+      character_reference_path: 'D:/character.png',
+      asset_path: 'D:/result.png',
+    }));
+    expect(JSON.parse(evaluateAnimeMock.mock.calls[0][0].character_facts).hair).toEqual({ baseColor: '黑色', length: 'shoulder' });
+  });
+
+  it('只读取持久化记录；无记录返回 null', async () => {
+    getAnimeEvaluationsMock.mockResolvedValue([]);
+    await expect(loadAnimeConsistencyEvaluation('img-old')).resolves.toBeNull();
+    expect(getAnimeEvaluationsMock).toHaveBeenCalledWith(['img-old']);
   });
 });

@@ -36,6 +36,86 @@ export function isLegacyWorkspaceMigratable(legacy: LegacyWorkspaceSnapshot | nu
 }
 
 /**
+ * 迁移幂等标记（§36 铁律：迁移执行一次与多次结果相同）。
+ * workspace 快照在迁移后仍保有 analysis（会被项目持续镜像），没有标记的话
+ * 每次重启 / 重进页面都会再复制一个「未命名视觉项目」——标记按内容指纹
+ * 判定「这份 legacy 已经迁移过」，跳过并返回当时的 projectId。
+ */
+const LEGACY_MIGRATION_MARKER_KEY = 'vision_legacy_project_migrated_v1';
+
+export interface LegacyMigrationMarker {
+  fingerprint: string;
+  projectId: string;
+  migratedAt: string;
+}
+
+/** 指纹输入：只取「这份分析属于哪次识别会话」的稳定身份字段（promptDraft 会随编辑漂移，禁止入指纹）。 */
+export interface WorkspaceIdentityInput {
+  sourcePath?: string;
+  sourceAssetId?: string;
+  sessionId?: string;
+  visionTaskId?: string;
+}
+
+/**
+ * 工作区内容指纹（同一次识别会话 = 同一指纹）。所有 createFromAnalysis 入口
+ * （正式分析建项目 / legacy 迁移）都必须以此标记「当前 workspace 已归属某项目」，
+ * 否则每次重启都会把同一份 analysis 再复制一个「未命名视觉项目」。
+ */
+export function workspaceIdentityFingerprint(identity: WorkspaceIdentityInput): string {
+  return JSON.stringify([
+    identity.sourcePath ?? '',
+    identity.sourceAssetId ?? '',
+    identity.sessionId ?? '',
+    identity.visionTaskId ?? '',
+  ]);
+}
+
+export function legacyWorkspaceFingerprint(legacy: LegacyWorkspaceSnapshot): string {
+  return workspaceIdentityFingerprint({
+    sourcePath: legacy.sourcePath,
+    sourceAssetId: legacy.sourceAssetId,
+    sessionId: legacy.sessionId,
+    visionTaskId: legacy.visionTaskId,
+  });
+}
+
+export function readLegacyMigrationMarker(): LegacyMigrationMarker | null {
+  try {
+    const raw = localStorage.getItem(LEGACY_MIGRATION_MARKER_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<LegacyMigrationMarker>;
+    if (typeof parsed.fingerprint === 'string' && typeof parsed.projectId === 'string' && parsed.projectId) {
+      return {
+        fingerprint: parsed.fingerprint,
+        projectId: parsed.projectId,
+        migratedAt: typeof parsed.migratedAt === 'string' ? parsed.migratedAt : '',
+      };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export function isLegacyWorkspaceAlreadyMigrated(legacy: LegacyWorkspaceSnapshot): boolean {
+  const marker = readLegacyMigrationMarker();
+  return marker !== null && marker.fingerprint === legacyWorkspaceFingerprint(legacy);
+}
+
+/** 建项目成功后写入标记（写失败不阻断：下次启动会因指纹不同重走迁移判定）。 */
+export function markWorkspaceClaimedByProject(identity: WorkspaceIdentityInput, projectId: string): void {
+  try {
+    const marker: LegacyMigrationMarker = {
+      fingerprint: workspaceIdentityFingerprint(identity),
+      projectId,
+      migratedAt: new Date().toISOString(),
+    };
+    localStorage.setItem(LEGACY_MIGRATION_MARKER_KEY, JSON.stringify(marker));
+  } catch { /* localStorage 不可用不阻断 */ }
+}
+
+/**
  * legacy → 项目（缺 plan/analysis 的残缺快照返回 null，调用方走全新建项目流程）。
  * 项目名固定「未命名视觉项目」；revision 从 0 开始（迁移本身不算语义修改）。
  */

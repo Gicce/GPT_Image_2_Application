@@ -186,7 +186,8 @@ describe('优化器 payload（双图真实进入 multimodal）', () => {
   });
 
   test('合成指令带双图上下文（模板标签 / 人物 mention）', () => {
-    expect(pageSrc).toContain('buildModificationInstruction(wstore.modificationDraft, {');
-    expect(pageSrc).toContain('resolution.template ? { label: resolution.template.label }');
+    // V4.2：复刻度增强技能停用时以关闭 boost 的草稿视图进指令（语义不变）
+    expect(pageSrc).toMatch(/buildModificationInstruction\(\s*\/\/ 复刻度增强技能停用[\s\S]*?: wstore\.modificationDraft,/);
+    expect(pageSrc).toContain('template: mentionResolution.template ? { label: mentionResolution.template.label } : undefined,');
   });
 });

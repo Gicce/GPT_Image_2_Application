@@ -57,6 +57,10 @@ export interface GenerationProvenanceInput {
     };
     regions?: ReadonlyArray<RegionSnapshotInput>;
     renderingContract?: GenerationProvenanceSnapshot['renderingContract'];
+    /** Canonical Anime Character（混合媒介动漫主体存在时由调用方派生冻结）。 */
+    animeCharacterSnapshot?: GenerationProvenanceSnapshot['animeCharacterSnapshot'];
+    /** 动漫插图绑定（编译时刻 bindDetailInsertsToCharacter 的产物）。 */
+    detailInsertBindings?: GenerationProvenanceSnapshot['detailInsertBindings'];
   };
 }
 
@@ -288,6 +292,10 @@ export function buildGenerationProvenance(input: GenerationProvenanceInput): Gen
       }));
     }
     if (project.renderingContract) snapshot.renderingContract = project.renderingContract;
+    if (project.animeCharacterSnapshot) snapshot.animeCharacterSnapshot = project.animeCharacterSnapshot;
+    if (project.detailInsertBindings && project.detailInsertBindings.length > 0) {
+      snapshot.detailInsertBindings = project.detailInsertBindings;
+    }
   }
 
   return snapshot;
@@ -302,6 +310,7 @@ export const PROVENANCE_ROLE_LABELS: Record<
 > = {
   template: '画面模板',
   person_reference: '人物参考',
+  anime_character_reference: '动漫角色参考',
   background_reference: '背景参考',
   style_reference: '风格参考',
   generic_reference: '参考图',

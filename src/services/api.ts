@@ -28,6 +28,49 @@ import type {
 import { invalidateAgentTemplateCache } from '../utils/agent/templateCache';
 import type { EvaluateImageOutcome, EvaluateImageRequestPayload, ImageEvaluation } from '../features/evaluation/types';
 import type { VisualProjectSummary } from '../features/vision/project/types';
+import type {
+  AnimeConsistencyEvaluateOutcome,
+  AnimeConsistencyEvaluatePayload,
+  AnimeConsistencyEvaluationRecord,
+} from '../features/evaluation/types';
+
+/** V5 插图实例提取结果（vision_extract_detail_inserts；snake_case Rust 直出）。 */
+export interface VisionExtractInsertsResult {
+  ok: boolean;
+  instances: Array<{
+    label: string;
+    crop_type: string;
+    media_type: string;
+    position?: { x: number; y: number; width: number; height: number } | null;
+    target_subject_role: string;
+    description: string;
+  }> | null;
+  error_kind: string | null;
+  error_message: string | null;
+  status: number | null;
+}
+
+/** V5 人物参考外貌事实结果（vision_analyze_reference_appearance）。 */
+export interface VisionReferenceAppearanceResult {
+  ok: boolean;
+  facts: {
+    hair_color: string;
+    hair_length: string;
+    hair_texture: string;
+    hair_parting: string;
+    hair_bangs: string;
+    hair_silhouette: string;
+    face_shape: string;
+    eye_shape: string;
+    iris_color: string;
+    eyelash_style: string;
+    accessories: string[];
+    clothing: string[];
+  } | null;
+  error_kind: string | null;
+  error_message: string | null;
+  status: number | null;
+}
 
 export const api = {
   getSettings: (): Promise<Settings> => invoke('get_settings'),
@@ -123,6 +166,9 @@ export const api = {
   /** 区域 mask PNG 落盘（返回绝对路径写入 region.maskPath） */
   saveVisualProjectMask: (projectId: string, regionId: string, pngBase64: string): Promise<string> =>
     invoke('save_visual_project_mask', { projectId, regionId, pngBase64 }),
+  /** Project Index Recovery：扫描 data_json 修复摘要列漂移（只读→比对→修复，不删行） */
+  rebuildVisualProjectIndex: (): Promise<{ rowsScanned: number; repaired: number }> =>
+    invoke('rebuild_visual_project_index'),
   /** V4.0.6 视觉理解：单图结构化分析（BYOK 视觉模型，OpenAI 兼容 chat completions） */
   visionAnalyzeImage: (request: {
     imagePath: string;
@@ -159,6 +205,40 @@ export const api = {
         model: request.model,
       },
     }),
+  /** V5 受限插图实例提取（只补 instances，不重写模板快照；用户在提示时手动触发） */
+  visionExtractDetailInserts: (request: {
+    imagePath: string;
+    baseUrl: string;
+    token: string;
+    model: string;
+    layerLabel: string;
+    layerDescription: string;
+  }): Promise<VisionExtractInsertsResult> =>
+    invoke('vision_extract_detail_inserts', {
+      request: {
+        image_path: request.imagePath,
+        base_url: request.baseUrl,
+        token: request.token,
+        model: request.model,
+        layer_label: request.layerLabel,
+        layer_description: request.layerDescription,
+      },
+    }),
+  /** V5 人物参考外貌事实解析（ReferenceAppearanceSnapshot 事实体；失败不阻断） */
+  visionAnalyzeReferenceAppearance: (request: {
+    imagePath: string;
+    baseUrl: string;
+    token: string;
+    model: string;
+  }): Promise<VisionReferenceAppearanceResult> =>
+    invoke('vision_analyze_reference_appearance', {
+      request: {
+        image_path: request.imagePath,
+        base_url: request.baseUrl,
+        token: request.token,
+        model: request.model,
+      },
+    }),
   /** V4.0.6 本地色彩相似度（无 AI 调用） */
   computeColorSimilarity: (sourcePath: string, candidatePath: string): Promise<ColorSimilarityResult> =>
     invoke('compute_color_similarity', { sourcePath, candidatePath }),
@@ -168,6 +248,12 @@ export const api = {
   /** V4.0.9 查询持久化评价（缺省全量；图库筛选只读这里，绝不现场重算） */
   getImageEvaluations: (assetIds?: string[] | null): Promise<ImageEvaluation[]> =>
     invoke('get_image_evaluations', { assetIds: assetIds ?? null }),
+  /** V5 动漫角色一致性评价（手动触发 / 重试；失败不阻塞生成任务） */
+  evaluateAnimeCharacterConsistency: (request: AnimeConsistencyEvaluatePayload): Promise<AnimeConsistencyEvaluateOutcome> =>
+    invoke('evaluate_anime_character_consistency', { request }),
+  /** V5 查询动漫角色一致性评价（旧任务无记录 = UI 不显示，绝不发明分数） */
+  getAnimeConsistencyEvaluations: (assetIds?: string[] | null): Promise<AnimeConsistencyEvaluationRecord[]> =>
+    invoke('get_anime_consistency_evaluations', { assetIds: assetIds ?? null }),
   /** V4.0.9 用户反馈独立落库（liked / disliked / null + 问题标签 + 补充说明） */
   updateImageEvaluationFeedback: (assetId: string, rating: 'liked' | 'disliked' | null, issueTags: string[], comment: string): Promise<ImageEvaluation | null> =>
     invoke('update_image_evaluation_feedback', { assetId, rating, issueTags, comment }),

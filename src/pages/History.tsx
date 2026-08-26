@@ -13,6 +13,8 @@ import {
 } from '../utils/taskCategory';
 import { copyText } from '../utils/clipboard';
 import { toastError, toastSuccess } from '../components/Toast';
+import { SkillTraceContent } from '../features/vision/skills/SkillTraceDrawer';
+import { buildSkillTraceMarkdown } from '../features/vision/skills/exportTrace';
 import { formatDuration } from '../utils/taskDuration';
 import { deriveTaskState, DERIVED_STATUS_META, taskDurationMs } from '../utils/taskState';
 import { classifyGenerationFailure } from '../utils/taskFailure';
@@ -522,6 +524,12 @@ function HistoryTaskDetail(props: {
   // 生成溯源快照（新任务创建时冻结；旧任务缺失 → 如实「未保存」，禁止伪造）
   const provenance = task.provenance ?? null;
   const visionLinked = isVisionRecreationTask(task);
+  // 动漫角色一致性兼容口径：模板含动漫媒介层但无角色卡快照 = 功能上线前生成
+  // （如实提示，禁止按当前项目补写一张卡）
+  const hasAnimeLayersButNoCharacterCard = !!provenance?.renderingContract
+    && provenance.renderingContract.overallMode === 'mixed_media'
+    && (provenance.renderingContract.regions ?? []).some(region => region.renderingMode === 'anime_illustration')
+    && !provenance.animeCharacterSnapshot;
 
   // 用户要求唯一读取入口：新任务读快照 userInstruction（用户原话）；
   // 旧视觉任务没有快照 → 明示「未保存」；普通任务 user_prompt_raw 本身就是用户输入。
@@ -985,6 +993,86 @@ function HistoryTaskDetail(props: {
               </div>
             ))}
           </div>
+        </section>
+      )}
+
+      {/* AI 技能与规则（V4.2 §35/§36）：只读生成时冻结的 provenance.skillExecutionSnapshot
+          —— 用当时的技能版本与执行详情复盘，绝不读项目当前态重新推断；
+          旧任务无快照 = 如实「无历史技能记录」，禁止伪造 */}
+      {(provenance?.skillExecutionSnapshot || visionLinked) && (
+        <section className="history-section">
+          <h4 className="history-section-title">
+            <span className="history-section-no">✦</span>AI 技能与规则
+          </h4>
+          {provenance?.skillExecutionSnapshot ? (
+            <>
+              <ul className="history-skill-summary" data-testid="history-skill-summary">
+                {provenance.skillExecutionSnapshot.skills.map(record => (
+                  <li key={record.skillId} className={`is-${record.status}`}>
+                    {record.skillName} v{record.skillVersion}
+                    {' '}{record.status === 'applied' ? '✓ 已执行'
+                      : record.status === 'failed' ? '✗ 失败'
+                        : record.status === 'overridden' ? '△ 已覆写'
+                          : '○ 未启用'}
+                  </li>
+                ))}
+              </ul>
+              <details className="history-advanced">
+                <summary>查看执行详情</summary>
+                <div className="history-advanced-body">
+                  {provenance.animeCharacterSnapshot && (
+                    <div className="history-anime-character" data-testid="history-anime-character">
+                      <strong>动漫角色一致性 · 角色卡摘要</strong>
+                      <p>
+                        动漫主角色「{provenance.animeCharacterSnapshot.sourceSubjectLabel}」
+                        （身份来源：{provenance.animeCharacterSnapshot.identitySource.kind === 'person_reference'
+                          ? `@${provenance.animeCharacterSnapshot.identitySource.label ?? '人物参考图'}`
+                          : provenance.animeCharacterSnapshot.identitySource.kind === 'manual' ? '文字描述' : '模板原身份'}）
+                      </p>
+                      <ul>
+                        <li>发型：{provenance.animeCharacterSnapshot.hair}</li>
+                        <li>脸型：{provenance.animeCharacterSnapshot.face}</li>
+                        <li>眼睛：{provenance.animeCharacterSnapshot.eyes}</li>
+                        <li>服装基底：{provenance.animeCharacterSnapshot.clothing}</li>
+                        {provenance.animeCharacterSnapshot.expression && (
+                          <li>表情基线：{provenance.animeCharacterSnapshot.expression}</li>
+                        )}
+                      </ul>
+                      {provenance.detailInsertBindings && provenance.detailInsertBindings.length > 0 && (
+                        <p>
+                          细节插图同步：{provenance.detailInsertBindings.length} 个插图引用同一角色卡
+                          （{provenance.detailInsertBindings.map(binding => binding.insertLabel).join('、')}）；
+                          锁定 {provenance.detailInsertBindings[0].lockedAspects.slice(0, 4).join(' / ')}，
+                          允许变化 {provenance.detailInsertBindings[0].allowedVariation.slice(0, 2).join(' / ')}。
+                        </p>
+                      )}
+                    </div>
+                  )}
+                  {hasAnimeLayersButNoCharacterCard && (
+                    <p className="history-empty-hint">
+                      此任务生成于动漫角色一致性追踪功能之前。（模板含动漫媒介层但无冻结角色卡，禁止按当前项目补写。）
+                    </p>
+                  )}
+                  <button
+                    type="button"
+                    className="vision-btn vision-btn-sm"
+                    style={{ marginBottom: 10 }}
+                    onClick={() => {
+                      const markdown = buildSkillTraceMarkdown(provenance.skillExecutionSnapshot!, {
+                        projectName: provenance.projectName,
+                      });
+                      void copyText(markdown, '复制失败，请重试').then(ok => {
+                        if (ok) toastSuccess('已复制技能执行过程（Markdown）');
+                      });
+                    }}
+                  >复制全部执行过程</button>
+                  <SkillTraceContent snapshot={provenance.skillExecutionSnapshot} />
+                </div>
+              </details>
+            </>
+          ) : (
+            <p className="history-empty-hint">该任务生成于技能追踪功能之前，无历史技能记录。</p>
+          )}
         </section>
       )}
 

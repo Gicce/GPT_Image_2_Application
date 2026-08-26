@@ -47,7 +47,8 @@ describe('Prompt Provenance：显示值 === 提交值', () => {
     // 编辑 FinalPromptEditor → promptDraft（onChange 单一入口）
     const editorMatches = pageSrc.match(/value=\{promptDraft\}/g) || [];
     expect(editorMatches).toHaveLength(1);
-    expect(pageSrc).toContain('onChange={e => ws.setPromptDraft(e.target.value)}');
+    expect(pageSrc).toContain('onChange={e => editFinalPrompt(e.target.value)}');
+    expect(pageSrc).toContain('fullPromptOverride: value');
     // 旧「编辑生成方案」第二套 UI（独立折叠 + textarea）已彻底删除
     expect(pageSrc).not.toContain('编辑生成方案');
     expect(pageSrc).not.toContain('vision-plan-edit');
@@ -164,5 +165,31 @@ describe('内置 ImageViewer 接入（视觉理解页）', () => {
     expect(resultSrc).not.toContain('vision-result-detail');
     // 点击缩略图 = 选中 + 进入查看器（评价随选中切换）
     expect(resultSrc).toMatch(/setSelectedAssetId\(item\.assetId\); openViewerAt\(item\.assetId\)/);
+  });
+});
+
+describe('§33 Prompt Truth Source（本轮再确认：Final = Confirm = Submitted = History）', () => {
+  test('生成链路单次编译：mergeFinalGenerationPrompt 输出直进 carry（无二次 compile 漂移）', () => {
+    // 生成路径（generateFromPlan）只在一处调用 mergeFinalGenerationPrompt，
+    // compiled.prompt 原样赋值 finalPromptText → carry.optimizedPrompt
+    const generationPath = pageSrc.slice(
+      pageSrc.indexOf('let finalPromptText = promptDraft.trim()'),
+      pageSrc.indexOf('const carry = buildGenerationCarry'),
+    );
+    expect(generationPath.match(/mergeFinalGenerationPrompt\(/g)?.length).toBe(1);
+    expect(generationPath).toContain('finalPromptText = compiled.prompt');
+    expect(generationPath).toContain('finalNegativeText = compiled.negativePrompt');
+    // 实况预览（openPromptSource）与生成编译互不影响：预览不写任何提交状态
+    const previewPath = pageSrc.slice(
+      pageSrc.indexOf('const openPromptSource'),
+      pageSrc.indexOf('setSkillTraceMode(\'prompt\')'),
+    );
+    expect(previewPath).not.toContain('setPromptDraft');
+    expect(previewPath).not.toContain('finalPromptText');
+  });
+
+  test('carry 冻结 compiled prompt（promptCompiled=true 时 ImageStudio 不再二次前置指令）', () => {
+    expect(pageSrc).toMatch(/promptCompiled,/);
+    expect(pageSrc).toMatch(/optimizedPrompt: finalPromptText/);
   });
 });

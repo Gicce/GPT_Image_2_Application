@@ -156,8 +156,8 @@
 
 .vision-project-item {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  align-items: center;
+  gap: 8px;
   padding: 8px 10px;
   border: 1px solid transparent;
   border-radius: 8px;
@@ -169,8 +169,38 @@
 .vision-project-item:hover { background: var(--bg-hover, rgba(0, 0, 0, 0.05)); }
 .vision-project-item.is-active { border-color: var(--accent-primary, #6366f1); }
 
+.vision-project-item-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.vision-project-item-thumb {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid var(--border-color, #ccc);
+}
+
+.vision-project-item-thumb.is-empty {
+  background: var(--bg-hover, rgba(0, 0, 0, 0.06));
+}
+
 .vision-project-item-name { font-size: 13px; font-weight: 600; }
 .vision-project-item-meta { font-size: 11px; color: var(--text-secondary, #666); }
+
+.vision-project-popover-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--status-error, #dc2626);
+  border-radius: 8px;
+}
 
 .vision-project-popover-footer {
   display: flex;
@@ -178,6 +208,154 @@
   gap: 8px;
   padding-top: 6px;
   border-top: 1px solid var(--border-color, #eee);
+}
+
+/* ===== 全部项目（项目库弹层，§8） ===== */
+.vision-project-library-modal { width: min(680px, calc(100vw - 48px)); }
+
+.vision-project-library-body { max-height: min(60vh, 560px); overflow-y: auto; }
+
+.vision-project-library-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.vision-project-library-filter {
+  padding: 4px 12px;
+  font-size: 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border-color, #ccc);
+  background: none;
+  color: var(--text-secondary, #666);
+  cursor: pointer;
+}
+
+.vision-project-library-filter.is-active {
+  border-color: var(--accent-primary, #6366f1);
+  color: var(--accent-primary, #6366f1);
+  font-weight: 600;
+}
+
+.vision-project-library-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 28px 0;
+}
+
+.vision-project-library-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/*
+ * Project Card 固定三区网格（UI 铁律 Project List State Transition Pattern）：
+ * 缩略图(auto) + 内容(minmax(0,1fr)) + 操作(auto)。普通态 / 删除确认态 /
+ * 加载态必须保持同一布局几何——状态切换只替换操作区内容，绝不挤压内容列。
+ */
+.vision-project-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--border-color, #e5e5e5);
+  border-radius: 10px;
+}
+
+.vision-project-card.is-active { border-color: var(--accent-primary, #6366f1); }
+
+.vision-project-card.is-confirming-delete { border-color: var(--accent-danger, #dc2626); }
+
+.vision-project-card .vision-project-item-thumb {
+  width: 44px;
+  height: 44px;
+  border-radius: 8px;
+}
+
+.vision-project-card-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.vision-project-card-name {
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vision-project-card-meta {
+  font-size: 11px;
+  color: var(--text-secondary, #666);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vision-project-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 6px;
+  /* 操作区可换行收缩，但绝不把内容列挤成不可读宽度 */
+  max-width: 60%;
+}
+
+/* ===== Context Rail 技能块（§23 Runtime Skill Trace） ===== */
+.vision-rail-skills {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-color, #eee);
+}
+
+.vision-rail-skill-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2px 8px;
+  font-size: 12px;
+  color: var(--text-secondary, #666);
+}
+
+/* 技能 checklist 行（点击 = 打开执行过程抽屉；窄 rail 自动单列） */
+.vision-rail-skill-item {
+  display: block;
+  width: 100%;
+  padding: 1px 4px;
+  border: none;
+  border-radius: 5px;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.vision-rail-skill-item:hover { color: var(--accent-primary, #6366f1); background: rgba(99, 102, 241, 0.1); }
+@media (max-width: 1599px) {
+  .vision-rail-skill-list { grid-template-columns: minmax(0, 1fr); }
+}
+
+.vision-final-source-btn {
+  margin-left: auto;
 }
 
 /* ===== Context Rail 内容（§25）===== */
@@ -214,10 +392,142 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 65%;
+  flex: 1;
+  min-width: 0;
 }
 .vision-rail-row.kind-modified .vision-rail-value { color: var(--accent-primary, #6366f1); font-weight: 500; }
-.vision-rail-row.kind-source .vision-rail-value { font-weight: 500; }
+.vision-rail-row.kind-source .vision-rail-value { font-weight: 500; color: var(--accent-success, #059669); }
+
+/* §A 来源可视：@来源 chip（hover 预览 + 点击查看器）与状态徽标。
+   chip 自带 max-width + 单行省略：长文件名保留可见前缀，值列不再挤压成空白点击区 */
+.vision-ref-chip {
+  display: inline-block;
+  max-width: 160px;
+  padding: 0 5px;
+  border: none;
+  border-radius: 5px;
+  background: rgba(99, 102, 241, 0.14);
+  color: var(--accent-primary-text, #4f46e5);
+  font: inherit;
+  line-height: 1.5;
+  cursor: pointer;
+  vertical-align: baseline;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.vision-ref-chip:hover { background: rgba(99, 102, 241, 0.3); text-decoration: underline; }
+.vision-ref-chip.is-text { cursor: default; }
+.vision-ref-chip.is-person {
+  background: var(--badge-success-bg, rgba(16, 185, 129, 0.15));
+  color: var(--badge-success-text, #065f46);
+}
+
+.vision-rail-badge {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 0 5px;
+  border-radius: 999px;
+  font-size: 10px;
+  line-height: 1.6;
+  font-weight: 500;
+  vertical-align: baseline;
+  flex-shrink: 0;
+}
+.vision-rail-badge.is-success {
+  background: var(--badge-success-bg, #d1fae5);
+  color: var(--badge-success-text, #065f46);
+}
+.vision-rail-badge.is-warn {
+  background: var(--badge-warn-bg, #fef3c7);
+  color: var(--badge-warn-text, #92400e);
+}
+
+.vision-ref-preview {
+  position: fixed;
+  z-index: 3000;
+  width: 200px;
+  padding: 4px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color, #e5e5e5);
+  background: var(--bg-card, #fff);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  pointer-events: none;
+}
+.vision-ref-preview img { display: block; width: 100%; border-radius: 6px; }
+.vision-ref-preview-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 120px;
+  border-radius: 6px;
+  background: var(--bg-section, #f5f5f5);
+  color: var(--text-secondary, #666);
+  font-size: 12px;
+}
+.vision-ref-preview-meta { display: flex; flex-direction: column; gap: 2px; padding: 6px 4px 2px; min-width: 0; }
+.vision-ref-preview-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary, inherit);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.vision-ref-preview-note { font-size: 11px; color: var(--text-secondary, #666); }
+
+/* §C 规则中心：默认摘要行（展开 ▾ / 复制规则摘要）；完整清单展开后内部滚动 */
+.vision-rail-rules { display: flex; flex-direction: column; gap: 4px; font-size: 12px; min-width: 0; }
+.vision-rail-rules-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+.vision-rail-rules-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.vision-rail-rules-caret { font-size: 11px; color: var(--accent-primary, #6366f1); flex-shrink: 0; }
+.vision-rail-copy-btn {
+  flex-shrink: 0;
+  padding: 1px 8px;
+  border: 1px solid var(--border-color, #e5e5e5);
+  border-radius: 6px;
+  background: none;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-secondary, #666);
+  cursor: pointer;
+}
+.vision-rail-copy-btn:hover { color: var(--accent-primary, #6366f1); border-color: var(--accent-primary, #6366f1); }
+.vision-rail-rule-list {
+  margin: 0;
+  padding: 0 0 0 2px;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 168px;
+  overflow-y: auto;
+}
+.vision-rail-rule-list li {
+  font-size: 11px;
+  color: var(--text-secondary, #666);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .vision-rail-divider { height: 1px; background: var(--border-color, #eee); margin: 4px 0; }
 
@@ -914,6 +1224,46 @@
   font-size: 12px;
   line-height: 1.8;
   color: var(--text-secondary, #666);
+}
+
+.vision-confirm-summary {
+  margin-top: 0;
+}
+
+.vision-confirm-advanced {
+  border-top: 1px solid var(--border-light);
+  margin-top: 12px;
+  padding-top: 12px;
+  color: var(--text-secondary);
+}
+
+.vision-confirm-advanced summary {
+  color: var(--text-link);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.vision-confirm-prompt {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  font-size: 12px;
+}
+
+.vision-confirm-prompt pre {
+  max-height: 160px;
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--border-code);
+  border-radius: 8px;
+  background: var(--bg-code-block);
+  color: var(--text-secondary);
+  padding: 12px;
+  font: inherit;
 }
 
 .vision-gallery-modal {
