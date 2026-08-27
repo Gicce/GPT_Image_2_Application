@@ -554,7 +554,7 @@ export interface TaskCompositeLayout {
   panelCount: number;
 }
 
-export type PageType = 'agent' | 'imagestudio' | 'vision' | 'queue' | 'gallery' | 'history' | 'settings' | 'about' | 'account';
+export type PageType = 'agent' | 'imagestudio' | 'skillworkshop' | 'vision' | 'queue' | 'gallery' | 'history' | 'settings' | 'about' | 'account';
 
 // ===== V4.0.6 批量任务重做 =====
 

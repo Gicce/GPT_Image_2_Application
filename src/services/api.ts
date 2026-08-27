@@ -169,6 +169,20 @@ export const api = {
   /** Project Index Recovery：扫描 data_json 修复摘要列漂移（只读→比对→修复，不删行） */
   rebuildVisualProjectIndex: (): Promise<{ rowsScanned: number; repaired: number }> =>
     invoke('rebuild_visual_project_index'),
+  /** V4.2.2 Skill Workshop：本地版本化项目 JSON 透传。 */
+  listSkillProjects: (): Promise<Array<{ id: string; name: string; skillId: string; skillVersion: string; status: string; revision: number; updatedAt: string; lastOpenedAt: string }>> =>
+    invoke('list_skill_projects'),
+  loadSkillProject: (id: string): Promise<string | null> => invoke('load_skill_project', { id }),
+  saveSkillProject: (input: { id: string; name: string; skillId: string; skillVersion: string; status: string; revision: number; dataJson: string; lastOpenedAt?: string | null }): Promise<void> =>
+    invoke('save_skill_project', {
+      id: input.id, name: input.name, skillId: input.skillId, skillVersion: input.skillVersion,
+      status: input.status, revision: input.revision, dataJson: input.dataJson, lastOpenedAt: input.lastOpenedAt ?? null,
+    }),
+  deleteSkillProject: (id: string): Promise<void> => invoke('delete_skill_project', { id }),
+  /** 用户主动触发的 Logo 规范分析；原图仅以内联数据传给已配置视觉模型。 */
+  analyzeBrandLogo: (request: { imagePath: string; baseUrl: string; token: string; model: string }): Promise<{ analysis: Record<string, unknown>; model: string }> =>
+    invoke('analyze_brand_logo', { request }),
+  fingerprintSkillAsset: (path: string): Promise<string> => invoke('fingerprint_skill_asset', { path }),
   /** V4.0.6 视觉理解：单图结构化分析（BYOK 视觉模型，OpenAI 兼容 chat completions） */
   visionAnalyzeImage: (request: {
     imagePath: string;

@@ -206,7 +206,21 @@ fn open_db(path: &PathBuf) -> Option<Connection> {
             last_opened_at TEXT NOT NULL DEFAULT ''
         );
         CREATE INDEX IF NOT EXISTS idx_visual_projects_last_opened
-            ON visual_projects(last_opened_at);",
+            ON visual_projects(last_opened_at);
+        CREATE TABLE IF NOT EXISTS skill_projects (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            skill_id TEXT NOT NULL,
+            skill_version TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'draft',
+            revision INTEGER NOT NULL DEFAULT 0,
+            data_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            last_opened_at TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_skill_projects_last_opened
+            ON skill_projects(last_opened_at);",
     )
     .ok()?;
     // 旧库升级：CREATE TABLE IF NOT EXISTS 不会给已有表补列，按需幂等 ALTER

@@ -12,7 +12,6 @@ import { useAccountStore } from './store/useAccountStore';
 import { useServerStatusStore, startHealthCheckLoop, startHeartbeatLoop, stopHeartbeatLoop } from './store/useServerStatusStore';
 import { ensureTaskEventBridge } from './store/useTaskStore';
 import { useEvaluationStore } from './store/useEvaluationStore';
-import { ensureEvaluationWatcher } from './features/evaluation/evaluationService';
 import { ensureCharacterAssetWatcher } from './features/vision/project/animeCharacterAssetService';
 import { loadRuntimeConfig } from './services/runtimeTokenService';
 import { ensureServerModelSync } from './store/useServerModelStore';
@@ -24,6 +23,7 @@ import './App.css';
 const Auth = lazy(() => import('./pages/Auth'));
 const AgentChat = lazy(() => import('./pages/AgentChat'));
 const ImageStudio = lazy(() => import('./pages/ImageStudio'));
+const SkillWorkshop = lazy(() => import('./pages/SkillWorkshop'));
 const VisionUnderstanding = lazy(() => import('./pages/VisionUnderstanding'));
 const TaskQueue = lazy(() => import('./pages/TaskQueue'));
 const Gallery = lazy(() => import('./pages/Gallery'));
@@ -35,6 +35,7 @@ const Account = lazy(() => import('./pages/Account'));
 const PAGE_COMPONENTS: Record<PageType, JSX.Element> = {
   agent: <AgentChat />,
   imagestudio: <ImageStudio />,
+  skillworkshop: <SkillWorkshop />,
   vision: <VisionUnderstanding />,
   queue: <TaskQueue />,
   gallery: <Gallery />,
@@ -86,9 +87,8 @@ export default function App() {
     useRuntimeStore.getState().markAuthRestored();
     // 全局单点 task-updated 订阅：各页面（ImageStudio / TaskQueue / Chat）不再重复注册
     ensureTaskEventBridge();
-    // 统一图片评价：加载持久化评分缓存 + 挂任务完成后的异步自动评价（不阻塞生成）
+    // 统一图片评价：只加载持久化评分缓存。V4.2.2 起评价由用户主动触发，避免静默消耗模型。
     void useEvaluationStore.getState().loadAll();
-    ensureEvaluationWatcher();
     // V5 动漫角色参考图：任务完成回绑 watcher（Strict Visual Reference 资产落位）
     ensureCharacterAssetWatcher();
     // 服务器模型同步单例：runtimeReady / 登录 / Server 切换 / 断网恢复 统一由 store 内部调度
@@ -160,7 +160,7 @@ export default function App() {
   }, [isLoggedIn, requestedPage, clearRequestedPage]);
 
   function handleNavigate(page: PageType) {
-    const authRequiredPages: PageType[] = ['agent', 'imagestudio', 'vision', 'queue', 'account'];
+    const authRequiredPages: PageType[] = ['agent', 'imagestudio', 'skillworkshop', 'vision', 'queue', 'account'];
     if (authRequiredPages.includes(page) && !isLoggedIn) {
       setShowAuth(true);
       useAuthStore.getState().setRequestedPage(page);
