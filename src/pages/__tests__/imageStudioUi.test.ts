@@ -14,9 +14,15 @@ import { describe, expect, test } from 'vitest';
  */
 
 const pageDir = resolve(__dirname, '..');
-const css = readFileSync(resolve(pageDir, 'ImageStudio.css'), 'utf-8');
-const tsx = readFileSync(resolve(pageDir, 'ImageStudio.tsx'), 'utf-8');
-const appCss = readFileSync(resolve(pageDir, '../App.css'), 'utf-8');
+
+// Windows CI（autocrlf）checkout 出的源文件为 CRLF，跨行选择器断言必须先归一化行尾
+function readText(p: string): string {
+  return readFileSync(p, 'utf-8').replace(/\r\n/g, '\n');
+}
+
+const css = readText(resolve(pageDir, 'ImageStudio.css'));
+const tsx = readText(resolve(pageDir, 'ImageStudio.tsx'));
+const appCss = readText(resolve(pageDir, '../App.css'));
 
 function rule(source: string, selector: string): string {
   const re = new RegExp(`${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\{([\\s\\S]*?)\\}`);
