@@ -1,9 +1,11 @@
 /**
- * ClothingSourceControl（V4.1）——服装来源 Segmented Control。
+ * ClothingSourceControl（V4.1 / V6.8 减法版）——服装来源 Segmented Control。
  *
  * [原图服装] [人物服装] [自定义] 三选一（人物服装仅在有参考图时可选，语义与旧版一致）；
- * 选中项下方一行动态说明；只有「自定义」才展开服装描述输入（不占常驻高度）。
+ * 选中项下方一句上下文提示（V6.8：每个来源仅一句，实现规则不向用户解释）；
+ * 只有「自定义」才展开服装描述输入（不占常驻高度）。
  * 键盘可达（原生 button）+ role=radiogroup/radio + aria-checked。
+ * 状态不变量（clothing 维度随来源自动启停）由 normalizeModificationState 在语义层处理。
  */
 
 import { CLOTHING_POLICY } from './recreationCopy';
@@ -12,10 +14,8 @@ import type { ClothingPolicy } from './modificationIntent';
 interface ClothingSourceControlProps {
   clothingPolicy: ClothingPolicy;
   customClothing: string;
-  /** 人物携带参考图（决定「人物服装」是否可选；无图时隐藏该选项，行为与旧版一致）。 */
+  /** 人物替换已绑定图片参考（未绑定时不提供「人物服装」）。 */
   personHasReference: boolean;
-  /** clothing 独立维度同时激活时的提示。 */
-  clothingDimensionActive?: boolean;
   disabled?: boolean;
   onClothingPolicyChange: (policy: ClothingPolicy) => void;
   onCustomClothingChange: (text: string) => void;
@@ -25,7 +25,6 @@ export default function ClothingSourceControl({
   clothingPolicy,
   customClothing,
   personHasReference,
-  clothingDimensionActive,
   disabled,
   onClothingPolicyChange,
   onCustomClothingChange,
@@ -74,15 +73,12 @@ export default function ClothingSourceControl({
             id="vision-custom-clothing"
             className="vision-person-description"
             rows={2}
-            disabled={disabled}
             value={customClothing}
+            disabled={disabled}
             placeholder={CLOTHING_POLICY.customInputPlaceholder}
             onChange={e => onCustomClothingChange(e.target.value)}
           />
         </div>
-      )}
-      {clothingDimensionActive && (
-        <p className="vision-hint">「修改服装」维度已随服装来源自动启用：服装 / 造型会真实修改并出现在维度对比中（选择「原图服装」会自动取消该维度）。</p>
       )}
     </div>
   );

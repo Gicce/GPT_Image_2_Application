@@ -28,8 +28,42 @@ export const BUILTIN_DESK_PACKAGE: SkillPackage = {
   review_rubric: ['主屏居中与人体工学', '单套双臂桌夹结构', '真实产品与比例', '理线与散热', '主题强度与操作区', '摄影与材质真实性'],
 };
 
+export const BUILTIN_UI_PACKAGE: SkillPackage = {
+  schema_version: 1, skill_id: 'ui_concept', version: '1.0.0', name: 'UI 概念设计', domain: 'ui',
+  summary: 'Web、移动端与桌面端界面概念设计：信息层级、真实组件与平台规范约束下的可落地界面渲染。', readiness: 'ready',
+  wizard_steps: ['选择模板', '填写用途', '上传素材', '视觉分析', '确认素材卡', '风格与配置', '摘要与报价', '确认生成'],
+  asset_roles: ['brand_logo', 'style_reference'],
+  defaults: { base: 'modern-product', style: 'minimal', theme: 'none', platform: 'desktop-web' },
+  negative_prompt: '透视变形，乱码文字，无意义符号，破损组件，错位栅格，廉价渐变，过度装饰，第三方 IP 角色',
+  profiles: [
+    { id: 'modern-product', name: '现代产品界面', kind: 'base', prompt: '浅色干净的现代产品界面基线：清晰栅格、充足留白、真实组件比例、克制的品牌主色点缀。' },
+    { id: 'minimal', name: '极简', kind: 'style', prompt: '大面积留白、低饱和中性色、极少装饰，内容即界面。' },
+    { id: 'dark-pro', name: '暗色专业', kind: 'style', prompt: '专业工具感的暗色界面，层次分明的深灰面板与高对比正文。' },
+    { id: 'glass', name: '玻璃拟态', kind: 'style', prompt: '半透明磨砂玻璃层叠卡片与柔和景深，保持信息可读性。' },
+    { id: 'editorial', name: '大字编辑风', kind: 'style', prompt: '大号标题排版、杂志式栅格与强节奏留白。' },
+    { id: 'tech-gradient', name: '科技渐变', kind: 'style', prompt: '克制的蓝紫渐变与光效，科技感但不廉价。' },
+    { id: 'soft-round', name: '柔和圆角', kind: 'style', prompt: '大圆角卡片、柔和阴影与友好配色。' },
+    { id: 'none', name: '无主题', kind: 'theme', prompt: '不加入 IP 主题或装饰性角色。' },
+    { id: 'original-illustration', name: '原创插画点缀', kind: 'theme', prompt: '少量原创插画与空状态图形，不使用第三方 IP。' },
+    { id: 'custom', name: '自定义素材主题', kind: 'theme', prompt: '仅使用用户明确提供并有权使用的主题素材。' },
+    { id: 'desktop-web', name: '桌面 Web', kind: 'platform', prompt: '桌面浏览器视口比例，宽幅多栏布局。' },
+    { id: 'mobile-app', name: '移动 App', kind: 'platform', prompt: '手机竖屏视口，拇指友好的底部主操作。' },
+    { id: 'responsive-general', name: '响应式通用', kind: 'platform', prompt: '适合通用展示，主体完整，画面边缘保留安全空间。' },
+  ],
+  core_rules: [
+    '界面信息层级清晰，主操作突出，次级功能收纳，不做功能堆砌。',
+    '遵循 8pt 间距体系与对齐栅格，组件之间保持一致的呼吸感。',
+    '使用真实组件比例与平台惯例：导航、卡片、按钮、表单、列表的尺寸关系可信。',
+    '界面文案使用简短真实词汇（按钮、标题、标签），避免长段落与无意义乱码文字。',
+    '已确认品牌卡的 Logo、色彩与字体必须保持一致，不得重绘、拉伸或替换。',
+    '输出为正面视口的界面渲染图，设备边框完整，无透视变形与意外裁切。',
+  ],
+  review_rubric: ['信息层级', '组件真实性', '文字可读性', '品牌一致性', '平台规范', '技术质量'],
+};
+
 export const BUILTIN_CATALOG: SkillCatalogItem[] = [
   { skill_id: 'professional_desk_setup', version: '1.0.0', name: '专业桌搭', domain: 'desk_setup', summary: BUILTIN_DESK_PACKAGE.summary, readiness: 'ready' },
-  ...([['ecommerce', '电商图片'], ['product', '产品摄影'], ['brand_ad', '品牌广告'], ['interior', '室内空间'], ['sports', '运动视觉'], ['ui', 'UI 视觉']] as const)
+  { skill_id: 'ui_concept', version: '1.0.0', name: 'UI 概念设计', domain: 'ui', summary: BUILTIN_UI_PACKAGE.summary, readiness: 'ready' },
+  ...([['ecommerce', '电商图片'], ['product', '产品摄影'], ['brand_ad', '品牌广告'], ['interior', '室内空间'], ['sports', '运动视觉']] as const)
     .map(([domain, name]) => ({ skill_id: `${domain}_foundation`, version: '0.1.0', name, domain, summary: '领域结构已建立，正在专业验收。', readiness: 'testing' as const })),
 ];

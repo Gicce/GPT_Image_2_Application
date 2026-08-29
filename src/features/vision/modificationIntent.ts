@@ -33,6 +33,14 @@ export interface PersonReplacement {
   description?: string;
 }
 
+/** 维度卡选择的参考图；purpose 只补充图片职责，旧项目缺省时仍按通用参考图处理。 */
+export interface DimensionReferenceImage {
+  assetId?: string;
+  path: string;
+  label?: string;
+  purpose?: Exclude<ModificationDimension, 'subject'>;
+}
+
 export interface ModificationDraft {
   /** 自然语言修改要求（textarea，与快捷维度互不替代；@token 是其中的普通文本）。 */
   freeText: string;
@@ -49,7 +57,7 @@ export interface ModificationDraft {
   /** @图片引用绑定（token 在 freeText，此处为真实图片侧车表；孤儿绑定随文本清理）。 */
   mentions: ImageMention[];
   /** 用户从图库加入当前任务的附加参考图（@ 弹层「从图片库选择」落这里）。 */
-  extraImageRefs: Array<{ assetId?: string; path: string; label?: string }>;
+  extraImageRefs: DimensionReferenceImage[];
 }
 
 export const EMPTY_MODIFICATION_DRAFT: ModificationDraft = {
@@ -91,6 +99,93 @@ export const MODIFICATION_DIMENSION_LABELS = DIMENSION_LABELS;
 /** 单个修改维度展示名（页面使用，避免复制映射表）。 */
 export function modificationDimensionLabel(key: ModificationDimension): string {
   return DIMENSION_LABELS[key];
+}
+
+const DIMENSION_REQUIREMENT_PREFIX: Record<Exclude<ModificationDimension, 'subject' | 'clothing'>, string> = {
+  pose: '动作要求',
+  scene: '背景要求',
+  camera: '镜头要求',
+  style: '风格要求',
+};
+
+/** 从自由文本读取维度卡管理的一行要求；内容仍是用户原话，不建立第二套隐藏语义。 */
+export function readDimensionRequirement(
+  text: string,
+  dimension: Exclude<ModificationDimension, 'subject' | 'clothing'>,
+): string {
+  const prefix = DIMENSION_REQUIREMENT_PREFIX[dimension];
+  const line = text.split(/\r?\n/).find(item => item.trim().startsWith(`${prefix}：`));
+  return line?.trim().slice(prefix.length + 1).trim() ?? '';
+}
+
+/** 写回自由文本中的维度要求行，沿用既有 freeText → revision → Prompt 链路。 */
+export function writeDimensionRequirement(
+  text: string,
+  dimension: Exclude<ModificationDimension, 'subject' | 'clothing'>,
+  value: string,
+): string {
+  const prefix = DIMENSION_REQUIREMENT_PREFIX[dimension];
+  const nextLine = value.trim() ? `${prefix}：${value.trim()}` : '';
+  const lines = text.split(/\r?\n/);
+  const index = lines.findIndex(item => item.trim().startsWith(`${prefix}：`));
+  if (index >= 0) {
+    if (nextLine) lines[index] = nextLine;
+    else lines.splice(index, 1);
+  } else if (nextLine) {
+    lines.push(nextLine);
+  }
+  return lines.filter(line => line.trim()).join('\n');
+}
+
+/**
+ * 修改要求中的显式维度提示（V6.4，零模型调用的输入辅助）。
+ *
+ * 只识别带明确修改动作的中文短语；「保持 / 不改 / 不变」优先排除。
+ * 结果仅用于自动勾选快捷维度，Prompt 优化器仍保留原有独立意图识别，
+ * 不以本函数替代模型的 changed_dimensions 判断。
+ */
+export function detectExplicitModificationDimensions(text: string): ModificationDimension[] {
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  if (!normalized) return [];
+  const rules: ReadonlyArray<{
+    key: ModificationDimension;
+    change: RegExp;
+    preserve: RegExp;
+  }> = [
+    {
+      key: 'subject',
+      change: /(?:替换|更换|换成|改成|修改|重做).{0,10}(?:人物|角色|主角|脸|面部|五官|发型|发色)|(?:人物|角色|主角|脸|面部|五官|发型|发色).{0,10}(?:替换|更换|换成|改成|修改|重做)/,
+      preserve: /(?:人物|角色|主角|脸|面部|五官|发型|发色).{0,8}(?:保持|保留|不改|不变)|(?:保持|保留|不改|不变).{0,8}(?:人物|角色|主角|脸|面部|五官|发型|发色)/,
+    },
+    {
+      key: 'clothing',
+      change: /(?:替换|更换|换成|改成|修改|穿上|穿着|穿|换上|重新设计).{0,12}(?:服装|衣服|穿搭|造型|裙|外套|夹克|西装)|(?:服装|衣服|穿搭|造型).{0,10}(?:替换|更换|换成|改成|修改|重新设计)/,
+      preserve: /(?:服装|衣服|穿搭|造型).{0,8}(?:保持|保留|不改|不变|沿用)|(?:保持|保留|不改|不变|沿用).{0,8}(?:服装|衣服|穿搭|造型)/,
+    },
+    {
+      key: 'pose',
+      change: /(?:修改|更换|改变|改成|换成|调整|重做).{0,10}(?:动作|姿势|手势|站姿|坐姿)|(?:动作|姿势|手势|站姿|坐姿).{0,10}(?:修改|更换|改变|改成|换成|调整|重做)/,
+      preserve: /(?:动作|姿势|手势|站姿|坐姿).{0,8}(?:保持|保留|不改|不变|沿用)|(?:保持|保留|不改|不变|沿用).{0,8}(?:动作|姿势|手势|站姿|坐姿)/,
+    },
+    {
+      key: 'scene',
+      change: /(?:修改|更换|改变|改成|换成|调整|重做).{0,12}(?:背景|场景|环境|地点|街道|室内|室外)|(?:背景|场景|环境).{0,10}(?:修改|更换|改变|改成|换成|调整|重做)/,
+      preserve: /(?:背景|场景|环境).{0,8}(?:保持|保留|不改|不变|沿用)|(?:保持|保留|不改|不变|沿用).{0,8}(?:背景|场景|环境)/,
+    },
+    {
+      key: 'camera',
+      change: /(?:修改|更换|改变|改成|换成|调整).{0,10}(?:镜头|视角|机位|景别|特写|俯拍|仰拍|景深)|(?:镜头|视角|机位|景别|景深).{0,10}(?:修改|更换|改变|改成|换成|调整)/,
+      preserve: /(?:镜头|视角|机位|景别|景深).{0,8}(?:保持|保留|不改|不变|沿用)|(?:保持|保留|不改|不变|沿用).{0,8}(?:镜头|视角|机位|景别|景深)/,
+    },
+    {
+      key: 'style',
+      change: /(?:修改|更换|改变|改成|换成|调整|重做).{0,12}(?:风格|画风|质感|写实|动漫|插画|油画)|(?:风格|画风|质感).{0,10}(?:修改|更换|改变|改成|换成|调整|重做)/,
+      preserve: /(?:风格|画风|质感).{0,8}(?:保持|保留|不改|不变|沿用)|(?:保持|保留|不改|不变|沿用).{0,8}(?:风格|画风|质感)/,
+    },
+  ];
+  return rules
+    .filter(rule => rule.change.test(normalized) && !rule.preserve.test(normalized))
+    .map(rule => rule.key);
 }
 
 /**
@@ -340,6 +435,20 @@ export function buildModificationInstruction(
     const directive = dimensionDirectiveInstruction(key);
     if (directive) lines.push(directive);
   }
+  for (const ref of draft.extraImageRefs) {
+    if (!ref.purpose || !draft.activeDimensions.includes(ref.purpose)) continue;
+    const label = ref.label?.trim() || ref.path.split(/[\\/]/).pop() || '参考图';
+    const directive = ref.purpose === 'pose'
+      ? `动作参考图：以「${label}」的动作、姿态、手势和身体朝向为准；不从该图继承人物身份、服装、背景或风格`
+      : ref.purpose === 'scene'
+        ? `背景参考图：以「${label}」的场景、环境和空间元素为准；不从该图继承人物身份`
+        : ref.purpose === 'camera'
+          ? `镜头参考图：以「${label}」的景别、机位、视角和景深为准；不从该图继承人物身份或服装`
+          : ref.purpose === 'style'
+            ? `风格参考图：以「${label}」的画风、材质、色彩和视觉语言为准；不从该图继承人物身份、动作或构图内容`
+            : `服装参考图：以「${label}」的服装、配饰和造型为准；只替换服装，不从该图继承人物身份、动作或背景`;
+    lines.push(directive);
+  }
   if (!draft.person && !context?.personMention && draft.activeDimensions.includes('subject')) {
     // 纯文本主体修改（未设置人物参考）：subject 也要 must-change 语义
     lines.push('人物修改（已启用）：主体人物按调整要求修改（未设置人物参考图，以文字意图为准）');
@@ -422,10 +531,10 @@ function migrateMentions(raw: unknown): ImageMention[] {
 }
 
 /** 持久化 extraImageRefs 合法化（path 必填，去重）。 */
-function migrateExtraImageRefs(raw: unknown): Array<{ assetId?: string; path: string; label?: string }> {
+function migrateExtraImageRefs(raw: unknown): DimensionReferenceImage[] {
   if (!Array.isArray(raw)) return [];
   const seen = new Set<string>();
-  const refs: Array<{ assetId?: string; path: string; label?: string }> = [];
+  const refs: DimensionReferenceImage[] = [];
   for (const item of raw) {
     if (!item || typeof item !== 'object') continue;
     const record = item as Record<string, unknown>;
@@ -436,6 +545,9 @@ function migrateExtraImageRefs(raw: unknown): Array<{ assetId?: string; path: st
       assetId: typeof record.assetId === 'string' ? record.assetId : undefined,
       path,
       label: typeof record.label === 'string' && record.label.trim() ? record.label.trim() : undefined,
+      purpose: typeof record.purpose === 'string' && record.purpose in DIMENSION_LABELS && record.purpose !== 'subject'
+        ? record.purpose as DimensionReferenceImage['purpose']
+        : undefined,
     });
   }
   return refs;

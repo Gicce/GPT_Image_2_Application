@@ -66,7 +66,7 @@ UI 侧强制规则（`src/features/vision/visionErrors.ts` 唯一映射层）：
 实例：`src/features/vision/PersonReplacementPanel.tsx`。挂在「修改人物」维度激活时展开。**Person Replacement is a first-class business action, not a weak advanced form section**：主色描边业务卡（`.vision-person-panel.is-business`）+ 👤 卡头（「人物替换」+ `已启用` 徽章 + 一句业务说明 + 移除按钮）。规则：
 
 1. **双区结构**：A 区「画面模板」（当前任务主参考图；缩略图 + 「当前使用：@原图」+ `更换模板图`，更换 = 更换工作区参考图会重置分析，按钮 tooltip 必须说明）；B 区「替换人物」（三种来源 tab）。两区用途文案固定：模板 = 继承画风 / 构图 / 背景 / 整体氛围；人物 = 替换主角身份 / 五官 / 发型 / 人物特征。
-2. **三种人物来源**（tab 语义，role=tablist）：图片库人物（复用图库弹层，无可靠人物分类时不假装智能过滤）/ 本地导入（文件选择）/ 文字描述（textarea）。来源 Tab 切换是视图操作；真正落语义的是人物数据（参考图 / 非空描述）。
+2. **三种人物来源**（`CharacterSourcePicker`：图片库人物（复用图库弹层，无可靠人物分类时不假装智能过滤）/ 本地导入（文件选择）/ 文字描述（textarea））**锚定在人物卡下方整列宽**（`.vision-person-map-source-row`，V6.8 §三）——绝不进入卡片内部宽度计算、不挤压信息区；边框 / 圆角 / 底色 / 内边距归卡根所有，卡内节点一律无边框（禁负 margin / 定宽补丁）。来源切换是视图操作；真正落语义的是人物数据（参考图 / 非空描述）。
 3. 人物参考图语义 = 身份 / 脸部 / 发型 / 体型；是否采用其服装由 ClothingPolicy 决定，禁止偷偷跟随。
 4. 缩略图点击进全局 ImageViewer（禁止再造 Preview Modal）；「更换人物」「移除人物替换」为 secondary 按钮。**（V4.1）预览用真实大图不用小裁切缩略图**：`usePersonThumb` 两级加载（缓存缩略图秒开 → readImageData 原图替换，原图失败保留缩略图）；预览容器 `object-fit: contain` 按原始比例完整呈现（禁止固定 4:3 + cover 裁切——人物图必须能看清脸 / 发型 / 服装 / 姿势），max-height ~260px，点击仍进 ImageViewer 放大。
 5. **移除人物替换**：删 person 数据 + 解除 subject 维度 + 仅因人物产生的服装自定义回默认；不触碰其它维度与自由文本、不删 @mention 文本。
@@ -101,6 +101,7 @@ UI 侧强制规则（`src/features/vision/visionErrors.ts` 唯一映射层）：
    - 移除人物替换时显式启用过的服装修改保留（策略降级 `custom`），不静默丢失用户意图。
    - 优化器系统提示词规则 6 硬性对应：`preserve_original` → clothing 绝不进 changed_dimensions；`use_subject_reference` / `custom` → clothing 必须进 changed_dimensions 且值来自对应来源。
    - 「维度锁定（锁定 X · 可修改 Y）」计数以 `activeDimensions` 为单一事实源：Chip 已启用的维度即使尚未优化也计入「可修改」。
+7. **（V6.8 减法版 UI）**：每个来源仅一句上下文提示（`CLOTHING_POLICY` 唯一来源；「保持原图服装不变。」「将使用人物参考图中的服装。」「描述希望替换的服装与造型。」），不向用户解释「维度自动启停」等实现规则；服装参考与服装描述输入仅在 `custom` 时展开（已存在的参考卡任何来源下可见可移除，不隐藏数据）；多人服装收成单行「分别设置」入口。语义合同（1-6）不变。
 
 ## 1h. Generation Provenance Snapshot（生成溯源快照，V4.0.9.1）
 
@@ -227,3 +228,25 @@ User Override（用户手动切换） > Modification Intent（AI 按意图判定
 2. `buildOptimizerHardContractLines(project)` 产出合同行（人物决策 / 显式维度 / 服装来源 / 区域 / 媒介结构），置于用户内容最顶【硬性合同】块。
 3. Prompt Compiler 分层（固定顺序）：image_role → person_replacement → region → rendering → clothing → dimension → template_preservation → final_description（优化产物只作最终画面描述层）；负面词单独走 negativePrompt 字段。`carry.promptCompiled=true` 时 carryApply 禁止二次前置指令（同合同双份 = 违规）。
 4. 编译块文案锚点：`【人物替换合同（强制执行）】`（strict 含「禁止从图片1提取或保留人物的脸部身份」；natural 明示「不承诺保留参考图人物的具体面部特征」——禁止超出模型能力的口径）、`【区域编辑合同`、`【服装合同】`（preserve_original 含「保留服装 ≠ 保留人物」）、`【模板保留合同】`。
+
+## 11. Workflow Step Status Model（统一步骤状态 selector + 素材显式确认，V6.8）
+
+实例：`src/features/vision/visionWizard.ts`（`getVisualWorkflowState` / `VisionWizardContext`）+ 页面唯一派生点（`wizardCtx` → `workflowState`）+ `features/vision/optimizeProgress.ts`（阶段型进度）。规则：
+
+1. **步骤完成态只有一个 selector**：四步（visualUnderstanding / requirementDescription / materialReplacement / finalPrompt）× 三态（pending / current / completed）由 `getVisualWorkflowState(ctx)` 派生，`currentStep` = 第一个未完成步骤；步骤栏、Rail 项目进度卡、完成徽标一律查表。**禁止** UI 从 editState / revision / 面板折叠等零散字段自行反推完成——V6.7 前 `visionStepDone(3) = editState === 'optimized'`（旧项目恢复后素材替换被误标已完成）即被本条取代的根因做法。
+2. **素材替换完成 = 用户显式确认**：唯一入口 = 点击「继续下一步 · 生成最终提示词」（`confirmMaterialReplacement`：项目链路 `updateActiveMeta` 写 `workspace.materialReplacementDone: true`，无项目链路写 workspace 快照同名字段 `setMaterialReplacementDone`，随后进第 4 步）。工作流检查点不是方案内容——**不加修订、不触发待优化**（§1e/§7 白名单之外）。
+3. **旧数据保守恢复**：normalize（项目 `normalizeWorkspace` / 快照）对该字段缺省 **false**——旧项目即使 `optimizedRevision === revision`（曾优化出最终 Prompt）、即使已有完整素材配置，也恢复为「素材替换进行中」；「没有修改任何素材」≠「已完成」。绝不删除 / 改写旧项目数据，只做缺省归一。
+4. **素材域修改复位确认**：项目链路 `updateActive / updateActiveDebounced` 内 `isMaterialDomainReason(reason)`（reason ≠ `generation_result`）自动 `unconfirmMaterialReplacement`；无项目链路在 `commitModificationDraft` 复位快照字段。生成结果（generation_result）不复位。回到第 3 步编辑 = 步骤回到 current、第 4 步回 pending。
+5. **promptReady 派生**：第 4 步完成判定 = `recreation && !needsOptimization(recreation)`（语义修订比较 §1f），绝不读 editState。
+6. **优化运行期真实进度（§36 阶段型百分比扩展）**：状态模型 `PromptOptimizationStatus`（idle/queued/collecting/normalizing/analyzing/optimizing/validating/completed/failed）；当前链路服务层 `onStage` 只在真实边界触发 collecting（读参考图前）→ optimizing（发模型请求前）→ validating（收到回复后），失败到 optimizing 为止（不派发未发生的阶段）；百分比 = `deriveOptimizationPercent(status)` 阶段锚点派生（idle/failed = null，失败态不渲染进度条，只显示真实错误 + 重新优化）；已用时 = 每秒真实计时。运行期进度卡（`OptimizeProgressCard`）替换 CTA 按钮区（ContextRail CTA 卡 / 无项目 footer 双入口），完成后 100% 短暂停留即复位，绝不出现「正在优化…」假死文案。
+
+## 12. Recreation Optimization Input（统一有效意图 → 优化输入，V6.8.1，ADR-030）
+
+实例：`src/features/vision/recreationOptimizationInput.ts`（唯一组装器）+ 页面接线（`commitModificationDraft` / `optimizeRecreationPrompt` / `syncRecreationInstructionFromProject`）。规则：
+
+1. **优化输入 = 用户全部当前生效要求的重汇总**，不是对原始 Prompt 的润色：`buildRecreationOptimizationInstruction(draft, project, context)` = `buildModificationInstruction(getEffectiveModificationDraft(draft), context)`（第 2 步需求描述 + 人物 / 服装 / 维度 / 参考图 / 复刻强度，沿用 §1 语义合同）＋ `buildRegionReplacementLines(project)`（区域替换逐项块）＋ `buildPersonContractLines(project)`（人物替换合同 V2 行）。**禁止**组件自拼 Prompt、**禁止** workspace/project 整体 JSON 进模型。
+2. **区域块是内容级**：逐区域 `- 区域 N「名」［类型；范围：describeRectPosition 矩形定位 / 画笔蒙版范围；身份强度；替换范围］人物身份以参考图「X」为准；：替换为——替换描述`，头部声明区域外画面严格保持画面模板；「是什么 / 替换为什么 / 参考素材」三项齐全，绝不只给「N 个区域已启用」计数（计数行只是 optimizerContract 硬性合同的权限声明，两者职责不混淆）。
+3. **Effective State 铁律**：`getEffectiveModificationDraft` 在 `clothingPolicy !== 'custom'` 时清空 customClothing（存储层保留残留文本以便切回，只在读取边界清洗）；`collectEffectiveRegionReplacements` 只取 enabled 区域、person 绑定解析不到保持 undefined 不虚构。优化器永远只看当前显式选择的效果。
+4. **过期触发全覆盖**：项目侧三条入口（区域变更 `updateActive('regions')` / 人物合同 V2 `updateActive('person')` / 区域人物参考图库绑定）在 updateActive 后调 `syncRecreationInstructionFromProject()` 重建统一指令 → `applyModificationInstruction`（快照恢复语义保留）→ needsOptimization；加上第 2 步 `commitModificationDraft`，所有生效意图变化统一收敛到「指令字符串变化 ⇒ 过期」。优化完成 `applyOptimizationResult` 对齐 optimizedRevision 后 CTA / 技能保存可用态 / 方案卡同步刷新。
+5. **「复刻成我的技能」= CTA 区 Secondary Action**：位于「优化复刻 Prompt」与「确认生成图片（唯一 Primary）」之间，`vision-btn` 无高强调 class；handler 复用现存原链路 `saveRecreationAsSkill → SkillCreatorDialog(project)`（**禁止新写保存实现**）；可用判定 `canSaveAsSkill = activeProject && recreation && !needsOptimization && !optimizing && 有最终 Prompt`，disabled 时 title 说明原因（无项目 / 已过期需重新优化 / 优化中）；文案唯一来源 `recreationCopy.ts#SAVE_AS_SKILL_ACTION`。
+6. **向导区与后续区块间距**：`.vision-wizard { margin-bottom: 24px }`（tokens.md §3 标准档）分隔操作脚注与「高级设置」，禁止 magic margin。

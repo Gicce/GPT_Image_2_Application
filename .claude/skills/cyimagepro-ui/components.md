@@ -53,10 +53,12 @@
 | WorkflowStatusBanner | pages/VisionUnderstanding.tsx（vision-status-row / vision-status-bar） | 状态点 + 标签 + 引导语五 tone；CTA 在 Banner 外，见 visual-workflow.md |
 | VisualAnalysisProgress | features/vision/VisualAnalysisProgress.tsx | 视觉理解「正在分析」阶段反馈（参考图缩略图 + 创意文案轮播 `getVisualAnalysisMessage` + 扫描线/呼吸描边 + reduced-motion 降级）；只在真实 analyzing 阶段渲染，见 visual-workflow.md §1a |
 | ModificationChip 行（ModificationChips） | features/vision/ModificationChips.tsx | 快捷修改维度结构化选择器（toggle / 同维度唯一槽位 / aria-pressed / ✓ 前缀 + Brand Soft 选中态 / 提高复刻度独立虚线 Chip）；定义单一来源 modificationIntent.ts，见 visual-workflow.md §1b |
-| PersonReplacementPanel | features/vision/PersonReplacementPanel.tsx | 人物替换**业务卡**（V4.0.9：👤 卡头「已启用」徽章 + A 区画面模板（缩略图 + 当前使用 @标签 + 更换模板图）+ B 区替换人物（图片库人物 / 本地导入 / 文字描述 三来源 tab）+ C 区 ClothingPolicy radiogroup；缩略图进 ImageViewer）；语义边界：Tab 切换是视图，人物数据才是语义，见 visual-workflow.md §1c-1d |
+| ProjectPreviewPanel | features/vision/project/ProjectPreviewPanel.tsx | 视觉项目原图、理解摘要、模型、状态和重新视觉理解的集中预览；只展示并转发既有回调，折叠属于 View State |
+| PersonReplacementPanel | features/vision/PersonReplacementPanel.tsx | 人物替换业务卡：紧凑“模板→人物”映射，人物右卡内直接提供图库/本地/文字描述三入口；替换范围、身份应用、强度与区域编辑合同完整保留；缩略图进全局 ImageViewer |
+| ClothingChangePanel | features/vision/ClothingChangePanel.tsx | 独立服装更改业务卡；复用 `ClothingSourceControl` 与 `setClothingPolicy` 状态不变量，不在组件内自造服装语义 |
 | IntentMentionInput | features/vision/IntentMentionInput.tsx | 修改意图输入框的 @图片引用能力（V4.0.9）：原生 textarea（IME 安全）+ 背景高亮层（@token pill）+ @ 弹层（当前任务图片池候选）+ 引用 chips 行（hover 看图 / 点击进 ImageViewer / × 移除）；弹层开关 / 上下选择 / Esc 是纯视图操作（组件不写 store），见 visual-workflow.md §1g |
 | imageMention.ts | features/vision/imageMention.ts | @图片引用纯函数层（V4.0.9）：当前任务图片池 buildVisionContextImages（唯一 selector，路径去重 + 业务角色标签）+ mention token 插入/定位/清理 + 双图角色解析 resolveImageMentionRoles（模板图 / 人物替换来源；面板显式选择 > 明确 Mention > 自然语言推断） |
-| useVisionViewStore | store/useVisionViewStore.ts | 视觉页 View State 唯一载体（dimensionsCollapsed / advancedCollapsed / analysisDetailCollapsed / promptView；进程内不持久化）；禁止塞进业务对象，见 visual-workflow.md §1e |
+| useVisionViewStore | store/useVisionViewStore.ts | 视觉页 View State 唯一载体（项目预览/自定义内容/人物/服装/维度/高级/分析折叠 + promptView；进程内不持久化）；禁止塞进业务对象，见 visual-workflow.md §1e |
 | modificationIntent.ts | features/vision/modificationIntent.ts | 修改意图纯函数层（ModificationDraft（含 mentions / extraImageRefs）/ toggle 唯一槽位 / buildModificationInstruction 合成指令（含双图角色行）/ ClothingPolicy 指令文本 / 持久化迁移；V4.0.9.1 服装状态不变量唯一归一入口 normalizeModificationState + setClothingPolicy + clothingReadinessError） |
 | generationProvenance.ts | features/vision/generationProvenance.ts | 生成溯源快照（V4.0.9.1）：buildGenerationProvenance（生成时刻冻结用户原话 / 修改方案 / 参考图角色 / 服装策略 / 模型记录）+ renderUserInstruction（@token→@label）+ describeProvenanceModificationPlan（历史「本次修改方案」行）+ PROVENANCE_ROLE_LABELS；历史详情只读快照，禁止 final_prompt 伪造用户要求 |
 | FinalPromptEditor（vision-final-prompt） | pages/VisionUnderstanding.tsx | 最终生图 Prompt **唯一**查看/编辑/Diff/复制入口（最终版本 Tab 可编辑 promptDraft、修改对比 Tab Diff、四态状态徽章）；禁止第二套「编辑生成方案」输入框 |

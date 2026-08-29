@@ -2,19 +2,20 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { useTaskStore } from '../store/useTaskStore';
-import { useImageStore } from '../store/useImageStore';
 import { useAuthStore } from '../store/useAuthStore';
 import { useImageEditStore } from '../store/useImageEditStore';
 import { useDraftStore } from '../store/useDraftStore';
 import { useImageViewerStore } from '../store/useImageViewerStore';
 import type { VisionCarryDraft } from '../store/useDraftStore';
 import { api } from '../services/api';
+import OutputPathPicker from '../components/OutputPathPicker';
 import { authorizeImageTask, settleImageTask, createRequestId, registerTaskAuthorization } from '../services/billingService';
 import { optimizePrompt, resolvePromptOptimizerModelLabel } from '../services/promptOptimizer';
+import { optimizeVisualEditPrompt, resolveVisualPromptOptimizerModelLabel, type VisualPromptUnderstanding } from '../services/visualPromptOptimizer';
 import { appendAiPlan, optimizeSinglePlan, planBatchFromRequirement } from '../services/batchPlanner';
 import type { ParsedAiPlan } from '../services/batchPlanner';
 import { SIZES, QUALITIES, QUALITY_LABELS, FORMATS } from '../types';
-import type { ImageRecord, Task } from '../types';
+import type { GenerationImageRole, ImageRecord, Task } from '../types';
 import {
   buildBatchPlanTaskParams,
   clampPlanCount,
@@ -27,8 +28,11 @@ import {
   type GenerationPlan,
 } from '../utils/batchPlans';
 import { toastError, toastSuccess, toastInfo } from '../components/Toast';
+import { useVisualProjectStore } from '../store/useVisualProjectStore';
+import ImageLibraryPicker from '../components/ImageLibraryPicker';
 import { resolveSubmitOptimizationSnapshot } from '../features/vision/generationCarry';
 import { resolveVisionCarryPatch } from '../features/vision/carryApply';
+import { describeReferenceImagesForUser, SEMANTIC_REFERENCE_LABELS } from '../features/vision/generationProvenance';
 import { gateImageModelForKind } from '../features/imageModel/imageModelCapability';
 import {
   INVALID_IMAGE_DROP_TOAST,
@@ -43,6 +47,11 @@ import BatchPlanDetailDrawer, { BpConfirmDialog } from '../components/BatchPlanD
 import { selectRecentImageTasks, recentTaskDisplayTitle, RECENT_TASKS_LIMIT } from '../utils/recentTasks';
 import { formatTaskTime } from '../utils/taskDisplay';
 import { useAIProviderStore } from '../features/aiProviders/store';
+import IntentMentionInput, { type PendingGalleryImage } from '../features/vision/IntentMentionInput';
+import {
+  IMAGE_MENTION_ROLE_LABELS, IMAGE_MENTION_ROLE_NOTES, pruneMentions,
+  type ImageMention, type ImageMentionRole, type VisionContextImage,
+} from '../features/vision/imageMention';
 // 本页复用 Settings.css 的共享原语（.settings-card/.settings-btn*/.form-hint/.template-modal*）；
 // 该 CSS 位于 page-settings 懒加载 chunk，必须显式 import，否则冷启动直达本页时样式缺失。
 // ImageStudio.css 需在其后加载，才能覆盖 .settings-card 的页面级定制
@@ -96,10 +105,21 @@ function emptyBatchWorkspace(): BatchWorkspace {
 interface SourceImage {
   path: string;
   name: string;
+  role?: ImageMentionRole;
+  /**
+   * V6.2 语义参考：视觉方案携带的计划图片带 generationRole（template /
+   * person_reference / …），UI 显示语义标签（模板图 / 人物参考…）且**无 inline
+   * dropdown**（改角色 = 改方案，回视觉工作台）；手动添加的图片 origin=manual
+   * （缺省按 manual），通过 ⋯ 菜单设置用途。
+   */
+  generationRole?: GenerationImageRole;
+  origin?: 'plan' | 'manual';
+  /** 计划图片在方案里的 @label（卡片标题与摘要使用）。 */
+  label?: string;
 }
 
 /** 单张模式的 AI 优化候选（正向/负面独立可编辑 + 采用/恢复） */
-type SingleOptStatus = 'idle' | 'loading' | 'success' | 'error';
+type SingleOptStatus = 'idle' | 'loading' | 'success' | 'stale' | 'error';
 
 interface SingleOptimization {
   status: SingleOptStatus;
@@ -111,6 +131,9 @@ interface SingleOptimization {
   providerName: string;
   modelName: string;
   originalPrompt: string;
+  kind: 'text' | 'visual';
+  sourceSignature: string;
+  understanding?: VisualPromptUnderstanding;
 }
 
 function emptyOptimization(): SingleOptimization {
@@ -124,41 +147,47 @@ function emptyOptimization(): SingleOptimization {
     providerName: '',
     modelName: '',
     originalPrompt: '',
+    kind: 'text',
+    sourceSignature: '',
   };
 }
 
+function optimizationSignature(prompt: string, images: SourceImage[] = []): string {
+  return JSON.stringify({ prompt: prompt.trim(), images: images.map(image => ({ path: image.path, role: image.role })) });
+}
+
+function staleOptimization(opt: SingleOptimization): SingleOptimization {
+  if (!opt.positivePrompt.trim()) return opt;
+  return { ...opt, status: 'stale', useOptimized: false, error: '' };
+}
+
+function compileMentionContract(prompt: string, mentions: ImageMention[], mentionSource = prompt): string {
+  const active = pruneMentions(mentionSource, mentions);
+  if (!active.length) return prompt;
+  return [prompt, '', '【图片引用关系（必须遵守）】', ...active.map(item => `- @${item.token}：${IMAGE_MENTION_ROLE_LABELS[item.role]}，使用真实附件「${item.label}」`)].join('\n');
+}
+
 /** 优化模型说明（AI Assistance Indicator）：未配置时提供设置入口；有配置时展示模型名（单行 + ellipsis） */
-function OptimizerModelNote({ label }: { label: string | null }) {
+function OptimizerModelNote({ label, visual }: { label: string | null; visual?: boolean }) {
   if (label) {
     return (
-      <span className="studio-ai-chip" title={`AI 提示词优化 · ${label}`}>
+      <span className="studio-ai-chip" title={`${visual ? '视觉理解' : '图片 Prompt 优化'} · ${label}`}>
         <span className="studio-ai-chip-icon" aria-hidden>✨</span>
-        <span className="studio-ai-chip-text">AI 提示词优化</span>
+        <span className="studio-ai-chip-text">{visual ? '结合参考图优化' : '提示词优化'}</span>
         <span className="studio-ai-chip-model">{label}</span>
       </span>
     );
   }
   return (
     <span className="studio-ai-chip none">
-      <span className="studio-ai-chip-text">尚未配置 AI 提示词优化模型</span>
+      <span className="studio-ai-chip-text">{visual ? '尚未选择视觉模型' : '尚未配置图片 Prompt 优化模型'}</span>
       <button className="settings-btn settings-btn-link settings-btn-sm" onClick={() => {
-        window.dispatchEvent(new CustomEvent('cyimage-navigate', { detail: { page: 'settings', section: 'agents' } }));
+        window.dispatchEvent(new CustomEvent('cyimage-navigate', { detail: { page: 'settings', section: visual ? 'vision' : 'agents' } }));
       }}>
         前往设置
       </button>
     </span>
   );
-}
-
-function StudioThumb({ path }: { path: string }) {
-  const [thumb, setThumb] = useState<string>('');
-  useEffect(() => {
-    let alive = true;
-    api.readThumbnail(path).then(data => { if (alive) setThumb(data); }).catch(() => {});
-    return () => { alive = false; };
-  }, [path]);
-  if (!thumb) return <span className="studio-media-placeholder">…</span>;
-  return <img src={thumb} alt="" />;
 }
 
 /**
@@ -168,10 +197,36 @@ function StudioThumb({ path }: { path: string }) {
  * 文件名只是 metadata（Tooltip），扩展名徽标代替；移除是 secondary danger（默认 neutral，Hover 才 danger）。
  * 状态：empty / loaded(单图或多图) / dragOver / disabled(预留) / error(缩略图读取失败占位)。
  * 业务链路（本地 / 图库 / 拖拽 → mergeSourceImages 去重）保持不变。
+ *
+ * V6.2 语义参考卡：视觉方案携带的计划图片（origin=plan）显示语义标签（模板图 /
+ * 人物参考 / 动漫角色参考 / 附加参考…）+ 🔒 徽标，**无 inline dropdown**——改角色 =
+ * 改方案，必须回视觉工作台；手动添加的图片（origin 缺省 = manual）通过 ⋯ 菜单
+ * 设置用途。卡片标题不再用「参考图 1」这类与 Prompt 序号错位的序号命名
+ * （Prompt 内的 图片1/2/3 序号由编译器保证，与卡片标签互不冒充）。
  */
+const MANUAL_ROLE_OPTIONS: ReadonlyArray<{ value: ImageMentionRole; label: string }> = [
+  { value: 'generic_reference', label: '附加参考' },
+  { value: 'person_replacement_reference', label: '人物参考' },
+  { value: 'background_reference', label: '背景参考' },
+  { value: 'template_reference', label: '风格与构图参考' },
+];
+
+/** 计划图片语义徽标（generationRole → 用户语言；未知角色回落「方案参考」）。 */
+function planRoleBadge(item: SourceImage): string | null {
+  if (item.origin !== 'plan' || !item.generationRole) return null;
+  return SEMANTIC_REFERENCE_LABELS[item.generationRole] ?? '方案参考';
+}
+
+/** 手动图片用途徽标（按用户选择的 mention 角色显示；缺省 = 附加参考）。 */
+function manualRoleBadge(item: SourceImage): string {
+  const matched = MANUAL_ROLE_OPTIONS.find(option => option.value === (item.role || 'generic_reference'));
+  return matched?.label ?? '附加参考';
+}
+
 function ReferenceImageInput(props: {
   images: SourceImage[];
   onChange: (images: SourceImage[]) => void;
+  onRoleChange?: (index: number, role: ImageMentionRole) => void;
   /** V4.0.8 拖拽高亮（Tauri 窗口级事件由页面统一分发到此区域）。 */
   dragActive?: boolean;
   /** 预留：整体只读（隐藏移除 / 添加，Empty 不可点）。当前业务未使用。 */
@@ -179,7 +234,7 @@ function ReferenceImageInput(props: {
 }) {
   const [galleryOpen, setGalleryOpen] = useState(false);
   const [addMenuOpen, setAddMenuOpen] = useState(false);
-  const { images: galleryImages, loadImages } = useImageStore();
+  const [roleMenuIndex, setRoleMenuIndex] = useState<number | null>(null);
   const [thumbs, setThumbs] = useState<Record<string, string>>({});
 
   useEffect(() => {
@@ -215,7 +270,6 @@ function ReferenceImageInput(props: {
 
   function openGallery() {
     setAddMenuOpen(false);
-    void loadImages();
     setGalleryOpen(true);
   }
 
@@ -255,20 +309,25 @@ function ReferenceImageInput(props: {
           </svg>
           <p className="studio-dropzone-title">{props.dragActive ? '松开即可添加参考图片' : '拖入图片，或点击选择图片'}</p>
           <div className="settings-actions-row studio-dropzone-actions">
-            <button type="button" className="settings-btn settings-btn-secondary settings-btn-sm" onClick={e => { e.stopPropagation(); void pickLocal(); }}>本地选择</button>
-            <button type="button" className="settings-btn settings-btn-secondary settings-btn-sm" onClick={e => { e.stopPropagation(); openGallery(); }}>从图片库选择</button>
+            <button type="button" className="app-btn app-btn-secondary app-btn-sm" onClick={e => { e.stopPropagation(); void pickLocal(); }}>本地选择</button>
+            <button type="button" className="app-btn app-btn-secondary app-btn-sm" onClick={e => { e.stopPropagation(); openGallery(); }}>从图片库选择</button>
           </div>
           <p className="studio-dropzone-hint">支持 PNG / JPG / JPEG / WebP</p>
         </div>
       ) : (
         <div className="studio-media-grid">
-          {props.images.map((item, index) => (
-            <div className="studio-media-tile" key={item.path}>
+          {props.images.map((item, index) => {
+            const planBadge = planRoleBadge(item);
+            const roleBadge = planBadge
+              ?? (index === 0 && !item.origin ? '主编辑图' : manualRoleBadge(item));
+            const isPlan = item.origin === 'plan';
+            return (
+            <div className={`studio-media-tile${isPlan ? ' is-plan-role' : ''}`} key={item.path}>
               {thumbs[item.path]
                 ? <img
                     src={thumbs[item.path]}
                     alt={item.name}
-                    title={`${item.name}（点击查看大图）`}
+                    title={`${item.name}${item.label && item.label !== item.name ? `（${item.label}）` : ''}（点击查看大图）`}
                     onClick={() => useImageViewerStore.getState().openViewer(
                       props.images.map(source => ({
                         id: source.path,
@@ -281,19 +340,58 @@ function ReferenceImageInput(props: {
                   />
                 : <span className="studio-media-placeholder">…</span>}
               {extOf(item.name) && <span className="studio-media-ext">{extOf(item.name)}</span>}
+              <span
+                className={`studio-media-role${isPlan ? ' is-plan' : ''}`}
+                title={isPlan
+                  ? `${roleBadge}（来自视觉方案，改用途请回视觉工作台调整方案）`
+                  : `${roleBadge}（可通过 ⋯ 菜单修改用途）`}
+              >
+                {isPlan && <span className="studio-media-role-lock" aria-hidden>🔒</span>}
+                {roleBadge}
+              </span>
+              {/* 计划图片：无 inline dropdown（角色由方案冻结）；
+                  手动图片：⋯ 菜单设置用途（V6.2 起 dropdown 全部收进菜单） */}
+              {props.onRoleChange && !isPlan && (
+                <div className="studio-media-more-wrap">
+                  <button
+                    type="button"
+                    className="studio-media-more"
+                    aria-label={`设置 ${item.name} 的用途`}
+                    aria-expanded={roleMenuIndex === index}
+                    onClick={() => setRoleMenuIndex(open => (open === index ? null : index))}
+                  >⋯</button>
+                  {roleMenuIndex === index && (
+                    <div className="bp-more-menu studio-media-role-menu" role="menu">
+                      {MANUAL_ROLE_OPTIONS.map(option => (
+                        <button
+                          key={option.value}
+                          type="button"
+                          role="menuitemradio"
+                          aria-checked={(item.role || 'generic_reference') === option.value}
+                          onClick={() => {
+                            setRoleMenuIndex(null);
+                            props.onRoleChange?.(index, option.value);
+                          }}
+                        >{option.label}{(item.role || 'generic_reference') === option.value ? ' ✓' : ''}</button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
               {!props.disabled && (
                 <button
                   type="button"
                   className="studio-media-remove"
                   title="移除参考图片"
                   aria-label={`移除参考图片 ${item.name}`}
-                  onClick={() => props.onChange(props.images.filter((_, i) => i !== index))}
+                  onClick={() => { setRoleMenuIndex(null); props.onChange(props.images.filter((_, i) => i !== index)); }}
                 >
                   ×
                 </button>
               )}
             </div>
-          ))}
+            );
+          })}
           {!props.disabled && (
             <div className="studio-media-add-wrap">
               <button type="button" className="studio-media-add" onClick={() => setAddMenuOpen(v => !v)}>
@@ -310,42 +408,23 @@ function ReferenceImageInput(props: {
           )}
         </div>
       )}
-      {galleryOpen && (
-        <div className="template-modal-overlay" onClick={() => setGalleryOpen(false)}>
-          <div className="template-modal studio-gallery-modal" onClick={e => e.stopPropagation()}>
-            <div className="template-modal-header">
-              <h3>从图片库选择</h3>
-              <button className="template-modal-close" onClick={() => setGalleryOpen(false)} aria-label="关闭">×</button>
-            </div>
-            <div className="template-modal-body">
-              <div className="studio-gallery-grid">
-                {galleryImages.filter(image => !image.missing).slice(0, 120).map(image => (
-                  <button className="studio-gallery-cell" key={image.id} onClick={() => pickFromGallery(image)}>
-                    <StudioThumb path={image.local_path} />
-                    <span title={image.file_name}>{image.file_name}</span>
-                  </button>
-                ))}
-                {galleryImages.length === 0 && <p className="form-hint">图片库为空。</p>}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      <ImageLibraryPicker
+        open={galleryOpen}
+        title="从图片库选择"
+        onClose={() => setGalleryOpen(false)}
+        onPick={pickFromGallery}
+      />
     </div>
   );
 }
 
-/** 生成设置（尺寸 / 质量 / 格式 / 输出目录）—— 单张 / 批量三种模式共用的唯一实现 */
+/** 生成设置（尺寸 / 质量 / 格式 / 输出位置）—— 单张 / 批量三种模式共用的唯一实现 */
 function GenerationSettings(props: {
   size: string; onSize: (v: string) => void;
   quality: string; onQuality: (v: string) => void;
   format: string; onFormat: (v: string) => void;
   outputDir: string; onOutputDir: (v: string) => void;
 }) {
-  async function browse() {
-    const dir = await api.selectDirectory();
-    if (dir) props.onOutputDir(dir);
-  }
   return (
     <div className="studio-settings">
       <div className="studio-settings-grid">
@@ -369,11 +448,9 @@ function GenerationSettings(props: {
         </div>
       </div>
       <div className="form-group studio-dir-group">
-        <label>输出目录</label>
-        <div className="dir-input">
-          <input value={props.outputDir} onChange={e => props.onOutputDir(e.target.value)} placeholder="选择图片保存位置" readOnly />
-          <button type="button" className="browse-btn" onClick={() => void browse()}>浏览</button>
-        </div>
+        <label>输出位置</label>
+        {/* V6.6：输出位置选择器（默认路径 / 图库文件夹 / 浏览），全库唯一实现 */}
+        <OutputPathPicker value={props.outputDir} onChange={props.onOutputDir} label="输出位置" />
       </div>
     </div>
   );
@@ -414,6 +491,7 @@ function TargetCountStepper(props: { value: number; onChange: (v: number) => voi
 function SingleOptResult(props: {
   opt: SingleOptimization;
   optimizing: boolean;
+  stale: boolean;
   onPatch: (patch: Partial<SingleOptimization>) => void;
   onReoptimize: () => void;
 }) {
@@ -427,15 +505,25 @@ function SingleOptResult(props: {
     <div className="studio-req-result">
       <div className="studio-req-result-head">
         <span className="studio-req-result-title">
-          AI 优化结果
+          {opt.kind === 'visual' ? '结合参考图的提示词优化结果' : '提示词优化结果'}
           {opt.modelName ? ` · ${opt.providerName ? `${opt.providerName} / ` : ''}${opt.modelName}` : ''}
         </span>
-        {opt.useOptimized && (
+        {props.stale ? (
+          <span className="studio-req-stale">参考图片或编辑需求已变化，请重新优化</span>
+        ) : opt.useOptimized && (
           <span className="studio-req-adopted">
-            ✨ 已采用 AI 优化{opt.manuallyEdited ? ' · 已手动调整' : ''}
+            已采用提示词优化{opt.manuallyEdited ? ' · 已手动调整' : ''}
           </span>
         )}
       </div>
+      {opt.kind === 'visual' && opt.understanding && (
+        <div className="studio-visual-understanding">
+          <div><strong>画面理解</strong><p>{opt.understanding.summary}</p></div>
+          {opt.understanding.preserve.length > 0 && <div><strong>建议保留</strong><p>{opt.understanding.preserve.join('；')}</p></div>}
+          {opt.understanding.changes.length > 0 && <div><strong>明确修改</strong><p>{opt.understanding.changes.join('；')}</p></div>}
+          {opt.understanding.uncertainties.length > 0 && <div className="warning"><strong>需要留意</strong><p>{opt.understanding.uncertainties.join('；')}</p></div>}
+        </div>
+      )}
       <div className="form-group studio-req-field">
         <div className="studio-field-head">
           <label>正向提示词</label>
@@ -468,18 +556,18 @@ function SingleOptResult(props: {
       </div>
       <div className="studio-req-result-actions">
         {opt.useOptimized ? (
-          <button className="settings-btn settings-btn-outline settings-btn-sm" onClick={() => props.onPatch({ useOptimized: false })}>恢复原提示词</button>
+          <button className="app-btn app-btn-secondary app-btn-sm" onClick={() => props.onPatch({ useOptimized: false })}>恢复原提示词</button>
         ) : (
           <button
-            className="settings-btn settings-btn-primary settings-btn-sm"
-            disabled={!opt.positivePrompt.trim()}
+            className="app-btn app-btn-primary app-btn-sm"
+            disabled={!opt.positivePrompt.trim() || props.stale}
             onClick={() => props.onPatch({ useOptimized: true })}
           >
             采用优化
           </button>
         )}
         <button
-          className="settings-btn settings-btn-secondary settings-btn-sm"
+          className="app-btn app-btn-secondary app-btn-sm"
           disabled={props.optimizing}
           onClick={props.onReoptimize}
         >
@@ -627,6 +715,9 @@ export default function ImageStudio() {
   /** 单张图生图参考图（原 imageEditSourceImages 草稿字段持久化路径） */
   const [i2iSources, setI2iSources] = useState<SourceImage[]>(() =>
     useDraftStore.getState().imageEditSourceImages.map(p => ({ path: p, name: p.split(/[\\/]/).pop() || p })));
+  const [i2iMentions, setI2iMentions] = useState<ImageMention[]>([]);
+  const [mentionGalleryOpen, setMentionGalleryOpen] = useState(false);
+  const [pendingMentionImage, setPendingMentionImage] = useState<PendingGalleryImage | null>(null);
   const [t2iOpt, setT2iOpt] = useState<SingleOptimization>(emptyOptimization);
   const [i2iOpt, setI2iOpt] = useState<SingleOptimization>(emptyOptimization);
   const singleOptimizingRef = useRef(false);
@@ -656,7 +747,17 @@ export default function ImageStudio() {
 
   function updateI2iSources(next: SourceImage[]) {
     setI2iSources(next);
+    const alive = new Set(next.map(item => item.path.toLowerCase().replace(/\\/g, '/')));
+    setI2iMentions(current => current.filter(item => alive.has(item.path.toLowerCase().replace(/\\/g, '/'))));
+    setI2iOpt(staleOptimization);
     useDraftStore.getState().setImageEditSourceImages(next.map(item => item.path));
+  }
+
+  function updateI2iRole(index: number, role: ImageMentionRole) {
+    const next = i2iSources.map((item, itemIndex) => itemIndex === index ? { ...item, role } : item);
+    setI2iSources(next);
+    setI2iMentions(current => current.map(mention => mention.path === next[index]?.path ? { ...mention, role } : mention));
+    setI2iOpt(staleOptimization);
   }
 
   // 图库「编辑此图 / 编辑」入口：强制 图生图 + 单张生成，参考图与原需求带入单张表单
@@ -685,6 +786,11 @@ export default function ImageStudio() {
   const [visionCarryMeta, setVisionCarryMeta] = useState<VisionCarryDraft | null>(null);
   // V4.1 Region V1：区域合成 mask（随视觉方案带入；提交时真实进入 create_task.mask_image）
   const [carryMaskImagePath, setCarryMaskImagePath] = useState<string | null>(null);
+  // V6.2 Skill Direct Execution：ephemeral 会话（未持久化项目）+ 自动发起生成标记
+  const [carrySkillSession, setCarrySkillSession] = useState<VisionCarryDraft['skillSession'] | null>(null);
+  /** 保存为视觉项目后的收据（banner 切换到「已保存」态）。 */
+  const [skillSessionSaved, setSkillSessionSaved] = useState<string | null>(null);
+  const [autoStartPending, setAutoStartPending] = useState(false);
   useEffect(() => {
     const carry = useDraftStore.getState().consumeVisionCarry();
     if (!carry?.prompt?.trim()) return;
@@ -693,7 +799,18 @@ export default function ImageStudio() {
     setGenerationMode(patch.generationMode);
     if (patch.generationType === 'i2i') {
       setI2iPrompt(patch.i2iPrompt);
-      if (patch.i2iSources.length > 0) updateI2iSources(patch.i2iSources);
+      // V6.2：计划参考图以 generationRole/origin/label 进入工作台（role 字段属于
+      // mention 层，计划图片的角色由方案冻结，不参与 mention 推断）
+      if (patch.i2iSources.length > 0) {
+        updateI2iSources(patch.i2iSources.map(source => ({
+          path: source.path,
+          name: source.name,
+          ...(source.role ? { generationRole: source.role } : {}),
+          ...(source.origin ? { origin: source.origin } : {}),
+          ...(source.label ? { label: source.label } : {}),
+          ...(source.assetId ? { assetId: source.assetId } : {}),
+        })));
+      }
     } else {
       setT2iPrompt(patch.t2iPrompt);
       if (patch.t2iNegative) setT2iNegative(patch.t2iNegative);
@@ -701,6 +818,7 @@ export default function ImageStudio() {
     if (patch.size) setSize(patch.size);
     if (patch.quality) setQuality(patch.quality);
     setCarryMaskImagePath(patch.maskImagePath?.trim() || null);
+    if (carry.skillSession) setCarrySkillSession(carry.skillSession);
     if (carry.sourceVisionTaskId || carry.optimization || carry.provenance) {
       // i2i 负面词取 patch 侧值（含「模板图原人物脸部身份」排斥追加项；随任务冻结可审计）
       setVisionCarryMeta(
@@ -709,7 +827,40 @@ export default function ImageStudio() {
           : carry,
       );
     }
+    // V6.2：Skill 直接生成 → 表单状态应用完成后自动发起提交（submitSingle 内的
+    // 服务端报价确认层照常弹出——计费授权单一入口，绝不绕过 QuoteConfirmDialog）
+    if (carry.autoStartGeneration) setAutoStartPending(true);
   }, []);
+
+  // 自动发起（等上一 effect 的 setState 全部应用到本渲染帧后再调用 submitSingle）
+  useEffect(() => {
+    if (!autoStartPending) return;
+    setAutoStartPending(false);
+    void submitSingle();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoStartPending]);
+
+  // ===== V6.2 Skill Direct Session：ephemeral 项目的两条出口 =====
+  /** 保存为视觉项目（adopt + 落库；留在图片工作室继续）。 */
+  async function saveSkillSessionProject(thenOpenWorkbench: boolean) {
+    if (!carrySkillSession) return;
+    const project = await useVisualProjectStore.getState().adoptProject(carrySkillSession.project);
+    if (thenOpenWorkbench) {
+      useVisualProjectStore.getState().hydrateWorkspaceFromActive();
+      toastSuccess(`已保存为视觉项目「${project.name}」，正在进入视觉工作台…`);
+      window.dispatchEvent(new CustomEvent('cyimage-navigate', { detail: { page: 'vision' } }));
+      return;
+    }
+    setSkillSessionSaved(project.name);
+    setCarrySkillSession(null);
+    toastSuccess(`已保存为视觉项目「${project.name}」，可随时在视觉工作台继续调整`);
+  }
+
+  /** 已保存收据态 → 进入视觉工作台（项目已是 active，只需 hydrate + 导航）。 */
+  function saveSkillSessionProjectFromReceipt() {
+    useVisualProjectStore.getState().hydrateWorkspaceFromActive();
+    window.dispatchEvent(new CustomEvent('cyimage-navigate', { detail: { page: 'vision' } }));
+  }
 
   useEffect(() => { void loadTasks(); }, [loadTasks]);
 
@@ -717,9 +868,12 @@ export default function ImageStudio() {
   const providerProfiles = useAIProviderStore(state => state.profiles);
   useEffect(() => { useAIProviderStore.getState().hydrate(); }, []);
   const optimizerModelLabel = useMemo(() => resolvePromptOptimizerModelLabel(), [providerProfiles]);
+  const visualOptimizerModelLabel = useMemo(() => resolveVisualPromptOptimizerModelLabel(), [providerProfiles]);
 
   const isSingle = generationMode === 'single';
   const isEdit = generationType === 'i2i';
+  const usesVisualOptimizer = isSingle && isEdit;
+  const activeOptimizerModelLabel = usesVisualOptimizer ? visualOptimizerModelLabel : optimizerModelLabel;
 
   const batch = isEdit ? batchI2i : batchT2i;
   const setBatch = isEdit ? setBatchI2i : setBatchT2i;
@@ -735,6 +889,14 @@ export default function ImageStudio() {
   const singleOpt = isEdit ? i2iOpt : t2iOpt;
   const setSingleOpt = isEdit ? setI2iOpt : setT2iOpt;
   const singlePrompt = isEdit ? i2iPrompt : t2iPrompt;
+  const i2iMentionPool = useMemo<VisionContextImage[]>(() => i2iSources.map((image, index) => {
+    const role: ImageMentionRole = index === 0 ? 'source_reference' : image.role || 'generic_reference';
+    return {
+      key: image.path.toLowerCase().replace(/\\/g, '/'), path: image.path,
+      label: index === 0 ? '主编辑图' : image.name, role,
+      roleLabel: IMAGE_MENTION_ROLE_LABELS[role], note: IMAGE_MENTION_ROLE_NOTES[role],
+    };
+  }), [i2iSources]);
 
   // ===== V4.0.8 参考图拖拽（Tauri 窗口级事件）：单张 / 批量共用同一导入链，绝不触发任何 API =====
   const isEditRef = useRef(isEdit);
@@ -780,22 +942,57 @@ export default function ImageStudio() {
     if (singleOptimizingRef.current) return;
     const promptText = singlePrompt.trim();
     if (!promptText) return;
+    if (isEdit && i2iSources.length === 0) {
+      setError('图生图提示词优化请先添加主编辑图。');
+      return;
+    }
+    if (isEdit && visionCarryMeta?.optimization) {
+      setError('当前方案来自视觉理解并已完成 Prompt 编译。如需调整，请返回「视觉理解」修改方案。');
+      return;
+    }
     singleOptimizingRef.current = true;
     const current = singleOpt;
     setSingleOpt(opt => ({ ...opt, status: 'loading', error: '' }));
     try {
-      const outcome = await optimizePrompt({
-        prompt: promptText,
-        taskType: isEdit ? 'edit' : 'generate',
-      });
-      if (!outcome.ok) {
+      const keepFailure = (message: string) => {
         // 重新优化失败：保留上次优化结果；首次失败：原提示词不丢失，标记错误
-        if (current.status === 'success') {
-          setSingleOpt(opt => ({ ...opt, status: 'success', error: outcome.error }));
-          toastError(`重新优化失败：${outcome.error}（已保留上次优化结果）`);
+        if (current.positivePrompt.trim()) {
+          setSingleOpt({ ...current, error: message });
+          toastError(`重新优化失败：${message}（已保留上次优化结果）`);
         } else {
-          setSingleOpt(opt => ({ ...opt, status: 'error', error: outcome.error }));
+          setSingleOpt(opt => ({ ...opt, status: 'error', error: message }));
         }
+      };
+
+      if (isEdit) {
+        const outcome = await optimizeVisualEditPrompt({
+          prompt: promptText,
+          images: i2iSources.map((image, index) => ({ ...image, roleLabel: IMAGE_MENTION_ROLE_LABELS[index === 0 ? 'source_reference' : image.role || 'generic_reference'] })),
+        });
+        if (!outcome.ok) {
+          keepFailure(outcome.error);
+          return;
+        }
+        setSingleOpt({
+          status: 'success',
+          error: '',
+          positivePrompt: outcome.result.optimizedPrompt,
+          negativePrompt: outcome.result.negativePrompt,
+          useOptimized: false,
+          manuallyEdited: false,
+          providerName: outcome.result.providerName,
+          modelName: outcome.result.modelName,
+          originalPrompt: promptText,
+          kind: 'visual',
+          sourceSignature: optimizationSignature(promptText, i2iSources),
+          understanding: outcome.result.understanding,
+        });
+        return;
+      }
+
+      const outcome = await optimizePrompt({ prompt: promptText, taskType: 'generate' });
+      if (!outcome.ok) {
+        keepFailure(outcome.error);
         return;
       }
       if (outcome.result.items?.length) {
@@ -807,11 +1004,13 @@ export default function ImageStudio() {
         error: '',
         positivePrompt: outcome.result.optimizedPrompt,
         negativePrompt: outcome.result.negativePrompt ?? '',
-        useOptimized: current.useOptimized,
+        useOptimized: false,
         manuallyEdited: false,
         providerName: outcome.result.plannerProviderName,
         modelName: outcome.result.plannerModelName,
-        originalPrompt: current.originalPrompt || promptText,
+        originalPrompt: promptText,
+        kind: 'text',
+        sourceSignature: optimizationSignature(promptText),
       });
     } finally {
       singleOptimizingRef.current = false;
@@ -841,7 +1040,7 @@ export default function ImageStudio() {
       return;
     }
     if (opt.status === 'loading') {
-      setError('AI 优化进行中，请等待完成或先使用原提示词生成。');
+      setError('提示词优化进行中，请等待完成或先使用原提示词生成。');
       return;
     }
     // V4.0.8 capability 门禁：图片模型不支持当前生成方式时客户端阻断，不等上游报错
@@ -852,7 +1051,7 @@ export default function ImageStudio() {
     }
 
     const adopted = opt.status === 'success' && opt.useOptimized && opt.positivePrompt.trim().length > 0;
-    const finalPrompt = adopted ? opt.positivePrompt.trim() : promptText;
+    const finalPrompt = isEdit ? compileMentionContract(adopted ? opt.positivePrompt.trim() : promptText, i2iMentions, promptText) : (adopted ? opt.positivePrompt.trim() : promptText);
     const finalNegative = (adopted ? opt.negativePrompt : manualNegative).trim();
     // 优化快照决策（纯函数，底层硬保证）：视觉理解链路带入的 Prompt 已在视觉理解页
     // 优化完成 → 冻结快照（source=vision_recreation）+ prompt_optimized=true，
@@ -918,6 +1117,7 @@ export default function ImageStudio() {
       setCarryMaskImagePath(null);
       if (isEdit) {
         setI2iPrompt('');
+        setI2iMentions([]);
         updateI2iSources([]);
         setI2iOpt(emptyOptimization());
       } else {
@@ -1267,34 +1467,85 @@ export default function ImageStudio() {
     const promptText = isEdit ? i2iPrompt : t2iPrompt;
     const opt = singleOpt;
     const optimizing = opt.status === 'loading';
-    const hasResult = opt.status === 'success';
+    const hasResult = Boolean(opt.positivePrompt.trim());
+    const currentSignature = optimizationSignature(promptText, isEdit ? i2iSources : []);
+    const optimizationStale = opt.status === 'stale' || Boolean(opt.sourceSignature && opt.sourceSignature !== currentSignature);
+    const visualCarryLocked = isEdit && Boolean(visionCarryMeta?.optimization);
 
     return (
       <section className="settings-card studio-card">
+        {/* V6.2 Skill Direct Session banner：ephemeral 项目提示 + 两条出口 */}
+        {(carrySkillSession || skillSessionSaved) && (
+          <div className="studio-skill-session" data-testid="studio-skill-session">
+            {carrySkillSession ? (
+              <>
+                <div className="studio-skill-session-text">
+                  <b>来自技能「{carrySkillSession.skillName}」直接生成</b>
+                  <span>
+                    {carrySkillSession.optimizationPolicy === 'reuse_recipe'
+                      ? '复用保存时冻结的方案与 Prompt（未再次执行 AI 优化）'
+                      : '已按策略重编译方案 Prompt'}
+                    ；本次未创建视觉项目，保存后可继续精细调整。
+                  </span>
+                </div>
+                <div className="studio-skill-session-actions">
+                  <button type="button" className="app-btn app-btn-secondary app-btn-sm" onClick={() => void saveSkillSessionProject(false)}>
+                    保存为视觉项目
+                  </button>
+                  <button type="button" className="app-btn app-btn-brand-soft app-btn-sm" onClick={() => void saveSkillSessionProject(true)}>
+                    进入视觉工作台调整
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div className="studio-skill-session-text">
+                <b>已保存为视觉项目「{skillSessionSaved}」</b>
+                <span>方案与参考图已完整保留，可随时继续调整。</span>
+                <button type="button" className="app-btn app-btn-secondary app-btn-sm" onClick={() => void saveSkillSessionProjectFromReceipt()}>
+                  进入视觉工作台
+                </button>
+              </div>
+            )}
+          </div>
+        )}
         {isEdit && (
           <div className="form-group">
             <div className="studio-field-head">
               <label>参考图片 <span className="required">*</span></label>
               {i2iSources.length > 0 && <span className="studio-media-count">已选 {i2iSources.length} 张</span>}
             </div>
-            <ReferenceImageInput images={i2iSources} onChange={updateI2iSources} dragActive={sourceDragActive} />
+            {/* V6.2 语义参考摘要：每张图在方案里的用途一行可见（模板图：@xx · 人物参考：@yy） */}
+            {i2iSources.some(item => item.origin === 'plan') && (
+              <p className="studio-plan-refs-summary" data-testid="studio-plan-refs-summary">
+                {describeReferenceImagesForUser(
+                  i2iSources
+                    .filter(item => item.origin === 'plan' && item.generationRole)
+                    .map(item => ({ label: item.label || item.name, role: item.generationRole! })),
+                ).join(' · ')}
+              </p>
+            )}
+            <ReferenceImageInput images={i2iSources} onChange={updateI2iSources} onRoleChange={updateI2iRole} dragActive={sourceDragActive} />
           </div>
         )}
 
         <div className="form-group">
           <div className="studio-field-head studio-prompt-head">
             <label>{isEdit ? '图片编辑需求' : '提示词'} <span className="required">*</span></label>
-            <span className="studio-optimizer-meta studio-prompt-hint" title="把提示词优化为专业的正向 / 负面提示词（可选）">
-              把提示词优化为专业的正向 / 负面提示词（可选）
+            <span className="studio-optimizer-meta studio-prompt-hint" title={isEdit ? '结合真实参考图片理解画面并优化编辑提示词（可选）' : '把提示词优化为专业的正向 / 负面提示词（可选）'}>
+              {isEdit ? '结合真实参考图片理解画面并优化编辑提示词（可选）' : '把提示词优化为专业的正向 / 负面提示词（可选）'}
             </span>
             <button
               type="button"
-              className={`settings-btn settings-btn-sm${hasResult ? ' studio-btn-ai' : ' settings-btn-secondary'}`}
-              disabled={optimizing || !promptText.trim() || !optimizerModelLabel}
-              title={optimizerModelLabel ? `AI 提示词优化 · ${optimizerModelLabel}` : '尚未配置 AI 提示词优化模型'}
+              className={`app-btn app-btn-sm${hasResult ? ' studio-btn-ai' : ' app-btn-secondary'}`}
+              disabled={optimizing || !promptText.trim() || !activeOptimizerModelLabel || (isEdit && i2iSources.length === 0) || visualCarryLocked}
+              title={visualCarryLocked
+                ? '当前方案已由视觉理解完成 Prompt 编译，请返回视觉理解修改方案'
+                : activeOptimizerModelLabel
+                  ? `${isEdit ? '视觉理解' : '图片 Prompt 优化'} · ${activeOptimizerModelLabel}`
+                  : isEdit ? '尚未选择视觉模型' : '尚未配置图片 Prompt 优化模型'}
               onClick={() => void optimizeSingle()}
             >
-              {optimizing ? 'AI 优化中…' : hasResult ? '重新优化' : '✨ AI 优化'}
+              {optimizing ? (isEdit ? '正在理解并优化…' : '正在优化…') : hasResult ? '重新优化' : isEdit ? '结合参考图优化' : '优化提示词'}
             </button>
           </div>
           {visionCarryMeta?.optimization && (
@@ -1304,21 +1555,44 @@ export default function ImageStudio() {
               {isEdit && visionCarryMeta.negativePrompt?.trim() ? '负面提示词将随方案一并提交。' : ''}
             </p>
           )}
-          <textarea
+          {isEdit ? <IntentMentionInput
+            value={i2iPrompt}
+            mentions={i2iMentions}
+            pool={i2iMentionPool}
+            rows={5}
+            ariaLabel="图片编辑需求，输入 @ 可引用图片"
+            placeholder="描述编辑需求；输入 @ 可指定人物、背景、风格或主编辑图……"
+            onChange={value => { setI2iPrompt(value); setI2iOpt(staleOptimization); }}
+            onMentionsChange={mentions => { setI2iMentions(mentions); setI2iOpt(staleOptimization); }}
+            onPickFromGallery={() => setMentionGalleryOpen(true)}
+            pendingGalleryImage={pendingMentionImage}
+            onPendingGalleryImageConsumed={() => setPendingMentionImage(null)}
+          /> : <textarea
             className="studio-textarea studio-textarea-lg"
             rows={5}
-            value={promptText}
-            onChange={e => (isEdit ? setI2iPrompt : setT2iPrompt)(e.target.value)}
-            placeholder={isEdit
-              ? '描述你想要对图片进行的编辑，例如：把背景换成夜晚的城市街道，保留人物姿态……'
-              : '描述你想要生成的图片，越详细效果越好……'}
-          />
+            value={t2iPrompt}
+            onChange={e => { setT2iPrompt(e.target.value); setT2iOpt(staleOptimization); }}
+            placeholder="描述你想要生成的图片，越详细效果越好……"
+          />}
+          {isEdit && <p className="form-hint">输入 <b>@</b> 可引用真实图片；图片角色以你在素材卡中选择的用途为准。</p>}
         </div>
+
+        <ImageLibraryPicker
+          open={mentionGalleryOpen}
+          title="选择要引用的图片"
+          onClose={() => setMentionGalleryOpen(false)}
+          onPick={image => {
+            const existing = i2iSources.some(source => source.path === image.local_path);
+            if (!existing) updateI2iSources([...i2iSources, { path: image.local_path, name: image.file_name, role: 'generic_reference' }]);
+            setPendingMentionImage({ assetId: image.id, path: image.local_path, label: image.file_name });
+            setMentionGalleryOpen(false);
+          }}
+        />
 
         {opt.status === 'error' && (
           <p className="form-hint form-hint-error studio-req-error">
-            AI 优化失败：{opt.error || '请重试'}
-            <button className="settings-btn settings-btn-link settings-btn-sm" disabled={optimizing || !optimizerModelLabel} onClick={() => void optimizeSingle()}>重新优化</button>
+            提示词优化失败：{opt.error || '请重试'}
+            <button className="settings-btn settings-btn-link settings-btn-sm" disabled={optimizing || !activeOptimizerModelLabel} onClick={() => void optimizeSingle()}>重新优化</button>
           </p>
         )}
 
@@ -1326,6 +1600,7 @@ export default function ImageStudio() {
           <SingleOptResult
             opt={opt}
             optimizing={optimizing}
+            stale={optimizationStale}
             onPatch={patch => setSingleOpt(prev => ({ ...prev, ...patch }))}
             onReoptimize={() => void optimizeSingle()}
           />
@@ -1549,12 +1824,12 @@ export default function ImageStudio() {
       <div className="studio-mode-bar">
         <div className="studio-mode-group">
           <span className="studio-mode-label">生成方式</span>
-          <div className="studio-seg">
+          <div className="app-segmented">
             {([['t2i', '文生图'], ['i2i', '图生图']] as const).map(([key, label]) => (
               <button
                 key={key}
                 type="button"
-                className={`studio-seg-btn${generationType === key ? ' active' : ''}`}
+                className={`app-segmented-btn${generationType === key ? ' active' : ''}`}
                 aria-pressed={generationType === key}
                 onClick={() => setGenerationType(key)}
               >
@@ -1565,12 +1840,12 @@ export default function ImageStudio() {
         </div>
         <div className="studio-mode-group">
           <span className="studio-mode-label">生成模式</span>
-          <div className="studio-seg">
+          <div className="app-segmented">
             {([['single', '单张生成'], ['batch', '批量生成']] as const).map(([key, label]) => (
               <button
                 key={key}
                 type="button"
-                className={`studio-seg-btn${generationMode === key ? ' active' : ''}`}
+                className={`app-segmented-btn${generationMode === key ? ' active' : ''}`}
                 aria-pressed={generationMode === key}
                 onClick={() => setGenerationMode(key)}
               >
@@ -1580,7 +1855,7 @@ export default function ImageStudio() {
           </div>
         </div>
         <div className="studio-mode-meta">
-          <OptimizerModelNote label={optimizerModelLabel} />
+          <OptimizerModelNote label={activeOptimizerModelLabel} visual={usesVisualOptimizer} />
         </div>
       </div>
 
@@ -1599,7 +1874,7 @@ export default function ImageStudio() {
               <div className="studio-summary-rows">
                 {isEdit && <SummaryRow label="参考图片" value={`${i2iSources.length} 张`} />}
                 <SummaryRow label={isEdit ? '编辑需求' : '提示词'} value={promptText || '未填写'} title={promptText || undefined} />
-                {singleAdopted && <SummaryRow label="AI 优化" value="已采用" />}
+                {singleAdopted && <SummaryRow label="提示词优化" value="已采用" />}
                 <SummaryRow label="图片尺寸" value={size} />
                 <SummaryRow label="质量" value={quality} />
                 <SummaryRow label="输出格式" value={format.toUpperCase()} />
@@ -1609,7 +1884,7 @@ export default function ImageStudio() {
               </div>
               <button
                 type="button"
-                className="studio-cta-btn"
+                className="app-btn app-btn-primary studio-cta-btn"
                 onClick={() => void submitSingle()}
                 disabled={submitting}
               >
@@ -1643,7 +1918,7 @@ export default function ImageStudio() {
               </div>
               <button
                 type="button"
-                className="studio-cta-btn"
+                className="app-btn app-btn-primary studio-cta-btn"
                 disabled={!canSubmitBatch}
                 onClick={() => void submitBatch()}
               >

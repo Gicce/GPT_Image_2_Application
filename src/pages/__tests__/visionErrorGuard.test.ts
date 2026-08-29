@@ -47,7 +47,7 @@ describe('重新理解失败保留旧结果', () => {
 describe('修复过程用户无感（VisualAnalysisProgress 保持）', () => {
   test('分析阶段继续使用创意文案轮播组件（不回退纯 Spinner）', () => {
     expect(pageSrc).toContain('VisualAnalysisProgress');
-    expect(pageSrc).toMatch(/\{stage === 'analyzing' && \(/);
+    expect(pageSrc).toMatch(/\{wizardStep === 1 && stage === 'analyzing' && \(/);
     expect(pageSrc).not.toContain('正在修复');
     expect(pageSrc).not.toContain('重新解析');
   });

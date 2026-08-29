@@ -123,6 +123,8 @@ export function compilePersonReplacementContract(input: {
 export function compileRegionContract(input: {
   regions: ReadonlyArray<RegionReplacement>;
   references: ReadonlyArray<VisualReferenceAsset>;
+  /** 最终提交顺序；用于把区域人物绑定写成确定的图片N，而不只显示标签。 */
+  imageReferences?: ReadonlyArray<GenerationImageReference>;
 }): string {
   const regions = input.regions.filter(region => region.enabled);
   if (regions.length === 0) return '';
@@ -135,7 +137,10 @@ export function compileRegionContract(input: {
     const ref = input.references.find(item => item.id === region.personReferenceId);
     const parts = [`区域${index + 1}（${region.name}）：位于${position}；用途=${typeText}；`];
     if (region.replaceType === 'person' && ref) {
-      parts.push(`替换对象=@${ref.label}（人物身份以该参考为准）；`);
+      const submittedIndex = input.imageReferences?.findIndex(image =>
+        image.path.replace(/\\/g, '/').toLowerCase() === ref.path.replace(/\\/g, '/').toLowerCase()) ?? -1;
+      const submittedName = submittedIndex >= 0 ? `图片${submittedIndex + 1}` : `@${ref.label}`;
+      parts.push(`替换对象=${submittedName}（@${ref.label}，人物身份以该参考为准）；`);
       if (region.replaceScope) parts.push(`范围=${PERSON_REPLACE_SCOPE_LABELS[region.replaceScope]}；`);
     }
     parts.push(`约束=${PERSON_STRENGTH_LABELS[region.constraintStrength]}；`);
@@ -645,7 +650,11 @@ export function mergeFinalGenerationPrompt(input: CompileFinalPromptInput): Comp
 
   if (person) push('person_replacement', compilePersonReplacementContract({ person, imageReferences: refs }));
   if (input.includeRegions !== false) {
-    pushSanitized('region', compileRegionContract({ regions: project.regions, references: project.references }));
+    pushSanitized('region', compileRegionContract({
+      regions: project.regions,
+      references: project.references,
+      imageReferences: refs,
+    }));
   }
   // Canonical Anime Character：混合媒介 + 动漫主体层 ⇒ 派生唯一角色卡并绑定全部实例
   const animeBinding = bindDetailInsertsToCharacter(project);

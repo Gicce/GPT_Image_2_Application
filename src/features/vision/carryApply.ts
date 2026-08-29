@@ -17,7 +17,7 @@
  * gpt-image-2 收到的 prompt 一定声明每张附图的职责。
  */
 
-import type { GenerationImageReference } from '../../types';
+import type { GenerationImageReference, GenerationImageRole } from '../../types';
 import type { VisionCarryDraft } from '../../store/useDraftStore';
 import type { ClothingPolicy } from './modificationIntent';
 import {
@@ -27,9 +27,22 @@ import {
   type GenerationDirectiveInput,
 } from './generationDirective';
 
+/**
+ * 图片工作室参考图（V6.2 语义化）：role / origin 从方案一路带进工作台——
+ *  - role：模板复用方案冻结的业务角色（template / person_reference / …），
+ *    UI 显示语义标签（「模板图」「人物参考」…），计划内图片不再给 inline
+ *    dropdown（改角色 = 改方案，必须回工作台）；
+ *  - origin：plan = 视觉方案携带（锁定语义），manual = 用户在工作台手动添加
+ *    （可通过 ⋯ 菜单设置用途）。旧 carry 缺省 = manual（行为与旧版一致）。
+ */
 export interface StudioSourceImage {
   path: string;
   name: string;
+  role?: GenerationImageRole;
+  origin?: 'plan' | 'manual';
+  /** 参考图展示名（方案侧 @label；工作台卡片标题）。 */
+  label?: string;
+  assetId?: string;
 }
 
 export interface StudioCarryPatch {
@@ -101,9 +114,15 @@ export function resolveVisionCarryPatch(carry: VisionCarryDraft): StudioCarryPat
   const prompt = carry.prompt.trim();
   const negative = carry.negativePrompt?.trim() || '';
   const refs = resolveCarryImageReferences(carry);
-  const toSource = (path: string): StudioSourceImage => ({
-    path,
-    name: path.split(/[\\/]/).pop() || path,
+  // V6.2：role / origin / label 随参考图进入工作台（旧链路在此丢弃 role，
+  // 导致「参考图1」在 Prompt 里变成无语义的「图片2」）
+  const toSource = (ref: GenerationImageReference): StudioSourceImage => ({
+    path: ref.path,
+    name: ref.path.split(/[\\/]/).pop() || ref.path,
+    role: ref.role,
+    origin: 'plan',
+    label: ref.label,
+    ...(ref.assetId ? { assetId: ref.assetId } : {}),
   });
 
   // i2i：按角色清单构建参考图（模板 → 人物 → 其余参考），确定性编译图片使用说明。
@@ -128,7 +147,7 @@ export function resolveVisionCarryPatch(carry: VisionCarryDraft): StudioCarryPat
       const key = normalizePathKey(ref.path);
       if (!key || seen.has(key)) continue;
       seen.add(key);
-      i2iSources.push(toSource(ref.path));
+      i2iSources.push(toSource(ref));
     }
     i2iPrompt = directive ? `${directive}\n\n${prompt}` : prompt;
     i2iNegative = alreadyCompiled

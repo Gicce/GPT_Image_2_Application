@@ -34,6 +34,7 @@ import {
   type VisionContextImage,
 } from './imageMention';
 import { IMAGE_MENTION } from './recreationCopy';
+import './IntentMentionInput.css';
 
 export interface PendingGalleryImage {
   assetId?: string;

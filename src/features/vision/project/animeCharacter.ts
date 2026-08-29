@@ -393,6 +393,31 @@ type DetailInsertInstanceData = {
 };
 
 /**
+ * 「局部插图未逐个识别」类阻断文案（§7；唯一事实源，Validator 与 Rail 共用，
+ * 防止两处文案漂移）。这些错误的共同修复入口 = 受限补充识别（repairDetailInserts），
+ * 因此 Rail 会把它们从普通错误列表中拆出、挂「识别局部插图」Repair CTA。
+ */
+export function detailInsertIncompleteErrors(project: VisualProject): string[] {
+  const rendering = project.renderingContract;
+  if (rendering?.overallMode !== 'mixed_media') return [];
+  if (!findAnimeSubjectRegion(rendering.regions)) return [];
+  const counts = countInsertInstances(rendering);
+  const errors: string[] = [];
+  for (const region of counts.incompleteRegions) {
+    errors.push(`模板中的「${region.label}」包含多个局部插图，但尚未逐个识别（缺少每个画框的独立信息）。请在视觉方案中补充识别局部插图，再生成。`);
+  }
+  const detectedAnime = counts.anime;
+  const bound = bindDetailInsertsToCharacter(project);
+  const boundAnime = bound
+    ? bound.bindings.filter(binding => binding.characterRef === bound.character.id).length
+    : 0;
+  if (detectedAnime > 0 && boundAnime < detectedAnime) {
+    errors.push(`还有 ${detectedAnime - boundAnime} 个动漫特写未建立与主动漫角色的同步关系，无法保证角色一致。请补充识别局部插图或重新分析模板。`);
+  }
+  return errors;
+}
+
+/**
  * 动漫角色一致性校验（生成前硬门禁；错误文案一律用户语言，绝不暴露工程字段名）：
  *  - 有动漫主体层 ⇒ 必须能派生角色卡；
  *  - Analysis Validator（§7）：层声明多个插图但实例缺失 ⇒ 阻断（提示补充识别）；
@@ -413,18 +438,9 @@ export function validateAnimeCharacterConsistency(project: VisualProject): strin
   }
   const errors: string[] = [];
 
-  // §7/§40：实例不完整（多插图声明 + 实例缺失）——绝不静默放行
-  const counts = countInsertInstances(rendering);
-  for (const region of counts.incompleteRegions) {
-    errors.push(`模板中的「${region.label}」包含多个局部插图，但尚未逐个识别（缺少每个画框的独立信息）。请在视觉方案中补充识别局部插图，再生成。`);
-  }
-
-  // §41：检测到的动漫插图数 vs 已同步绑定数
-  const detectedAnime = counts.anime;
-  const boundAnime = bound.bindings.filter(binding => binding.characterRef === bound.character.id).length;
-  if (detectedAnime > 0 && boundAnime < detectedAnime) {
-    errors.push(`还有 ${detectedAnime - boundAnime} 个动漫特写未建立与主动漫角色的同步关系，无法保证角色一致。请补充识别局部插图或重新分析模板。`);
-  }
+  // §7/§41：实例不完整（多插图声明 + 实例缺失 / 绑定数落后）——绝不静默放行。
+  // 文案唯一事实源 detailInsertIncompleteErrors（Rail 据此挂 Repair CTA）。
+  errors.push(...detailInsertIncompleteErrors(project));
 
   // §42：实例绑定完整性 + 锁定维度
   for (const binding of bound.bindings) {

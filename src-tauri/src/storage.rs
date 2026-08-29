@@ -207,6 +207,21 @@ fn open_db(path: &PathBuf) -> Option<Connection> {
         );
         CREATE INDEX IF NOT EXISTS idx_visual_projects_last_opened
             ON visual_projects(last_opened_at);
+
+        CREATE TABLE IF NOT EXISTS user_skills (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            domain TEXT NOT NULL,
+            version TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'local',
+            source_project_id TEXT,
+            source_revision INTEGER NOT NULL DEFAULT 0,
+            authoring_state TEXT NOT NULL DEFAULT 'project_template',
+            data_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_user_skills_updated_at ON user_skills(updated_at);
         CREATE TABLE IF NOT EXISTS skill_projects (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
@@ -220,7 +235,16 @@ fn open_db(path: &PathBuf) -> Option<Connection> {
             last_opened_at TEXT NOT NULL DEFAULT ''
         );
         CREATE INDEX IF NOT EXISTS idx_skill_projects_last_opened
-            ON skill_projects(last_opened_at);",
+            ON skill_projects(last_opened_at);
+
+        CREATE TABLE IF NOT EXISTS image_folders (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            path TEXT NOT NULL UNIQUE,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_image_folders_created_at
+            ON image_folders(created_at);",
     )
     .ok()?;
     // 旧库升级：CREATE TABLE IF NOT EXISTS 不会给已有表补列，按需幂等 ALTER

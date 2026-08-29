@@ -49,11 +49,16 @@ export const MODIFICATION_CHIPS = {
   boostHint: '更贴近原图：未提及的视觉结构从严保持（不是视觉维度，独立生效）',
 } as const;
 
-/** 人物替换面板（V4.1 视觉映射版：画面模板 → 替换人物 双栏 + 箭头）。 */
+/** 人物替换面板（V6.3 紧凑分组版：主体映射 / 来源 / 执行范围 / 替换强度 四组）。 */
 export const PERSON_REPLACEMENT = {
   title: '人物替换',
   businessBadge: '已启用',
   businessDesc: '将原画面中的主体人物替换为新的参考人物。未特别指定时，画面风格沿用原图（模板图）；已启用的维度（动作 / 背景等）会继续参与修改。',
+  /** V6.3 分组标签（§28-§34）：面板按 主体 / 来源 / 执行范围 / 替换强度 分组，一行一组语义。 */
+  groupSubject: '主体',
+  groupSource: '来源',
+  groupScope: '执行范围',
+  groupStrength: '替换强度',
   templateLabel: '画面模板',
   templateUseHint: '保留画风 / 构图 / 背景氛围',
   templateChangeButton: '更换模板',
@@ -62,17 +67,20 @@ export const PERSON_REPLACEMENT = {
   templateToken: '原图',
   personBlockLabel: '替换人物',
   personUseHint: '替换人物身份 / 五官 / 发型 / 服装参考',
-  sourceLabel: '人物来源',
+  sourceLabel: '身份来源',
   sourceGallery: '图片库',
   sourceLocal: '本地导入',
   sourceDescription: '文字描述',
+  galleryChangeButton: '图片库更换',
+  localChangeButton: '本地导入',
+  descriptionChangeButton: '文字描述',
   personCardTitle: '人物参考',
   personCardSourceGallery: '图片库',
   personCardSourceLocal: '本地导入',
   personTextCardTitle: '文字描述人物',
   personEmptyAction: '选择人物参考',
   personEmptyHint: '图片库 / 本地导入 / 文字描述',
-  changeButton: '更换人物',
+  changeButton: '更换人物参考',
   cancelPickButton: '取消',
   removeButton: '移除人物替换',
   galleryPickButton: '从图片库选择',
@@ -87,17 +95,23 @@ export const PERSON_REPLACEMENT = {
 
 /** 服装来源（Clothing Policy）文案；语义 payload 见 clothingPolicyInstruction（与 UI 文案解耦）。
  * V4.0.9 状态不变量：clothing ∈ activeDimensions ⇔ clothingPolicy ≠ preserve_original
- * （选择「原图服装」自动取消「修改服装」维度；「人物服装 / 自定义」自动启用）。 */
+ * （「原图服装」自动取消「修改服装」维度；「人物服装 / 自定义」自动启用——由系统处理，
+ *  V6.8 减法原则：每个来源只保留一句上下文提示，不向用户解释实现规则）。 */
 export const CLOTHING_POLICY = {
   sectionLabel: '服装来源',
   preserveOriginal: '原图服装',
-  preserveOriginalHint: '仅替换人物身份、五官、发型等人物特征，继续沿用原图服装和造型（自动取消「修改服装」维度）。',
+  preserveOriginalHint: '保持原图服装不变。',
   useSubjectReference: '人物服装',
-  useSubjectReferenceHint: '人物身份与服装均以人物参考图为准（自动启用「修改服装」维度）。',
+  useSubjectReferenceHint: '将使用人物参考图中的服装。',
   custom: '自定义',
-  customHint: '按你的文字描述重新设计服装（自动启用「修改服装」维度，需填写描述）',
+  customHint: '描述希望替换的服装与造型。',
   customInputLabel: '服装描述',
-  customInputPlaceholder: '输入希望人物穿着的服装……',
+  customInputPlaceholder: '描述希望替换的服装……',
+  referenceLabel: '服装参考',
+  referenceHintCustom: '可用图片库或本地图片指定服装款式。',
+  multiLabel: '多人服装',
+  multiButton: '分别设置',
+  refCardNote: '仅用于服装、配饰与造型参考。',
 } as const;
 
 /** 视觉理解「正在分析」阶段的产品化文案（VisualAnalysisProgress）。 */
@@ -216,6 +230,20 @@ export const REOPTIMIZE_ACTION = {
   /** Tooltip：明确会再次调用 AI（消耗 Token） */
   hint: '基于当前图片、分析结果与你的修改要求，重新调用 AI 优化生图 Prompt（会再次消耗 Token）。失败时保留现有结果。',
   emptyInstruction: '请先在「修改意图」输入框中描述你希望调整的内容，再重新优化。',
+} as const;
+
+/**
+ * 「复刻成我的技能」（V6.8.1 恢复）：把当前复刻项目保存为技能工坊 → 我的技能
+ * （可重放 Recipe；Secondary Action，与「确认生成图片」同层但不高强调）。
+ * 显示条件沿用技能创建链路旧逻辑：有项目 + 最终 Prompt 存在且有效（非待优化、非优化中）。
+ */
+export const SAVE_AS_SKILL_ACTION = {
+  label: '复刻成我的技能',
+  hint: '把当前复刻方案保存为技能工坊 → 我的技能，可反复复用（需要先生成有效的最终 Prompt）。',
+  staleHint: '最终 Prompt 已修改、待重新优化——请先点击「优化复刻 Prompt」再保存技能。',
+  optimizingHint: '正在优化最终 Prompt，完成后可保存为技能。',
+  savedToast: '已保存到技能工坊 → 我的技能',
+  savePendingToast: '项目尚未保存成功，请重试后再创建可复用技能。',
 } as const;
 
 /** 「重新开始」：确认后清空当前视觉理解工作区（不动历史任务与已生成图片）。 */

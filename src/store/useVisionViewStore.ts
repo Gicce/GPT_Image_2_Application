@@ -10,8 +10,19 @@
  */
 
 import { create } from 'zustand';
+import type { ModificationDimension } from '../features/vision/modificationIntent';
 
 export interface VisionViewState {
+  /** 项目预览折叠（true = 收起；纯视图，不影响项目数据）。 */
+  projectPreviewCollapsed: boolean;
+  /** 自定义修改内容折叠（true = 收起；输入内容仍在 workspace）。 */
+  customContentCollapsed: boolean;
+  /** 人物替换业务卡折叠（true = 收起）。 */
+  personReplacementCollapsed: boolean;
+  /** 服装更改业务卡折叠（true = 收起）。 */
+  clothingChangeCollapsed: boolean;
+  /** 动作 / 背景 / 镜头 / 风格配置卡折叠状态。 */
+  dimensionEditorCollapsed: Partial<Record<ModificationDimension, boolean>>;
   /** 维度锁定面板折叠（true = 收起）。 */
   dimensionsCollapsed: boolean;
   /** 高级设置折叠（true = 收起）。 */
@@ -20,25 +31,50 @@ export interface VisionViewState {
   analysisDetailCollapsed: boolean;
   /** FinalPromptEditor 显示态：最终版本（可编辑）/ 修改对比（Diff）。 */
   promptView: 'final' | 'diff';
+  /** V6.7 四步向导（视图理解/需求描述/素材替换/最终提示词）：当前步骤，可随时回退切换；纯视图。 */
+  wizardStep: 1 | 2 | 3 | 4;
+  toggleProjectPreview: () => void;
+  toggleCustomContent: () => void;
+  togglePersonReplacement: () => void;
+  toggleClothingChange: () => void;
+  toggleDimensionEditor: (dimension: ModificationDimension) => void;
   toggleDimensions: () => void;
   toggleAdvanced: () => void;
   toggleAnalysisDetail: () => void;
   setPromptView: (view: 'final' | 'diff') => void;
+  setVisionStep: (step: 1 | 2 | 3 | 4) => void;
   reset: () => void;
 }
 
 const INITIAL = {
+  projectPreviewCollapsed: false,
+  customContentCollapsed: false,
+  personReplacementCollapsed: false,
+  clothingChangeCollapsed: false,
+  dimensionEditorCollapsed: {},
   dimensionsCollapsed: true,
   advancedCollapsed: true,
   analysisDetailCollapsed: true,
   promptView: 'final' as const,
+  wizardStep: 1 as const,
 };
 
 export const useVisionViewStore = create<VisionViewState>(set => ({
   ...INITIAL,
+  toggleProjectPreview: () => set(state => ({ projectPreviewCollapsed: !state.projectPreviewCollapsed })),
+  toggleCustomContent: () => set(state => ({ customContentCollapsed: !state.customContentCollapsed })),
+  togglePersonReplacement: () => set(state => ({ personReplacementCollapsed: !state.personReplacementCollapsed })),
+  toggleClothingChange: () => set(state => ({ clothingChangeCollapsed: !state.clothingChangeCollapsed })),
+  toggleDimensionEditor: dimension => set(state => ({
+    dimensionEditorCollapsed: {
+      ...state.dimensionEditorCollapsed,
+      [dimension]: !state.dimensionEditorCollapsed[dimension],
+    },
+  })),
   toggleDimensions: () => set(state => ({ dimensionsCollapsed: !state.dimensionsCollapsed })),
   toggleAdvanced: () => set(state => ({ advancedCollapsed: !state.advancedCollapsed })),
   toggleAnalysisDetail: () => set(state => ({ analysisDetailCollapsed: !state.analysisDetailCollapsed })),
   setPromptView: view => set({ promptView: view }),
+  setVisionStep: step => set({ wizardStep: step }),
   reset: () => set({ ...INITIAL }),
 }));

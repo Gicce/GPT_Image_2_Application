@@ -20,12 +20,25 @@ import { copyText } from '../../../utils/clipboard';
 import { toastSuccess } from '../../../components/Toast';
 import { buildEffectiveVisualPlan } from './effectivePlan';
 import { activeVisionPlanRules } from './ruleRegistry';
-import { isCharacterAssetReusable } from './animeCharacter';
+import {
+  bindDetailInsertsToCharacter, detailInsertCropLabel, detailInsertIncompleteErrors, isCharacterAssetReusable,
+} from './animeCharacter';
 import { describeRecreationStatus } from '../recreationPlan';
+import { SAVE_AS_SKILL_ACTION } from '../recreationCopy';
+import OptimizeProgressCard from '../OptimizeProgressCard';
+import { isOptimizationRunning, type PromptOptimizationStatus } from '../optimizeProgress';
+import {
+  detailRepairElapsedSeconds,
+  detailRepairStageLabel,
+  type DetailRepairProgress,
+  type DetailRepairStage,
+} from './detailInsertRepairRunner';
 import type { EffectivePlanRow, EffectivePlanSourceRef, VisualProject } from './types';
 
 interface ContextRailProps {
   project: VisualProject | null;
+  /** V6.7 四步向导：项目整体进度 checklist（页面派生，Rail 纯展示）。 */
+  wizardProgress?: Array<{ id: number; label: string; done: boolean; active: boolean; status?: 'pending' | 'current' | 'completed' }>;
   /** recreation 待优化判定（页面传入；与项目修订独立）。 */
   recreationNeedsOptimization: boolean;
   optimizerModelLabel: string | null;
@@ -36,12 +49,39 @@ interface ContextRailProps {
   onUseLastPrompt?: () => void;
   onReoptimize?: () => void;
   onOptimize?: () => void;
+  /**
+   * 「复刻成我的技能」（V6.8.1 恢复）：Secondary Action，放在最终操作区
+   * （「优化复刻 Prompt」之后、「确认生成图片」之前，主强调仍归生成 CTA）。
+   * 复用技能创建原链路；canSaveAsSkill=false 时禁用并说明原因（不静默隐藏）。
+   */
+  onSaveAsSkill?: () => void;
+  canSaveAsSkill?: boolean;
+  /** V6.8 优化运行期真实进度（idle = 不显示进度卡；只有阶段/开始时间/错误事实）。 */
+  optimizeProgress?: { status: PromptOptimizationStatus; startedAt: number; errorText?: string } | null;
+  /** V6.8 失败进度卡的「重新优化」入口。 */
+  onRetryOptimize?: () => void;
+  /** V6.8 §六：当前方案行点击定位（如区域替换行 → 素材替换步骤的区域面板）。 */
+  onLocateRow?: (rowKey: string) => void;
   onGenerate?: () => void;
   onGenerateCharacterAsset?: (force?: boolean) => void;
   characterAssetRequesting?: boolean;
   /** 打开技能执行过程 Drawer（§23/§24）。 */
   onOpenSkillTrace?: () => void;
+  /** V6.1 Recoverable Blocker：局部插图补充识别（只补实例，不重写模板分析）。 */
+  onRepairDetailInserts?: () => void;
+  detailInsertRepairing?: boolean;
+  /** 最近一次补充识别的失败原因（技术详情默认折叠，保留旧分析）。 */
+  detailInsertRepairError?: string;
+  /** 最近一次补充识别的成功摘要（blocker 消失后显示绿色状态）。 */
+  detailInsertRepairSummary?: string;
+  /** V6.2 识别进度（projectId 隔离；只有真实阶段/层数/计时，无假百分比）。 */
+  detailRepairProgress?: DetailRepairProgress | null;
+  /** V6.2 层间诚实取消（已完成层照常合并）。 */
+  onCancelDetailRepair?: () => void;
 }
+
+/** 阶段序号（真实阶段数 4；「N/4」是阶段计数，不是模型进度百分比）。 */
+const DETAIL_REPAIR_STAGES: readonly DetailRepairStage[] = ['preparing', 'recognizing', 'merging', 'validating'];
 
 /** 锁 / 改标记适用行（§30：一眼看出本次到底什么会改、什么沿用模板）。 */
 const DIMENSION_ROW_KEYS = new Set([
@@ -194,6 +234,7 @@ function RowValue({ row }: { row: EffectivePlanRow }) {
 
 export default function ContextRail({
   project,
+  wizardProgress,
   recreationNeedsOptimization,
   optimizerModelLabel,
   optimizerSourceSuffix,
@@ -203,20 +244,52 @@ export default function ContextRail({
   onUseLastPrompt,
   onReoptimize,
   onOptimize,
+  onSaveAsSkill,
+  canSaveAsSkill,
+  optimizeProgress,
+  onRetryOptimize,
+  onLocateRow,
   onGenerate,
   onGenerateCharacterAsset,
   characterAssetRequesting,
   onOpenSkillTrace,
+  onRepairDetailInserts,
+  detailInsertRepairing,
+  detailInsertRepairError,
+  detailInsertRepairSummary,
+  detailRepairProgress,
+  onCancelDetailRepair,
 }: ContextRailProps) {
   const plan = useMemo(() => (project ? buildEffectiveVisualPlan(project) : null), [project]);
+  // V6.2 识别中每秒重算已用时：模型调用没有 token 级进度，UI 只报真实计时，
+  // 禁止伪造百分比（Progress Honesty）。
+  const [repairNow, setRepairNow] = useState(() => Date.now());
+  const repairRunning = detailRepairProgress?.status === 'running';
+  useEffect(() => {
+    if (!repairRunning) return;
+    setRepairNow(Date.now());
+    const timer = window.setInterval(() => setRepairNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [repairRunning]);
   const rules = useMemo(() => activeVisionPlanRules(project), [project]);
   const status = describeRecreationStatus(null);
   const appliedSkills = useMemo(
     () => (project?.skillExecution?.skills ?? []).filter(record => record.status === 'applied'),
     [project?.skillExecution],
   );
-  // 规则清单折叠 = 纯视图状态（组件局部；绝不触发语义修订）
+  // V6.1：可修复阻断（局部插图未逐个识别）与普通阻断拆分——前者挂 Repair CTA
+  const repairableErrors = useMemo(() => (project ? detailInsertIncompleteErrors(project) : []), [project]);
+  const otherBlockingErrors = useMemo(
+    () => (plan ? plan.blockingErrors.filter(error => !repairableErrors.includes(error)) : []),
+    [plan, repairableErrors],
+  );
+  const insertBindings = useMemo(
+    () => (project ? bindDetailInsertsToCharacter(project)?.bindings ?? [] : []),
+    [project],
+  );
+  // 规则清单 / 局部插图清单折叠 = 纯视图状态（组件局部；绝不触发语义修订）
   const [rulesExpanded, setRulesExpanded] = useState(false);
+  const [insertsOpen, setInsertsOpen] = useState(false);
 
   if (!project || !plan) {
     return (
@@ -235,6 +308,30 @@ export default function ContextRail({
 
   return (
     <aside className="vision-rail" data-testid="vision-context-rail" aria-label="当前方案">
+      {/* V6.7 项目整体进度：四步向导 checklist（替换情况 / 技能执行在下方既有区块） */}
+      {wizardProgress && wizardProgress.length > 0 && (
+        <div className="vision-rail-card vision-rail-progress" data-testid="vision-rail-progress">
+          <span className="vision-rail-title">项目进度</span>
+          <ul className="vision-rail-progress-list">
+            {wizardProgress.map(item => (
+              <li
+                key={item.id}
+                className={item.active ? 'is-active' : item.done ? 'is-done' : ''}
+                aria-current={item.active ? 'step' : undefined}
+              >
+                <span className="vision-rail-progress-index" aria-hidden="true">{item.done && !item.active ? '✓' : item.id}</span>
+                <span className="vision-rail-progress-label">{item.label}</span>
+                {/* V6.8：状态文案来自统一 selector 的 status（缺省回落 done/active 旧口径） */}
+                <span className="vision-rail-progress-state">
+                  {item.status
+                    ? item.status === 'completed' ? '已完成' : item.status === 'current' ? '进行中' : '待开始'
+                    : item.active ? '进行中' : item.done ? '已完成' : '待开始'}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       <div className="vision-rail-card">
         <div className="vision-rail-head">
           <span className="vision-rail-title">当前方案</span>
@@ -265,12 +362,26 @@ export default function ContextRail({
         )}
         {plan.rows.map(row => {
           const marker = rowMarker(row);
+          // V6.8 §六：区域替换行可点击定位（有区域时）→ 素材替换步骤的区域面板
+          const locatable = row.key === 'regions' && row.kind !== 'keep' && Boolean(onLocateRow);
           return (
-            <div key={row.key} className={`vision-rail-row kind-${row.kind}`}>
+            <div key={row.key} className={`vision-rail-row kind-${row.kind}${locatable ? ' is-locatable' : ''}`}>
               <span className="vision-rail-label">{row.label}</span>
               <span className="vision-rail-value" title={row.value}>
                 {marker}
-                <RowValue row={row} />
+                {locatable ? (
+                  <button
+                    type="button"
+                    className="vision-rail-locate"
+                    data-testid="vision-rail-locate-regions"
+                    title="点击定位到素材替换的区域面板"
+                    onClick={() => onLocateRow?.(row.key)}
+                  >
+                    <RowValue row={row} />
+                  </button>
+                ) : (
+                  <RowValue row={row} />
+                )}
                 {row.badge && (
                   <span className={`vision-rail-badge is-${row.badge.tone}`} title={row.value}>{row.badge.text}</span>
                 )}
@@ -377,36 +488,159 @@ export default function ContextRail({
         </div>
       )}
 
+      {/* V6.1 Recoverable Blocker：局部插图未识别完整 ⇒ 直接给「识别局部插图」
+          Repair 入口（复用 V5 受限补充识别），绝不出现「请去某处处理」死路。 */}
       {plan.blockingErrors.length > 0 && (
-        <div className="vision-rail-card is-error" role="alert">
+        <div className="vision-rail-card is-error" role="alert" data-testid="vision-blocking-card">
           <span className="vision-rail-title">生成前需处理</span>
-          <ul>
-            {plan.blockingErrors.map(error => <li key={error}>{error}</li>)}
-          </ul>
+          {repairableErrors.length > 0 && onRepairDetailInserts && (
+            <div className="vision-rail-repair" data-testid="detail-insert-repair">
+              <b className="vision-rail-repair-title">局部插图尚未识别完整</b>
+              {detailInsertRepairing ? (
+                detailRepairProgress ? (
+                  <div className="vision-rail-repair-progress" data-testid="detail-insert-repair-progress">
+                    {/* indeterminate 动画：无百分比——模型调用只有真实阶段与层数 */}
+                    <span className="vision-rail-repair-bar" aria-hidden="true" />
+                    <p className="vision-rail-repair-stage">
+                      阶段 {DETAIL_REPAIR_STAGES.indexOf(detailRepairProgress.stage) + 1}/{DETAIL_REPAIR_STAGES.length}
+                      ：{detailRepairStageLabel(detailRepairProgress.stage)}
+                      {detailRepairProgress.stage === 'recognizing' && detailRepairProgress.totalRegions > 0
+                        ? `（第 ${Math.min(detailRepairProgress.completedRegions + 1, detailRepairProgress.totalRegions)}/${detailRepairProgress.totalRegions} 层）`
+                        : ''}
+                    </p>
+                    <p className="vision-rail-repair-meta">
+                      已用时 {detailRepairElapsedSeconds(detailRepairProgress, repairNow)} 秒，不会改变你当前的人物、服装、动作与方案。
+                    </p>
+                    {onCancelDetailRepair && (
+                      <button type="button" className="vision-btn vision-btn-sm" onClick={onCancelDetailRepair}>
+                        停止识别
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <p className="vision-rail-repair-progress" data-testid="detail-insert-repair-progress">
+                    正在识别模板中的局部画框，不会改变你当前的人物、服装、动作与方案。
+                  </p>
+                )
+              ) : detailInsertRepairError ? (
+                <div className="vision-rail-repair-failed">
+                  <p>局部插图识别失败</p>
+                  <details className="vision-rail-repair-tech">
+                    <summary>查看错误详情</summary>
+                    <p>{detailInsertRepairError}</p>
+                  </details>
+                  <div className="vision-rail-repair-actions">
+                    <button type="button" className="vision-btn vision-btn-primary vision-btn-sm" onClick={onRepairDetailInserts}>重试</button>
+                    <button type="button" className="vision-btn vision-btn-sm" onClick={() => setInsertsOpen(true)}>查看详情</button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <p>检测到模板包含多个局部画框，但目前只有分组信息，尚未建立每个画框的独立识别结果。生成前需要补充识别。</p>
+                  <div className="vision-rail-repair-actions">
+                    <button type="button" className="vision-btn vision-btn-primary vision-btn-sm" onClick={onRepairDetailInserts}>识别局部插图</button>
+                    <button type="button" className="vision-btn vision-btn-sm" onClick={() => setInsertsOpen(value => !value)}>查看详情</button>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+          {otherBlockingErrors.length > 0 && (
+            <ul>
+              {otherBlockingErrors.map(error => <li key={error}>{error}</li>)}
+            </ul>
+          )}
+        </div>
+      )}
+
+      {/* 局部插图实例清单（§9：识别结果轻量展示；展开 = 纯视图状态） */}
+      {insertBindings.length > 0 && (
+        <div className="vision-rail-card vision-rail-inserts" data-testid="vision-rail-inserts">
+          <button
+            type="button"
+            className="vision-rail-rules-toggle"
+            aria-expanded={insertsOpen}
+            onClick={() => setInsertsOpen(value => !value)}
+          >
+            <span className="vision-rail-label">局部插图 · {insertBindings.length} 个</span>
+            <span className="vision-rail-rules-caret">{insertsOpen ? '收起 ▴' : '展开 ▾'}</span>
+          </button>
+          {insertsOpen && (
+            <ul className="vision-rail-insert-list">
+              {insertBindings.map((binding, index) => (
+                <li key={binding.instanceId}>
+                  <b>#{index + 1} {binding.insertLabel}</b>
+                  <span>{binding.positionLabel ?? '位置未标注'} · {detailInsertCropLabel(binding.cropType)}</span>
+                  <em>{binding.characterRef ? '→ 同步动漫主角色' : binding.mirrorTargetRole === 'primary_subject' ? '→ 真人主体' : '→ 次要主体'}</em>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
+      {/* 补充识别成功状态（blocker 已消失；绿色确认 + 查看识别结果） */}
+      {detailInsertRepairSummary && repairableErrors.length === 0 && (
+        <div className="vision-rail-card is-success" data-testid="detail-insert-repair-success">
+          <p>{detailInsertRepairSummary}</p>
+          <button type="button" className="vision-btn vision-btn-sm" onClick={() => setInsertsOpen(value => !value)}>查看识别结果</button>
         </div>
       )}
 
       <div className="vision-rail-card vision-rail-cta">
-        {showUseLastPrompt && onUseLastPrompt && (
-          <button type="button" className="vision-btn vision-btn-sm" disabled={disabled} onClick={onUseLastPrompt}>
-            使用上一次 Prompt
-          </button>
+        {/* V6.8 §五：优化运行期用真实进度卡替换按钮区（按钮不可重复点击；失败显示真实错误 + 重新优化） */}
+        {optimizeProgress && isOptimizationRunning(optimizeProgress.status) ? (
+          <OptimizeProgressCard
+            status={optimizeProgress.status}
+            startedAt={optimizeProgress.startedAt}
+            modelLabel={optimizerModelLabel}
+          />
+        ) : (
+          <>
+            {optimizeProgress && optimizeProgress.status === 'failed' && (
+              <OptimizeProgressCard
+                status={optimizeProgress.status}
+                startedAt={optimizeProgress.startedAt}
+                modelLabel={optimizerModelLabel}
+                errorText={optimizeProgress.errorText}
+                onRetry={onRetryOptimize}
+              />
+            )}
+            {showUseLastPrompt && onUseLastPrompt && (
+              <button type="button" className="vision-btn vision-btn-sm" disabled={disabled} onClick={onUseLastPrompt}>
+                使用上一次 Prompt
+              </button>
+            )}
+            <button type="button" className="vision-btn vision-btn-sm" disabled={disabled} onClick={onReoptimize} title="基于当前图片与修改意图强制再优化一次">
+              重新优化
+            </button>
+            <button
+              type="button"
+              className="vision-btn vision-btn-caution"
+              disabled={disabled}
+              onClick={onOptimize}
+            >优化复刻 Prompt</button>
+            {onSaveAsSkill && project && (
+              <button
+                type="button"
+                className="vision-btn"
+                disabled={disabled || !canSaveAsSkill}
+                title={canSaveAsSkill
+                  ? SAVE_AS_SKILL_ACTION.hint
+                  : recreationNeedsOptimization
+                    ? SAVE_AS_SKILL_ACTION.staleHint
+                    : SAVE_AS_SKILL_ACTION.optimizingHint}
+                onClick={onSaveAsSkill}
+              >{SAVE_AS_SKILL_ACTION.label}</button>
+            )}
+            <button
+              type="button"
+              className="vision-btn vision-btn-primary"
+              disabled={disabled || plan.blockingErrors.length > 0}
+              onClick={onGenerate}
+            >确认生成图片</button>
+          </>
         )}
-        <button type="button" className="vision-btn vision-btn-sm" disabled={disabled} onClick={onReoptimize} title="基于当前图片与修改意图强制再优化一次">
-          重新优化
-        </button>
-        <button
-          type="button"
-          className="vision-btn vision-btn-caution"
-          disabled={disabled}
-          onClick={onOptimize}
-        >{pending ? '优化复刻 Prompt' : '优化复刻 Prompt'}</button>
-        <button
-          type="button"
-          className="vision-btn vision-btn-primary"
-          disabled={disabled || plan.blockingErrors.length > 0}
-          onClick={onGenerate}
-        >确认生成图片</button>
       </div>
     </aside>
   );

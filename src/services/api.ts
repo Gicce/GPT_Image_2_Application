@@ -14,6 +14,7 @@ import type {
   CreateTaskParams,
   EnvCheckResult,
   GenerateTestImageResult,
+  ImageFolder,
   ImageMeta,
   ImageRecord,
   ImportImagesToLibraryResult,
@@ -179,6 +180,17 @@ export const api = {
       status: input.status, revision: input.revision, dataJson: input.dataJson, lastOpenedAt: input.lastOpenedAt ?? null,
     }),
   deleteSkillProject: (id: string): Promise<void> => invoke('delete_skill_project', { id }),
+  /** V4.2.3 用户自建 Skill：定义与具体 SkillProject 分离，本地 JSON 透传。 */
+  listUserSkills: (): Promise<Array<{ id: string; name: string; domain: string; version: string; status: string; sourceProjectId?: string | null; sourceRevision: number; authoringState: string; updatedAt: string }>> =>
+    invoke('list_user_skills'),
+  loadUserSkill: (id: string): Promise<string | null> => invoke('load_user_skill', { id }),
+  saveUserSkill: (input: { id: string; name: string; domain: string; version: string; status: string; sourceProjectId?: string | null; sourceRevision: number; authoringState: string; dataJson: string }): Promise<void> =>
+    invoke('save_user_skill', {
+      id: input.id, name: input.name, domain: input.domain, version: input.version,
+      status: input.status, sourceProjectId: input.sourceProjectId ?? null,
+      sourceRevision: input.sourceRevision, authoringState: input.authoringState, dataJson: input.dataJson,
+    }),
+  deleteUserSkill: (id: string): Promise<void> => invoke('delete_user_skill', { id }),
   /** 用户主动触发的 Logo 规范分析；原图仅以内联数据传给已配置视觉模型。 */
   analyzeBrandLogo: (request: { imagePath: string; baseUrl: string; token: string; model: string }): Promise<{ analysis: Record<string, unknown>; model: string }> =>
     invoke('analyze_brand_logo', { request }),
@@ -277,6 +289,10 @@ export const api = {
   setImageFavorite: (assetId: string, assetPath: string, favorite: boolean): Promise<ImageEvaluation> =>
     invoke('set_image_favorite', { assetId, assetPath, favorite }),
   getImages: (): Promise<ImageRecord[]> => invoke('get_images'),
+  /** V6.6 图库自定义文件夹（ADR-029）：物理目录 + 注册表；删除只删注册行不动磁盘文件 */
+  listImageFolders: (): Promise<ImageFolder[]> => invoke('list_image_folders'),
+  createImageFolder: (name: string): Promise<ImageFolder> => invoke('create_image_folder', { name }),
+  deleteImageFolder: (id: string): Promise<void> => invoke('delete_image_folder', { id }),
   rescanImageLibrary: (): Promise<ImageRecord[]> => invoke('rescan_image_library'),
   /** V4.1 图片库拖拽导入：外部文件复制进 library_input_dir，复用 sync_images 建索引 */
   importImagesToLibrary: (paths: string[]): Promise<ImportImagesToLibraryResult> =>

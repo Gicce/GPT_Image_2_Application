@@ -1,0 +1,45 @@
+/* ============================================================
+   OutputPathPicker（V6.6 图库自定义文件夹，ADR-029）
+   全库唯一输出位置选择器：[输出位置下拉] [路径只读框] [浏览]。
+   自包含样式（先例：ImageLibraryPicker）——不依赖页面 CSS；
+   只使用语义颜色 Token。
+   ============================================================ */
+
+.output-path-picker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.output-path-select {
+  flex: 0 0 auto;
+  min-width: 160px;
+  max-width: 40%;
+  padding: 8px 10px;
+  border: 1px solid var(--border-default, #e5e7eb);
+  border-radius: 8px;
+  background: var(--bg-input, #fff);
+  color: var(--text-primary, inherit);
+  font-size: 13px;
+}
+
+.output-path-value {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border-default, #e5e7eb);
+  border-radius: 8px;
+  background: var(--bg-card-alt, #f8f9fa);
+  color: var(--text-secondary, inherit);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.output-path-value:focus-visible,
+.output-path-select:focus-visible {
+  outline: 2px solid var(--accent-primary, #6366f1);
+  outline-offset: 1px;
+}

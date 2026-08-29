@@ -118,6 +118,9 @@ pub struct SubTaskErrorDetail {
     pub http_status: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_code: Option<String>,
+    /// 上游 error.type（如 packy_invalid_request_error），纯诊断字段。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_type: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

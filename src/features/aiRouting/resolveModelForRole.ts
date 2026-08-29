@@ -298,6 +298,7 @@ function resolveRecommendedChain(role: AiModelRole, ctx: AiRoleResolveContext): 
         },
       };
     }
+    case 'skill_authoring':
     case 'vision_prompt_optimizer':
     case 'batch_planner':
     case 'image_generation':
@@ -321,7 +322,7 @@ function resolveFollow(role: AiModelRole, target: AiModelRole, ctx: AiRoleResolv
 
   // follow 目标不可用 → 仅文本任务显式回退到提示词优化模型（禁止静默换模型）。
   // image_evaluation 需要真实图片输入，跨类别回退到文本模型必然失败 → 如实报错。
-  if (role === 'vision_prompt_optimizer') {
+  if (role === 'vision_prompt_optimizer' || role === 'skill_authoring') {
     const fallback = resolveAgentScope('prompt_optimizer');
     if (fallback) {
       return {

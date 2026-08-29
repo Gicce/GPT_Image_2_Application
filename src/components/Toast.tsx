@@ -59,8 +59,8 @@ export const useToastStore = create<ToastState>((set, get) => ({
   })),
 }));
 
-export function toastSuccess(message: string, title?: string) {
-  useToastStore.getState().push('success', message, title);
+export function toastSuccess(message: string, title?: string, action?: ToastItem['action']) {
+  useToastStore.getState().push('success', message, title, action);
 }
 
 export function toastError(message: string, title?: string) {

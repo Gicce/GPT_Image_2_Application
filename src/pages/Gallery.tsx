@@ -17,7 +17,8 @@ import { api } from '../services/api';
 import { authorizeImageTask, settleImageTask, createRequestId, registerTaskAuthorization } from '../services/billingService';
 import { setAsAvatarFromDataUrl } from '../services/avatarService';
 import type { ImageRecord, Task } from '../types';
-import { dedupeGalleryItems } from '../utils/galleryIdentity';
+import { dedupeGalleryItems, matchesGalleryFolder } from '../utils/galleryIdentity';
+import { useGalleryFolderStore } from '../store/useGalleryFolderStore';
 import { copyText } from '../utils/clipboard';
 import { resolveImageSource, IMAGE_SOURCE_FILTER_TABS, type GallerySourceFilter } from '../utils/imageSource';
 import { resolveImageDetailMetadata, IMAGE_EXECUTION_MODEL } from '../features/gallery/imageDetailMetadata';
@@ -83,6 +84,14 @@ export default function Gallery() {
   const [sort, setSort] = useState<GallerySort>('newest');
   const [scoreBucket, setScoreBucket] = useState<ScoreBucket>('all');
   const [feedback, setFeedback] = useState<FeedbackFilter>('all');
+  /** V6.6 图库文件夹筛选：'' = 全部文件夹；值为文件夹磁盘路径（ADR-029 前缀归属） */
+  const [folderPath, setFolderPath] = useState('');
+  const [folderDialogOpen, setFolderDialogOpen] = useState(false);
+  const [folderName, setFolderName] = useState('');
+  const [creatingFolder, setCreatingFolder] = useState(false);
+  const folders = useGalleryFolderStore(s => s.folders);
+  const loadFolders = useGalleryFolderStore(s => s.loadFolders);
+  const createFolder = useGalleryFolderStore(s => s.createFolder);
   const loadingRef = useRef<Set<string>>(new Set());
 
   // OS 文件拖入导入：仅 Gallery 页挂载时生效；详情 Modal / 全局 ImageViewer 打开时
@@ -94,6 +103,25 @@ export default function Gallery() {
   useEffect(() => { void loadTasks(); }, [loadTasks]);
   // 评价只读持久化缓存（筛选 / 排序绝不现场重新评价）
   useEffect(() => { void loadEvaluations(); }, [loadEvaluations]);
+  // V6.6 图库自定义文件夹（Gallery 与生成入口的输出位置下拉共用同一 store）
+  useEffect(() => { void loadFolders(); }, [loadFolders]);
+
+  /** 新建文件夹：Rust 真实建目录 + 注册表插行；成功后切到该文件夹筛选。 */
+  const confirmCreateFolder = async () => {
+    const name = folderName.trim();
+    if (!name || creatingFolder) return;
+    setCreatingFolder(true);
+    try {
+      const folder = await createFolder(name);
+      setFolderDialogOpen(false);
+      setFolderPath(folder.path);
+      toastSuccess(`已创建文件夹「${folder.name}」：${folder.path}`);
+    } catch (e: any) {
+      toastError(e?.message || '文件夹创建失败，请重试。');
+    } finally {
+      setCreatingFolder(false);
+    }
+  };
 
   const taskById = useMemo(() => {
     const map = new Map<string, Task>();
@@ -123,6 +151,7 @@ export default function Gallery() {
   const filtered = useMemo(() => {
     const keyword = search.trim().toLowerCase();
     return sorted.filter(image => {
+      if (!matchesGalleryFolder(image.local_path, folderPath)) return false;
       const task = taskById.get(image.task_id);
       if (filter !== 'all' && resolveImageSource(image, task, taskById).filterKey !== filter) return false;
       if (!matchesScoreBucket(evaluations[image.id], scoreBucket)) return false;
@@ -137,13 +166,13 @@ export default function Gallery() {
       ].filter(Boolean).join(' ').toLowerCase();
       return haystack.includes(keyword);
     });
-  }, [sorted, search, filter, taskById, evaluations, scoreBucket, feedback]);
+  }, [sorted, search, filter, taskById, evaluations, scoreBucket, feedback, folderPath]);
 
   const visibleImages = filtered.slice(0, visibleCount);
   const hasMore = visibleCount < filtered.length;
 
   // 筛选 / 搜索变化时重置分页
-  useEffect(() => { setVisibleCount(PAGE_SIZE); }, [search, filter, sort, scoreBucket, feedback]);
+  useEffect(() => { setVisibleCount(PAGE_SIZE); }, [search, filter, sort, scoreBucket, feedback, folderPath]);
 
   const loadThumb = useCallback(async (img: ImageRecord) => {
     if (img.missing) return;
@@ -215,6 +244,11 @@ export default function Gallery() {
                 </button>
               ))}
             </div>
+            <select className="gallery-sort" value={folderPath} onChange={e => setFolderPath(e.target.value)} title="按图片库文件夹筛选（图片按所在目录归属）">
+              <option value="">全部文件夹</option>
+              {folders.map(folder => <option key={folder.id} value={folder.path}>{folder.name}</option>)}
+            </select>
+            <button type="button" className="app-btn app-btn-secondary gallery-folder-create" onClick={() => { setFolderName(''); setFolderDialogOpen(true); }}>＋ 新建文件夹</button>
             <select className="gallery-sort" value={scoreBucket} onChange={e => setScoreBucket(e.target.value as ScoreBucket)} title="按 AI 评价综合完成度筛选">
               <option value="all">全部评分</option>
               <option value="gte90">≥ 90 分</option>
@@ -288,6 +322,33 @@ export default function Gallery() {
             </div>
           )}
         </>
+      )}
+
+      {/* V6.6 新建图片库文件夹（ADR-029）：真实建目录 + 注册表插行，创建后切到该文件夹筛选 */}
+      {folderDialogOpen && (
+        <div className="gallery-folder-overlay" role="dialog" aria-modal="true" aria-label="新建文件夹">
+          <div className="gallery-folder-dialog">
+            <h3>新建图片库文件夹</h3>
+            <p className="gallery-folder-hint">文件夹创建在生成图片保存目录下（未配置时为系统图片目录）。生成图片时可在「输出位置」直接选择它；未选择则仍保存到默认路径。</p>
+            <input
+              autoFocus
+              value={folderName}
+              onChange={e => setFolderName(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter') void confirmCreateFolder();
+                if (e.key === 'Escape' && !creatingFolder) setFolderDialogOpen(false);
+              }}
+              placeholder="文件夹名称（如：电商主图）"
+              maxLength={60}
+            />
+            <div className="gallery-folder-actions">
+              <button type="button" className="app-btn app-btn-secondary" disabled={creatingFolder} onClick={() => setFolderDialogOpen(false)}>取消</button>
+              <button type="button" className="app-btn app-btn-primary" disabled={creatingFolder || !folderName.trim()} onClick={() => void confirmCreateFolder()}>
+                {creatingFolder ? '创建中…' : '创建文件夹'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {preview && (

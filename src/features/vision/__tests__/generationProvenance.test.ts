@@ -267,6 +267,45 @@ describe('resolveGenerationImageReferences（顺序 = 提交顺序的唯一解�
     expect(refs).toHaveLength(1);
     expect(refs[0].role).toBe('template');
   });
+
+  it('维度卡参考图直接进入生成清单；背景 / 风格有明确角色，未启用维度不提交', () => {
+    const refs = resolveGenerationImageReferences({
+      draft: makeDraft({
+        activeDimensions: ['scene', 'style', 'clothing'],
+        clothingPolicy: 'custom',
+        customClothing: '参照服装图',
+        extraImageRefs: [
+          { path: 'D:/imgs/bg.png', label: '背景图', purpose: 'scene' },
+          { path: 'D:/imgs/style.png', label: '风格图', purpose: 'style' },
+          { path: 'D:/imgs/clothing.png', label: '服装图', purpose: 'clothing' },
+          { path: 'D:/imgs/pose.png', label: '动作图', purpose: 'pose' },
+        ],
+      }),
+      sourcePath: 'D:/imgs/ref.png',
+    });
+    expect(refs.map(ref => ref.role)).toEqual([
+      'template', 'background_reference', 'style_reference', 'generic_reference',
+    ]);
+    expect(refs.some(ref => ref.path.endsWith('pose.png'))).toBe(false);
+  });
+
+  it('多人区域的人物图按区域顺序加入提交清单，且不抢占主人物身份位', () => {
+    const refs = resolveGenerationImageReferences({
+      draft: makeDraft({
+        person: { source: 'local', path: 'D:/imgs/person-a.png', label: '人物 A' },
+      }),
+      sourcePath: 'D:/imgs/template.png',
+      regionPersonReferences: [
+        { path: 'D:/imgs/person-b.png', label: '人物 B' },
+        { path: 'D:/imgs/person-c.png', label: '人物 C' },
+        { path: 'd:\\imgs\\PERSON-B.png', label: '重复人物 B' },
+      ],
+    });
+    expect(refs.map(ref => ref.label)).toEqual(['原图', '人物 A', '人物 B', '人物 C']);
+    expect(refs.map(ref => ref.role)).toEqual([
+      'template', 'person_reference', 'generic_reference', 'generic_reference',
+    ]);
+  });
 });
 
 describe('personReplacement 快照字段（V4.0.9.1）', () => {

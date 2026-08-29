@@ -121,7 +121,18 @@ describe('场景 6（GUI 实测 Bug 回归）：反复收起 / 展开维度锁�
 
 describe('场景 7：其它 UI-only 操作矩阵（Tab / 高级设置 / Viewer / 详细分析）', () => {
   const uiOnlyActions: Array<[string, () => void]> = [
+    ['展开 / 收起项目预览', () => { view.getState().toggleProjectPreview(); view.getState().toggleProjectPreview(); }],
+    ['展开 / 收起自定义修改内容', () => { view.getState().toggleCustomContent(); view.getState().toggleCustomContent(); }],
+    ['展开 / 收起人物替换', () => { view.getState().togglePersonReplacement(); view.getState().togglePersonReplacement(); }],
+    ['展开 / 收起服装更改', () => { view.getState().toggleClothingChange(); view.getState().toggleClothingChange(); }],
+    ['展开 / 收起动作与背景配置', () => {
+      view.getState().toggleDimensionEditor('pose'); view.getState().toggleDimensionEditor('pose');
+      view.getState().toggleDimensionEditor('scene'); view.getState().toggleDimensionEditor('scene');
+    }],
     ['切换最终版本 / 修改对比 Tab', () => { view.getState().setPromptView('diff'); view.getState().setPromptView('final'); }],
+    ['V6.7 四步向导切换 / 回退（1→2→3→4→1）', () => {
+      view.getState().setVisionStep(2); view.getState().setVisionStep(3); view.getState().setVisionStep(4); view.getState().setVisionStep(1);
+    }],
     ['展开 / 收起高级设置', () => { view.getState().toggleAdvanced(); view.getState().toggleAdvanced(); }],
     ['展开 / 收起 AI 详细分析', () => { view.getState().toggleAnalysisDetail(); view.getState().toggleAnalysisDetail(); }],
     ['打开 / 关闭 ImageViewer', () => {
@@ -164,6 +175,12 @@ describe('场景 7：其它 UI-only 操作矩阵（Tab / 高级设置 / Viewer /
     view.getState().reset();
     expect(view.getState().dimensionsCollapsed).toBe(true);
     expect(view.getState().promptView).toBe('final');
+    expect(view.getState().wizardStep).toBe(1);
+    expect(view.getState().projectPreviewCollapsed).toBe(false);
+    expect(view.getState().customContentCollapsed).toBe(false);
+    expect(view.getState().personReplacementCollapsed).toBe(false);
+    expect(view.getState().clothingChangeCollapsed).toBe(false);
+    expect(view.getState().dimensionEditorCollapsed).toEqual({});
     // 视图重置不触碰工作区
     expect(workspace.getState().recreation!.editState).toBe('optimized');
   });

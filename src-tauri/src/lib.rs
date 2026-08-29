@@ -12,7 +12,9 @@ mod video_task_bridge;
 mod vision;
 mod vision_normalize;
 mod visual_projects;
+mod user_skills;
 mod skill_projects;
+mod image_folders;
 mod brand_analysis;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -130,10 +132,17 @@ pub fn run() {
             visual_projects::delete_visual_project,
             visual_projects::save_visual_project_mask,
             visual_projects::rebuild_visual_project_index,
+            user_skills::list_user_skills,
+            user_skills::load_user_skill,
+            user_skills::save_user_skill,
+            user_skills::delete_user_skill,
             skill_projects::list_skill_projects,
             skill_projects::load_skill_project,
             skill_projects::save_skill_project,
             skill_projects::delete_skill_project,
+            image_folders::list_image_folders,
+            image_folders::create_image_folder,
+            image_folders::delete_image_folder,
             brand_analysis::analyze_brand_logo,
             brand_analysis::fingerprint_skill_asset,
             vision::vision_analyze_image,

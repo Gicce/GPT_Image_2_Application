@@ -42,6 +42,8 @@ export interface SubTaskErrorDetail {
   retryable: boolean;
   http_status?: number | null;
   provider_code?: string | null;
+  /** 上游 error.type（如 packy_invalid_request_error），纯诊断字段。 */
+  provider_type?: string | null;
   request_id?: string | null;
   endpoint?: string | null;
   /** 上游 body 原始 primary 文案（rawMessage）。 */
@@ -186,6 +188,25 @@ export interface GenerationProvenanceSnapshot {
   // ===== V4.2 Runtime Skill Trace（可选；旧任务缺省 = 无技能记录，禁止伪造）=====
   /** 生成时刻冻结的技能执行快照（History「AI 技能与规则」唯一数据源）。 */
   skillExecutionSnapshot?: SkillExecutionSnapshot;
+  // ===== V6.2 Skill Direct Execution（可选；非 Skill 发起缺省 = 禁止伪造）=====
+  /**
+   * Skill 直接生成溯源：任务由哪个模板复用 Skill、以哪种执行方式发起
+   * （direct_generate 直接生成 / open_workbench 高级调整）、哪种 Prompt 策略
+   * （reuse_recipe 冻结复用 / adaptive / always_reoptimize）、人物槽位换绑情况。
+   */
+  skillOrigin?: {
+    skillId: string;
+    skillName: string;
+    skillVersion?: string;
+    /** direct_generate = 未进入视觉工作台直接生成（ephemeral 项目）。 */
+    executionMode: 'direct_generate' | 'open_workbench';
+    /** reuse_recipe = 零 optimizer 调用，基线确定性重编译。 */
+    optimizationPolicy: 'reuse_recipe' | 'adaptive' | 'always_reoptimize';
+    /** 人物槽位是否换绑了新素材（reuse_recipe 下唯一允许的变量）。 */
+    personRebound: boolean;
+    /** ephemeral = 直接生成未创建持久视觉项目。 */
+    projectKind?: 'ephemeral' | 'persistent';
+  };
   // ===== V5 动漫角色参考图任务标记（可选；仅角色一致性准备任务携带）=====
   /**
    * 角色参考图回绑线索（Strict Visual Reference）：任务完成 watcher 据此把
@@ -479,6 +500,13 @@ export interface ImageRecord {
   description?: string | null;
   tags?: string[];
   indexed_at?: string | null;
+}
+
+export interface ImageFolder {
+  id: string;
+  name: string;
+  path: string;
+  createdAt: string;
 }
 
 export interface ImageMeta {

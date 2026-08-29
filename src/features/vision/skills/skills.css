@@ -228,3 +228,125 @@
   max-height: 180px;
   overflow-y: auto;
 }
+
+/* ===== Skill Origin 对比卡（V6：模板复用 Skill 基线 vs 当前实况） ===== */
+
+.skill-origin-card {
+  border: 1px solid var(--accent-primary, #6366f1);
+  border-radius: 10px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--bg-card, #fff);
+}
+
+.skill-origin-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.skill-origin-head h4 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent-primary-text, #4f46e5);
+}
+
+.skill-origin-meta {
+  font-size: 11px;
+  color: var(--text-muted, #888);
+}
+
+.skill-origin-desc {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-secondary, #666);
+}
+
+.skill-origin-structure h5,
+.skill-origin-diff h5 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.skill-origin-structure ul {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 4px;
+}
+
+.skill-origin-structure li {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: var(--badge-muted-bg, #f3f4f6);
+  color: var(--text-secondary, #666);
+}
+
+.skill-origin-structure li.is-kept {
+  background: var(--badge-success-bg, #d1fae5);
+  color: var(--badge-success-text, #065f46);
+}
+
+.skill-origin-structure li.is-missing {
+  background: var(--badge-danger-bg, #fee2e2);
+  color: var(--badge-danger-text, #991b1b);
+}
+
+.skill-origin-structure li.is-optional {
+  background: var(--badge-muted-bg, #f3f4f6);
+  color: var(--text-muted, #888);
+}
+
+.skill-origin-structure li.is-added {
+  background: var(--badge-info-bg, #e0e7ff);
+  color: var(--accent-primary-text, #4f46e5);
+}
+
+.skill-origin-ok {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: var(--badge-success-text, #065f46);
+}
+
+.skill-origin-note {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: var(--text-muted, #888);
+}
+
+.skill-origin-warn {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: var(--badge-danger-text, #991b1b);
+}
+
+.skill-origin-diff h5 .is-added { color: var(--accent-success, #059669); font-size: 11px; }
+.skill-origin-diff h5 .is-removed { color: var(--badge-danger-text, #991b1b); font-size: 11px; }
+.skill-origin-diff h5 .is-same { color: var(--text-muted, #888); font-size: 11px; font-weight: 400; }
+
+.skill-origin-diff-text {
+  margin: 6px 0 0;
+  padding: 8px;
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--bg-hover, rgba(0, 0, 0, 0.04));
+  border-radius: 6px;
+  color: var(--text-secondary, #666);
+  max-height: 260px;
+  overflow-y: auto;
+}

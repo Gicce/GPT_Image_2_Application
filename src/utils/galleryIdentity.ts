@@ -54,7 +54,7 @@ export function normalizeGalleryPath(path: string | undefined | null): string {
 
 /**
  * 按 normalized local_path 去重图库条目。
- * 输入应已按展示顺序（如最新优先）排序；同 path 保留第一条。
+ * 输入应已展示顺序（如最新优先）排序；同 path 保留第一条。
  */
 export function dedupeGalleryItems<T extends { local_path: string }>(items: T[]): T[] {
   const seen = new Set<string>();
@@ -67,4 +67,18 @@ export function dedupeGalleryItems<T extends { local_path: string }>(items: T[])
     result.push(item);
   }
   return result;
+}
+
+/**
+ * 图库自定义文件夹归属（V6.6，ADR-029）：图片 local_path 的归一化前缀
+ * 落在文件夹 path 之下即属于该文件夹。folderPath 为空（全部文件夹）恒真。
+ * 复用 normalizeGalleryPath 的分隔符 / 盘符大小写归一，与 Rust 端
+ * normalize_image_path_key 同规则，避免 Windows 双写形态漏判。
+ */
+export function matchesGalleryFolder(localPath: string | undefined | null, folderPath: string | undefined | null): boolean {
+  const folder = normalizeGalleryPath(folderPath);
+  if (!folder) return true;
+  const file = normalizeGalleryPath(localPath);
+  if (!file) return false;
+  return file === folder || file.startsWith(`${folder}/`);
 }

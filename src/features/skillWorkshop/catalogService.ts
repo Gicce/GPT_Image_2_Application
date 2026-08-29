@@ -1,9 +1,14 @@
 import { requestServerUrl } from '../../services/serverApi';
-import { BUILTIN_CATALOG, BUILTIN_DESK_PACKAGE } from './builtinCatalog';
-import type { SkillCatalogItem, SkillPackage } from './types';
+import { BUILTIN_CATALOG, BUILTIN_DESK_PACKAGE, BUILTIN_UI_PACKAGE } from './builtinCatalog';
+import type { SkillCatalogItem, SkillPackage, SkillProfile } from './types';
 
 const CATALOG_KEY = 'cy_skill_catalog_v1';
-const PACKAGE_KEY = 'cy_skill_package_professional_desk_setup_1.0.0';
+const packageKey = (skillId: string, version: string) => `cy_skill_package_${skillId}_${version}`;
+/** 离线回退：同 skill 有内置包（专业桌搭 / UI 概念设计）则用之，其余方向回落桌搭。 */
+const BUILTIN_PACKAGE_FALLBACK: Record<string, SkillPackage> = {
+  professional_desk_setup: BUILTIN_DESK_PACKAGE,
+  ui_concept: BUILTIN_UI_PACKAGE,
+};
 
 export async function loadSkillCatalog(): Promise<{ items: SkillCatalogItem[]; source: 'server' | 'cache' | 'builtin' }> {
   try {
@@ -26,30 +31,34 @@ export async function loadSkillCatalog(): Promise<{ items: SkillCatalogItem[]; s
 }
 
 export async function loadSkillPackage(skillId: string, version: string): Promise<SkillPackage> {
+  const cacheKey = packageKey(skillId, version);
   try {
     const response = await fetch(`${requestServerUrl()}/api/skills/${skillId}/versions/${version}`);
     if (!response.ok) throw new Error(String(response.status));
     const body = await response.json();
     const payload = (body.payload ?? body) as Record<string, any>;
-    const normalizeId = (id: unknown) => String(id).replaceAll('_', '-').replace('theme-none', 'none');
+    const normalizeId = (id: unknown) => String(id).replaceAll('_', '-');
+    const profiles: SkillProfile[] = (payload.profiles ?? []).map((p: any) => ({ id: normalizeId(p.id), name: String(p.name), kind: p.kind, prompt: String(p.prompt ?? '') }));
     const defaultIds = Array.isArray(payload.default_profile_ids) ? payload.default_profile_ids.map(normalizeId) : [];
+    // defaults 与领域解耦：优先 default_profile_ids 里真实存在的同 kind profile，否则回落该 kind 首个。
+    const pickDefault = (kind: string) =>
+      profiles.find(p => p.kind === kind && defaultIds.includes(p.id))?.id ?? profiles.find(p => p.kind === kind)?.id ?? '';
     const pkg: SkillPackage = {
       schema_version: 1, skill_id: String(body.skill_id ?? skillId), version: String(body.version ?? version),
-      name: String(body.name ?? '专业桌搭'), domain: (body.domain ?? 'desk_setup') as SkillPackage['domain'],
+      name: String(body.name ?? skillId), domain: (body.domain ?? 'desk_setup') as SkillPackage['domain'],
       summary: String(body.summary ?? ''), readiness: payload.availability === 'ready' ? 'ready' : 'testing',
       wizard_steps: (payload.wizard_steps ?? []).map((step: any) => String(step.name ?? step)),
-      profiles: (payload.profiles ?? []).map((p: any) => ({ id: normalizeId(p.id), name: String(p.name), kind: p.kind, prompt: String(p.prompt ?? '') })),
+      profiles,
       core_rules: payload.core_rules ?? [], defaults: {
-        base: String(defaultIds.find((id: string) => id.includes('walnut')) ?? 'business-walnut'),
-        style: String(defaultIds.find((id: string) => id === 'business') ?? 'business'),
-        theme: String(defaultIds.find((id: string) => id === 'none' || id === 'original-cute' || id === 'custom') ?? 'none'), platform: 'general',
+        base: pickDefault('base'), style: pickDefault('style'), theme: pickDefault('theme'), platform: pickDefault('platform'),
       }, asset_roles: (payload.asset_roles ?? []).map((r: any) => String(r.id ?? r)), review_rubric: payload.review_rubric ?? [],
+      negative_prompt: payload.default_negative_prompt ? String(payload.default_negative_prompt) : undefined,
     };
-    localStorage.setItem(PACKAGE_KEY, JSON.stringify(pkg));
+    localStorage.setItem(cacheKey, JSON.stringify(pkg));
     return pkg;
   } catch {
-    const cached = localStorage.getItem(PACKAGE_KEY);
+    const cached = localStorage.getItem(cacheKey);
     if (cached) { try { return JSON.parse(cached); } catch { /* fallback */ } }
-    return BUILTIN_DESK_PACKAGE;
+    return BUILTIN_PACKAGE_FALLBACK[skillId] ?? BUILTIN_DESK_PACKAGE;
   }
 }

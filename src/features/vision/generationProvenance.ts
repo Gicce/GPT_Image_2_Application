@@ -134,6 +134,8 @@ export function resolveGenerationImageReferences(input: {
   sourceAssetId?: string;
   templateLabel?: string;
   personMention?: { path: string; assetId?: string; label?: string };
+  /** 启用中的多人区域各自绑定的人物图；按区域顺序追加，不占主人物身份位。 */
+  regionPersonReferences?: ReadonlyArray<{ path: string; assetId?: string; label?: string }>;
 }): GenerationImageReference[] {
   const { draft } = input;
   const refs: GenerationImageReference[] = [];
@@ -168,6 +170,30 @@ export function resolveGenerationImageReferences(input: {
       }
       : undefined;
   if (personRef) push({ ...personRef, role: 'person_reference' });
+
+  for (const ref of input.regionPersonReferences ?? []) {
+    if (!ref.path?.trim()) continue;
+    push({
+      assetId: ref.assetId,
+      path: ref.path,
+      label: ref.label?.trim() || ref.path.split(/[\\/]/).pop() || '区域人物参考',
+      // 主人物位仍由 person_reference 唯一承载；区域合同用图片序号明确每人的职责。
+      role: 'generic_reference',
+    });
+  }
+
+  for (const ref of draft.extraImageRefs) {
+    if (ref.purpose && !draft.activeDimensions.includes(ref.purpose)) continue;
+    const role: GenerationImageReference['role'] = ref.purpose === 'scene'
+      ? 'background_reference'
+      : ref.purpose === 'style' ? 'style_reference' : 'generic_reference';
+    push({
+      assetId: ref.assetId,
+      path: ref.path,
+      label: ref.label?.trim() || ref.path.split(/[\\/]/).pop() || '参考图',
+      role,
+    });
+  }
 
   const freeText = draft.freeText.trim();
   for (const mention of pruneMentions(freeText, draft.mentions)) {
@@ -315,6 +341,31 @@ export const PROVENANCE_ROLE_LABELS: Record<
   style_reference: '风格参考',
   generic_reference: '参考图',
 };
+
+/**
+ * V6.2 语义参考标签（ImageStudio 参考卡 / carry 摘要共用事实源）：
+ * 用户语言描述「这张图在方案里是什么」，与 History 的 PROVENANCE_ROLE_LABELS
+ * 并存（口径对齐、场景不同：这里是工作台卡片徽标，那里是历史详情）。
+ * 禁止页面散落第二套「参考图 1 / 图片 2」式序号命名。
+ */
+export const SEMANTIC_REFERENCE_LABELS: Record<
+  NonNullable<GenerationProvenanceSnapshot['imageRoles']>[number]['role'],
+  string
+> = {
+  template: '模板图',
+  person_reference: '人物参考',
+  anime_character_reference: '动漫角色参考',
+  background_reference: '背景参考',
+  style_reference: '风格与构图参考',
+  generic_reference: '附加参考',
+};
+
+/** 参考图清单 → 用户语言摘要行（如「模板图：@原图」「人物参考：@模特A」）。 */
+export function describeReferenceImagesForUser(
+  refs: ReadonlyArray<{ label: string; role: NonNullable<GenerationProvenanceSnapshot['imageRoles']>[number]['role'] }>,
+): string[] {
+  return refs.map(ref => `${SEMANTIC_REFERENCE_LABELS[ref.role]}：@${ref.label || '未命名图片'}`);
+}
 
 /** 服装策略中文描述（修改方案行 / 详情共用）。 */
 export function describeClothingPolicy(

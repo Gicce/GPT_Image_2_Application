@@ -21,6 +21,7 @@ export type ImageMentionRole =
   | 'source_reference'
   | 'generated_result_reference'
   | 'background_reference'
+  | 'style_reference'
   | 'generic_reference';
 
 export const IMAGE_MENTION_ROLE_LABELS: Record<ImageMentionRole, string> = {
@@ -29,6 +30,7 @@ export const IMAGE_MENTION_ROLE_LABELS: Record<ImageMentionRole, string> = {
   source_reference: '主参考图',
   generated_result_reference: '生成结果',
   background_reference: '背景参考',
+  style_reference: '风格参考',
   generic_reference: '图片引用',
 };
 
@@ -39,6 +41,7 @@ export const IMAGE_MENTION_ROLE_NOTES: Record<ImageMentionRole, string> = {
   source_reference: '当前任务的主参考图（画面模板）',
   generated_result_reference: '本任务已生成的图片',
   background_reference: '背景参考',
+  style_reference: '只参考画风、材质、色彩与视觉语言',
   generic_reference: '从图片库加入当前任务的参考图',
 };
 
@@ -79,7 +82,12 @@ export interface VisionContextPoolInput {
   sourcePath?: string;
   sourceAssetId?: string;
   person?: PersonLike | null;
-  extraReferences?: ReadonlyArray<{ assetId?: string; path: string; label?: string }>;
+  extraReferences?: ReadonlyArray<{
+    assetId?: string;
+    path: string;
+    label?: string;
+    purpose?: 'clothing' | 'pose' | 'scene' | 'camera' | 'style';
+  }>;
   generatedResults?: ReadonlyArray<{ assetId?: string; path?: string }>;
   /** 生成结果展示名（默认按序号「生成结果 N」）。 */
   generatedLabels?: ReadonlyArray<string>;
@@ -130,13 +138,19 @@ export function buildVisionContextImages(input: VisionContextPoolInput): VisionC
   }
   for (const ref of input.extraReferences ?? []) {
     if (!ref.path?.trim()) continue;
+    const role: ImageMentionRole = ref.purpose === 'scene'
+      ? 'background_reference'
+      : ref.purpose === 'style' ? 'style_reference' : 'generic_reference';
     entries.push({
       image: {
         assetId: ref.assetId,
         path: ref.path,
         label: ref.label?.trim() || fileLabelOf(ref.path),
-        role: 'generic_reference',
-        note: IMAGE_MENTION_ROLE_NOTES.generic_reference,
+        role,
+        note: ref.purpose === 'clothing' ? '只参考服装、配饰与造型'
+          : ref.purpose === 'pose' ? '只参考动作、姿态与手势'
+            : ref.purpose === 'camera' ? '只参考镜头、景别与视角'
+              : IMAGE_MENTION_ROLE_NOTES[role],
       },
       priority: 1,
     });

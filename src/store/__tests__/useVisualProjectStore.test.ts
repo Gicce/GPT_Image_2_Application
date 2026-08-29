@@ -163,3 +163,71 @@ describe('useVisualProjectStore（项目持久化与恢复）', () => {
   });
 });
 
+describe('V6.8 素材替换显式确认（materialReplacementDone 持久化 / 保守恢复 / 复位）', () => {
+  function lastSavedJson(): any {
+    const calls = (api.saveVisualProject as ReturnType<typeof vi.fn>).mock.calls;
+    return JSON.parse(calls[calls.length - 1]![0].dataJson);
+  }
+
+  it('老项目保守恢复：旧文档无确认字段（即使曾优化过 optimizedRevision=revision）→ 恢复为未确认', async () => {
+    const project = await useVisualProjectStore.getState().createFromAnalysis(analysisInput());
+    await useVisualProjectStore.getState().flushPersist();
+    // 构造「旧版项目文档」：删除 V6.8 确认字段，并带上「曾优化完成」的旧痕迹
+    const legacy = lastSavedJson();
+    delete legacy.workspace.materialReplacementDone;
+    legacy.workspace.recreation = legacy.workspace.recreation ?? null;
+    legacy.optimizedRevision = legacy.revision;
+    (api.loadVisualProject as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce(JSON.stringify(legacy));
+    resetStore();
+    const restored = await useVisualProjectStore.getState().openProject(project.id);
+    expect(restored).not.toBeNull();
+    expect(restored!.workspace.materialReplacementDone).toBe(false);
+  });
+
+  it('确认走 updateActiveMeta：置 true 且不加修订，往返持久化不丢', async () => {
+    await useVisualProjectStore.getState().createFromAnalysis(analysisInput());
+    await useVisualProjectStore.getState().flushPersist();
+    const revisionBefore = useVisualProjectStore.getState().active!.revision;
+    useVisualProjectStore.getState().updateActiveMeta(draft => ({
+      ...draft,
+      workspace: { ...draft.workspace, materialReplacementDone: true },
+    }));
+    expect(useVisualProjectStore.getState().active!.workspace.materialReplacementDone).toBe(true);
+    // 检查点不是方案内容：不加修订
+    expect(useVisualProjectStore.getState().active!.revision).toBe(revisionBefore);
+    await useVisualProjectStore.getState().flushPersist();
+    const saved = lastSavedJson();
+    expect(saved.workspace.materialReplacementDone).toBe(true);
+    (api.loadVisualProject as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce(JSON.stringify(saved));
+    resetStore();
+    const restored = await useVisualProjectStore.getState().openProject(saved.id);
+    expect(restored!.workspace.materialReplacementDone).toBe(true);
+  });
+
+  it('素材域语义修改复位确认（人物替换变更 → 回到未确认；修订 +1 照常）', async () => {
+    await useVisualProjectStore.getState().createFromAnalysis(analysisInput());
+    useVisualProjectStore.getState().updateActiveMeta(draft => ({
+      ...draft,
+      workspace: { ...draft.workspace, materialReplacementDone: true },
+    }));
+    const revisionBefore = useVisualProjectStore.getState().active!.revision;
+    useVisualProjectStore.getState().updateActive('person', draft => setProjectPersonContract(draft, null));
+    const active = useVisualProjectStore.getState().active!;
+    expect(active.workspace.materialReplacementDone).toBe(false);
+    expect(active.revision).toBe(revisionBefore + 1);
+  });
+
+  it('generation_result 不复位确认（生成结果不是素材编辑）', async () => {
+    await useVisualProjectStore.getState().createFromAnalysis(analysisInput());
+    useVisualProjectStore.getState().updateActiveMeta(draft => ({
+      ...draft,
+      workspace: { ...draft.workspace, materialReplacementDone: true },
+    }));
+    useVisualProjectStore.getState().updateActive('generation_result', draft => ({
+      ...draft,
+      latestFinalPrompt: '生成用 Prompt',
+    }));
+    expect(useVisualProjectStore.getState().active!.workspace.materialReplacementDone).toBe(true);
+  });
+});
+

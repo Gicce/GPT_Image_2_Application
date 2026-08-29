@@ -320,3 +320,125 @@ Understand → Modify → Optimize → Review Prompt → Generate → Evaluate �
 - Strict Visual Reference 在 Context Rail 使用一张紧凑「动漫角色参考」卡：待创建时说明创建前报价；已就绪时说明最终生成自动复用、不重复计费。
 - 卡片动作只有当前状态需要的一个命令：待创建=`生成角色参考图`，已就绪=`重新生成角色参考图`；重新生成必须强制新报价，普通继续生成命中缓存不得报价或创建任务。
 - 角色参考图作为 `anime_character_reference` 排在模板与人物参考之后、其它引用之前；最终 Prompt 明确其为所有动漫区域唯一视觉设计来源。
+
+## 32. Recoverable Blocker Pattern（V6.1 铁律）
+
+- 阻断文案事实源唯一：Validator 与 Rail/页面共用同一纯函数（示例 `detailInsertIncompleteErrors`），UI 只按「可修复 / 其它」分组渲染，禁止出现第二套平行文案。
+- 阻断卡结构：标题 + 一句话影响说明 + 主按钮（修复动作）+ 次按钮（查看详情）；修复中显示进行中说明并明示「不会改变你当前的哪些内容」。
+- 受限修复（scoped repair）：只合并缺失字段及直接依赖（如 `mergeDetailInsertRepairResults` 只补 `instances`），走 `updateActive` 语义修订；模板九维度、`subjectPoses`、人物替换、锁定维度、用户修改、`originSkill`/`baselineSections` 全部原样保留。
+- 失败不清空旧分析：全部失败时返回原快照（同一引用），UI 显示失败 + 重试 + 技术详情默认折叠 `<details>`；成功后显示绿色状态卡（含数量事实）且阻断自动消失，同屏展示实例清单（`#N 位置 · 类型 → 同步对象`）。
+- 禁止死路：凡系统内具备修复能力的阻断校验，禁止只给文案不给入口（「请重新分析」「请到 xx 处理」而无按钮 = 返工）。
+
+## 33. Nested Modal / Picker Pattern（V6.1 铁律）
+
+- 二级弹窗（图库选择器、删除确认等）一律 `createPortal(document.body)`：自带 fixed overlay、独立 z-index、自包含 CSS 文件；禁止依赖父弹窗类名或其它页面的 CSS chunk（懒加载 chunk 缺失曾把选择器压成窄长条）。
+- Escape 分层：二级弹窗自己的 `window keydown` 只关自己；父弹窗守卫 `galleryOpenRef.current` 时不响应 Escape。backdrop `onMouseDown` target===currentTarget 才关闭，正文点击 `stopPropagation` 防误关。
+- 打开二级弹窗时父弹窗正文滚动锁定（`is-picker-open` 条件类）；关闭恢复。
+- 层级纪律：业务弹窗 1200 < 二级选择/确认层 1300 < ImageViewer 4000；新增层级先查本表。
+- 图片选择网格：`repeat(auto-fill, minmax(140px, 1fr))` 响应式，缩略图统一 `aspect-ratio: 1`、文件名 ellipsis；预览复用全局 ImageViewer（`useImageViewerStore.openViewer`），禁止第二套 viewer。
+
+## 34. Wizard Geometry Pattern（V6.1 铁律）
+
+- 多步骤创作器固定三段式：Header（标题+说明）/ Body（唯一滚动区）/ Footer（状态条+操作行）；弹窗尺寸只随视口（`width: min(960px, calc(100vw - 48px))`、`height: min(720px, calc(100vh - 48px))`），五步共用同一几何。
+- 滚动收口：所有 grid 子项 `min-height: 0`，滚动只发生在 Body 与步骤栏；弹窗根 `overflow: hidden`；正文 `overscroll-behavior: contain`。
+- 步骤切换禁止改变弹窗几何类（条件类只允许功能性如 `is-picker-open`）；长内容差异靠内部滚动与折叠，不靠改宽高。
+- 长详情默认折叠：摘要行 + 【查看完整 X】toggle（`aria-expanded`），如 Recipe 卡「模板复用方案 / Recipe 已冻结 / 模板@原图 / 输入槽位 / 冻结 N 合同块」。
+- 响应式断点：≤1100px 步骤栏收窄 160px；≤860px 步骤栏转顶部水平 stepper（`flex-direction: row` + `overflow-x: auto`）。
+- 稀疏步骤（如发布确认页）用 content stack 卡片纵向收拢居中，禁止拉大控件填满空间。
+
+## 35. Destructive CRUD Pattern（V6.1 铁律）
+
+- 有创建就有删除：每个 create/edit 界面交付前审计 delete 闭环——stable ID、入口（更多菜单 `⋯`）、danger 二次确认弹窗、确认后才调持久层删除命令（如 `api.deleteUserSkill`）、列表原子过滤、当前编辑态清理（`useDialogDraft?.id === deleteTarget.id` 时关闭）、成功 Toast、空态 + 创建入口 CTA。
+- 删除范围文案事实源唯一（纯函数，如 `describeSkillDeleteNotice`）：local 不提示投稿；submitted/under_review/changes_requested/published 或存在投稿记录时，明确「删除本地 Skill 不会撤回已提交的审核记录」；范围行固定列明「删什么 / 不删什么」（历史项目、源图不受影响）。
+- 持久层语义：只删本机实体行（`DELETE FROM user_skills`），禁止连带删服务器投稿、公共社区记录、用户图库原图、视觉项目模板源图；删除不存在的 ID 幂等成功。
+- busy 期间禁点（取消与确认都 disabled），遮罩点击=取消；确认按钮是唯一 danger 主操作。
+- 回归测试要求：纯函数文案 + 前端 wiring guard + Rust 行为测试（只删目标行 / 相邻表不受影响 / 幂等）。
+
+## 36. Progress Honesty Pattern（V6.2 铁律）
+
+- 长耗时 AI 任务的进度模型只含真实事实：阶段枚举（如 准备模板 → AI 识别 → 合并 → 重新校验）+ 真实计数（第 N/M 层）+ 起始时间戳；**进度对象禁止 percent / progress 数字字段**（模型调用没有 token 级进度，禁止伪造 70%）。
+- UI 呈现 = indeterminate 动画条 + 「阶段 x/4：文案（第 N/M 层）」+ 每秒重算的「已用时 N 秒」（UI 持有 interval，runner 不持有定时器——执行体保持可测试纯度）。
+- 取消 = 层间诚实停止：已完成层照常合并、剩余层不再发起；首层前取消 = 无结果不合并。禁止「假取消」（继续跑完丢弃）与「假完成」（未跑完标成功）。
+- 执行体与页面分离：识别逻辑进可复用 runner（如 `detailInsertRepairRunner`），页面/弹窗只做配置解析 + 进度渲染 + 对**最新**状态的纯函数合并；两个消费方（工作台 Rail / Skill 弹窗）共用同一 runner，禁止第二套识别。
+- 进度按操作身份隔离：progress 携带 operationId + projectId + projectRevision；运行中切换项目，旧进度不写入新项目（合并回调做 projectId 守卫）。
+
+## 37. Direct Execution Pattern（V6.2 铁律）
+
+- 复用型能力必须提供双执行方式：主按钮「快速生成」（headless 直达结果）+ 次按钮「高级调整」（进完整工作台）；两者同一套 Runtime Registry / Compiler / Validator，**禁止为快速路径建第二套引擎**。
+- headless 快速路径零 AI 调用：换素材 = 重编译绑定（确定性），最终描述复用冻结基线；没有让用户审阅优化产物的 UI，就不允许后台偷偷调优化器。
+- ephemeral 会话：快速路径不创建持久项目（不写 store、不落库）；项目文档随 carry 进入结果页，banner 提供两条出口——「保存为视觉项目」（adopt 落库）与「进入工作台调整」（先 adopt 再 hydrate）；不保存则零持久化痕迹。
+- 执行前 Preflight：与工作台「确认」同一组合法性（合同 / 锁 / 服装 / 一致性 / 实例），阻断卡按「可原位修复（如内嵌 Repair）/ 需工作台」分组；需生成资产的阻断绝不后台代生成——明示走高级调整。
+- 计费授权单一入口：自动发起的提交照常走服务端报价 + QuoteConfirmDialog，**autoStart 绝不绕过计费确认**。
+
+## 38. Semantic Reference Label Pattern（V6.2 铁律）
+
+- 参考图角色徽标唯一事实源 = `SEMANTIC_REFERENCE_LABELS`（template=模板图 / person_reference=人物参考 / anime_character_reference=动漫角色参考 / background_reference=背景参考 / style_reference=风格与构图参考 / generic_reference=附加参考）；**禁止「参考图N / 图片N」裸序号命名 UI**（序号只存在于 Prompt 指令块的图片1/2/3 合同语境）。
+- 计划参考图（来自视觉方案 / Skill 方案）角色由方案冻结：卡片显示语义徽标 + 🔒，title 提示「改用途请回视觉工作台调整方案」；**计划图不提供 inline 角色下拉**（改角色 = 改方案，必须回方案源头）。
+- 手动参考图通过 `⋯` 菜单设置用途：`menuitemradio` + 当前项 ✓ 勾选；菜单单开（一个索引状态管理全部卡片的菜单开合）。
+- 摘要行：计划图片清单经 `describeReferenceImagesForUser` 生成「模板图：@xx · 人物参考：@yy」对照行，放在参考图区顶部，把 Raw Prompt 的「图片N」翻译成用户语言。
+- carry 链路保真：计划图片以 generationRole + origin:'plan' 进入工作台；mention 层 role（@引用层）与 generationRole（合同层）是两套枚举，映射时必须剥离，禁止混传。
+
+## 39. Auto Save State Pattern（V6.2 铁律）
+
+- 动态工作区（视觉项目等）语义自动保存：debounce（600–1000ms）+ 串行落库（persistInFlight 队列）+ 墓碑删除标记；保存状态四态 = idle / pending / saving / saved / error（含 projectId，跨项目切换不串台）。
+- 「已保存」判定必须诚实：保存执行期间又有新编辑（debounce 计时器复活）时，本次完成**不得**标 saved；只有 `persistTimer` 为空（无待存编辑）才显示已自动保存。
+- 失败保 dirty：保存失败状态标 error 并保留重试按钮，数据不丢、可手动 `retrySave`；禁止失败后静默丢弃或标成功。
+- 切项目冲刷：打开/切换项目前先 `flushPersist()` 在途防抖，防止旧项目最后一步编辑丢失（异步 flush 需 await）。
+- 状态指示内联在标题栏 meta 行（自动保存中… / 已自动保存 / 自动保存失败 + 重试），手动保存按钮的 busy = pending || saving。
+
+## 40. Handoff Responsiveness Pattern（V6.2 铁律）
+
+- 确认类交接（如 确认生成 → 另一页面）：同步守卫全部通过后 **100ms 级立即关弹窗**，切换到过渡态（「正在进入图片工作室…」）；重活（外貌解析 / 合同编译 / mask 导出）在过渡态下完成——禁止用 loading 遮罩掩盖真实耗时。
+- 预热并行：最重的 IO（视觉模型调用）与同步装配并行发起，等待点后移到装配完成之后（`promise` 先建后 await）。
+- 防重入：交接在途用 ref 守卫（双击 / 事件重放直接忽略）；每个交接有唯一 operationId（计时 / 去重共用）。
+- 系统修正 Toast 按 operationId + 种类去重（同一操作内 anime_guard / clothing_guard / lock_guard 各只弹一次），防严格模式 / 镜像重放产生重复提示。
+- 失败 = toast 回原工作台（弹窗不复活，可再次确认发起）；过渡态文案是状态描述（正在进入…），禁止百分比进度。
+
+## 41. Semantic Feedback Severity Pattern（V6.3 铁律）
+
+- 系统自动修正 Toast 的严重级按**最终用户状态**判定，不按「内部是否跑了 Guard」判定：系统已替用户修正成功、结果就是用户想要的 ⇒ **绿色 success**；只有当被剥离内容确实来自用户当前文字指令（用户明确写了、又被系统移除）才 orange warning。
+- 判定唯一入口（`src/features/vision/handoffOperation.ts`）：`contractCorrectionSeverity()`（合同修正恒 success）与 `lockCorrectionSeverity(removedSentences, userInstruction)`（逐句 `removedSentenceFromUserInstruction` 子串匹配，≥4 字符才算用户原话）。**禁止组件按 Guard 类型自猜颜色**。
+- 动作统一：severity=success 的修正 Toast 提供「查看执行过程」入口进 Skill Trace（技术原因与被移除原文留在 Trace，不塞进短 Toast）；标题保持用户语言（已保持人物参考服装 / 已保持锁定内容），禁止出现 Guard / Contract / 字段名。
+- 去重不变：同一 operationId + 种类（anime_guard / clothing_guard / lock_guard）只弹一次；severity 判定不影响去重逻辑。
+
+## 42. Direct Preflight Status Pattern（V6.3 铁律）
+
+- 快速生成（Direct Mode）的前置检查用**四态状态卡**呈现，禁止弱化成一行小字：
+  - `ready`（绿）：「可以快速生成」+ 就绪清单；
+  - `repairable`（橙）：「快速生成还差 1 步」+ 主按钮「立即处理」（内嵌修复，如缺失层补充识别）；
+  - `needs_input`（业务输入，非错误）：缺人物参考 / 服装文本等用户决定项，提供选择入口；
+  - `blocked`：本 Skill 的形态必须走完整工作台（如动漫角色一致性需资产生成），说明原因 + 「高级调整」出口。
+- 分类唯一入口 `classifySkillDirectPreflight(blockers)`（`src/features/skillWorkshop/skillDirectExecution.ts`）：软集（`needs_input` / `clothing` / `detail_insert_incomplete`）→ needs_input；其余 → blocked；空 → ready。UI 只渲染，不重判。
+- 需要人物参考的 Skill（`skillPersonSlotRequired(recipe)`）未绑定人物 ⇒ needs_input 卡明确文案「需要一张人物参考图」，不得放行为 blocked 泛化文案，也不得静默无人物执行。
+- Preflight 与工作台「确认」共享同一套 Validator / Blocker 语义（Direct Execution Pattern §37 的延伸）；四态卡是同一合法性的**展示层**，禁止第二套校验。
+
+## 43. Modification Slot Fidelity Pattern（V6.3 铁律）
+
+- Skill 输入槽位**由修改合同派生**，不是 UI 写死的 person-only 清单：`deriveSkillInputSlots(recipe)` 读 `modificationTemplate {personEnabled, clothingPolicy, customClothing}`——
+  - 人物 + `use_subject_reference` ⇒ 一个 **combined 必选槽**（usage `identity_clothing`，徽标 身份+服装，说明「这张图片将同时提供人物身份与服装；姿势、构图、背景不会从该图继承」）；
+  - 人物 + `preserve_original` ⇒ 独立身份槽（可选，说明「服装沿用模板」）；
+  - `custom` ⇒ 服装要求**文本槽**（defaultText = 保存值）；`preserve_template` 不产生任何槽（模板槽除外）。
+- 存储的 slots 字段不再被信任：载入一律按 modificationTemplate 重派生（旧 Recipe 无 modificationTemplate ⇒ 回落 personEnabled + preserve_original，零迁移）；重建项目（`buildProjectFromSkillRecipe`）必须应用保存的服装策略，不得退回保留模板。
+- **换槽位绑定 = 重绑 facts + 确定性重编译**：锁定维度漂移值回模板基线（`resetDriftedPlanFieldsToTemplateBaseline`）+ 重建执行态整体复位（editState ready、semanticRevision/optimizedRevision 归零、adjustInstruction 清空、optimizedPrompt=originalPrompt、优化历史丢弃）——实例专属优化 delta 不进入新会话。
+- 铁律：除非用户**新增语义指令**，直接生成链路绝不出现 `needsOptimization=true`、绝不建议「重新优化 Prompt」；没有让用户审阅优化产物的 UI，就不允许后台偷偷调优化器（§37 headless 纪律的槽位版）。
+
+## 44. Compact Subject Replacement Pattern（V6.3 铁律）
+
+- 人物替换面板信息架构 = 四个语义分组（各一行一组，`PERSON_REPLACEMENT.group*` 唯一文案源）：**主体**（模板图→人物参考映射）/ **来源**（身份来源 + 服装来源并列同组）/ **执行范围**（替换范围 + 身份应用）/ **替换强度**。
+- 映射卡紧凑横排：缩略图 120–160px（`.vision-person-map-thumb` 150px 定宽、图 max-height 140px）+ 右侧信息；卡片只做**识别**，看大图点击进全局 ImageViewer（`useImageViewerStore`，cursor zoom-in）——禁止在业务卡里放大图。
+- 动作词指向参考图而非结果：按钮文案「**更换人物参考**」（不是「更换人物」）；来源下拉标签「**身份来源**」（与「服装来源」并列，避免「人物来源」与服装通道混淆）。
+- 紧凑化不得丢可达性：空态纵向居中、radiogroup/radio/aria-checked、二选一选择流（`picking || !hasImageRef`）全部保留；合同控件（替换范围 / applyIdentityTo / 强度）只是换了分组容器，不改语义。
+
+## 45. Entity Cover Pattern（V6.3 铁律）
+
+- 实体封面（如 Skill Cover）是 **display-only 元数据**（`UserSkill.cover {source, path?, assetId?}`），经 Rust `data_json` JSON 透传持久化（无结构迁移、无 Rust 改动）；载入合法化（`normalizeSkillCover`）拒绝坏数据，不伪造封面。
+- 解析优先级唯一入口 `resolveSkillCoverPath(cover, {samplePath, templatePath})`：**用户自定义 ＞ 公开生成样例 ＞ 模板图 ＞ 类型图标 fallback**；损坏的自定义路径沿链兜底（不显示破图）。样例候选 `skillCoverSamplePath`：publicCover ＞ selectedForSubmission ＞ 任一样例。
+- 选择器复用唯一 `ImageLibraryPicker`（禁止第二套图片选择器）；每个消费界面至多一个 picker 实例（弹窗内双用途时用 `galleryOpenRef = a || b` 合并 Escape 守卫）。
+- 边界铁律：封面（含图库本地路径）**绝不进入投稿载荷**（`sanitizeUserSkillForSubmission` 剥离）；换封面 Toast 明示「仅本机展示，不影响模板、生成方案与已提交的审核记录」；删除实体**只删实体行，不删图库文件**（封面是引用，没有文件所有权）。
+
+## 46. Gallery Folders & Staged Modification Pattern（V6.6 铁律）
+
+- **文件夹是物理目录**：新建走 Rust `create_image_folder`（名字清洗 + 重名 `(2)` 去重 + `create_dir_all`），注册表只记 id/name/path；`sync_images` 扫描根并入注册表路径。归属判定唯一入口 `matchesGalleryFolder`（与 Rust `normalize_image_path_key` 同归一化规则：分隔符统一 + Windows 盘符小写）。
+- **输出位置选择器全库唯一**：`OutputPathPicker`（默认路径 / 图库文件夹 / 浏览 / 自定义兜底显示）——当前值不在选项中时显示「自定义：目录名」，不伪造归属；未选文件夹 = 默认路径（`default_output_dir` 预填语义保持）。
+- **四步向导（V6.7）**：左侧步骤栏（视图理解 / 需求描述 / 素材替换 / 最终提示词；完成 ✓ success、当前 accent-light、未解锁降透明禁用）+ 当前步骤内容；门禁纯函数 `visionStepReachable`（第 3 步必须先描述），自动前进（理解就绪→2、优化成功→2 进 3 / 3 进 4）；空步骤显示引导空态，不显示空白区域；状态栏与操作行是第 2-4 步共用脚注。
+- **已启用卡边框一致**：三面板统一 `border: 1px solid var(--accent-primary); box-shadow: 0 0 0 1px var(--accent-primary-light);`——启用状态的一致视觉信号由「已启用」badge + 边框共同承担，禁止单卡独享。

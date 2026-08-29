@@ -123,6 +123,59 @@
   border: 1px solid var(--border-color, #ccc);
 }
 
+/* V6.2 Auto Save 状态指示（projectId 隔离；error 态带内联重试） */
+.vision-autosave-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-secondary, #666);
+}
+
+.vision-autosave-state.is-saving,
+.vision-autosave-state.is-pending { color: var(--text-secondary, #666); }
+
+.vision-autosave-state.is-saved { color: var(--accent-success, #059669); }
+
+.vision-autosave-state.is-error { color: var(--status-error, #dc2626); }
+
+.vision-autosave-retry {
+  margin-left: 4px;
+  padding: 0 6px;
+  font-size: 11px;
+  line-height: 18px;
+  border: 1px solid var(--border-color, #ccc);
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.vision-autosave-retry:hover { border-color: var(--accent-primary, #6366f1); }
+
+/* V6.2 Handoff 过渡态（确认 → 图片工作室之间的诚实交接层） */
+.vision-handoff-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1180;
+  display: grid;
+  place-items: center;
+  background: var(--bg-scrim, rgba(0, 0, 0, 0.45));
+}
+
+.vision-handoff-card {
+  display: grid;
+  gap: 8px;
+  width: min(360px, calc(100vw - 48px));
+  padding: 18px 20px;
+  border-radius: 10px;
+  border: 1px solid var(--border-color, #333);
+  background: var(--bg-card, #1c1c22);
+  text-align: center;
+}
+
+.vision-handoff-card p { margin: 0; font-size: 14px; }
+.vision-handoff-card .vision-hint { font-size: 12px; color: var(--text-secondary, #999); }
+
 .vision-project-header-actions {
   display: flex;
   align-items: center;
@@ -371,6 +424,100 @@
 
 .vision-rail-card.is-error { border-color: var(--status-error, #dc2626); }
 .vision-rail-card.is-error ul { margin: 0; padding-left: 18px; font-size: 12px; color: var(--status-error, #dc2626); }
+.vision-rail-card.is-success { border-color: var(--accent-success, #059669); }
+.vision-rail-card.is-success p { margin: 0; font-size: 12px; color: var(--accent-success, #059669); }
+
+/* ===== V6.1 Recoverable Blocker：局部插图 Repair 区块 ===== */
+.vision-rail-repair {
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--status-error, #dc2626);
+  border-radius: 8px;
+  background: var(--bg-card, #fff);
+}
+
+.vision-rail-repair-title { font-size: 13px; }
+
+.vision-rail-repair p { margin: 0; font-size: 12px; color: var(--text-secondary, #666); }
+
+.vision-rail-repair-progress { color: var(--text-primary, inherit); }
+
+/* V6.2 Progress Honesty：indeterminate 动画（无百分比）+ 真实阶段 / 层数 / 计时 */
+.vision-rail-repair-progress .vision-rail-repair-bar {
+  display: block;
+  height: 4px;
+  border-radius: 2px;
+  overflow: hidden;
+  background: var(--bg-secondary, rgba(127, 127, 127, 0.18));
+}
+
+.vision-rail-repair-progress .vision-rail-repair-bar::after {
+  content: '';
+  display: block;
+  width: 34%;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent-primary, #6366f1);
+  animation: vision-repair-indeterminate 1.15s ease-in-out infinite;
+}
+
+@keyframes vision-repair-indeterminate {
+  0% { transform: translateX(-110%); }
+  100% { transform: translateX(310%); }
+}
+
+.vision-rail-repair-stage { font-weight: 600; }
+
+.vision-rail-repair-meta { color: var(--text-secondary, #666); }
+
+.vision-rail-repair-failed > p:first-child {
+  font-weight: 600;
+  color: var(--status-error, #dc2626);
+}
+
+.vision-rail-repair-tech summary {
+  font-size: 12px;
+  color: var(--text-secondary, #666);
+  cursor: pointer;
+  user-select: none;
+}
+
+.vision-rail-repair-tech p {
+  margin: 4px 0 0;
+  word-break: break-all;
+}
+
+.vision-rail-repair-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* 局部插图实例清单（§9）：每个画框一行——位置 / 类型 / 同步对象 */
+.vision-rail-inserts { gap: 6px; }
+
+.vision-rail-insert-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 6px;
+}
+
+.vision-rail-insert-list li {
+  display: grid;
+  gap: 2px;
+  padding: 6px 8px;
+  border: 1px solid var(--border-color, #e5e5e5);
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.vision-rail-insert-list b { font-weight: 600; }
+
+.vision-rail-insert-list span { color: var(--text-secondary, #666); }
+
+.vision-rail-insert-list em {
+  font-style: normal;
+  color: var(--accent-primary, #6366f1);
+}
 
 .vision-rail-head { display: flex; align-items: center; justify-content: space-between; }
 .vision-rail-title { font-size: 14px; font-weight: 600; }
@@ -397,6 +544,25 @@
 }
 .vision-rail-row.kind-modified .vision-rail-value { color: var(--accent-primary, #6366f1); font-weight: 500; }
 .vision-rail-row.kind-source .vision-rail-value { font-weight: 500; color: var(--accent-success, #059669); }
+
+/* V6.8 §六：区域替换行整值可点击定位到素材替换步骤的区域面板。
+   按钮重置为行内值排版（右对齐 + 单行省略随 .vision-rail-value 生效） */
+.vision-rail-locate {
+  display: block;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: right;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.vision-rail-locate:hover,
+.vision-rail-locate:focus-visible { color: var(--accent-primary, #6366f1); text-decoration: underline; }
 
 /* §A 来源可视：@来源 chip（hover 预览 + 点击查看器）与状态徽标。
    chip 自带 max-width + 单行省略：长文件名保留可见前缀，值列不再挤压成空白点击区 */
@@ -535,26 +701,166 @@
 .vision-rail-cta .vision-btn { width: 100%; }
 .vision-rail-cta .vision-btn-sm { width: auto; align-self: flex-end; }
 
-/* ===== 区域替换（§28 / §9）===== */
-.vision-regions {
-  margin-top: 14px;
-  border: 1px dashed var(--border-color, #ccc);
-  border-radius: 10px;
-  padding: 12px 14px;
+/* ===== V6.8 §五：优化复刻 Prompt 真实进度卡（ContextRail CTA 卡 / 无项目 footer 双入口共用） ===== */
+.vision-optimize-progress {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--accent-primary);
+  border-radius: 10px;
+  background: var(--bg-section);
 }
 
-.vision-regions-head {
+.vision-optimize-progress.is-completed { border-color: var(--accent-success, #059669); }
+.vision-optimize-progress.is-failed { border-color: var(--status-error, #dc2626); }
+
+.vision-optimize-progress-head {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   justify-content: space-between;
-  gap: 12px;
+  gap: 8px;
+  min-width: 0;
 }
-.vision-regions-head h3 { margin: 0; font-size: 15px; }
-.vision-regions-head .vision-hint { margin: 2px 0 0; }
+
+.vision-optimize-progress-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.vision-optimize-progress.is-completed .vision-optimize-progress-title { color: var(--accent-success, #059669); }
+.vision-optimize-progress.is-failed .vision-optimize-progress-title { color: var(--status-error, #dc2626); }
+
+.vision-optimize-progress-model {
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vision-optimize-progress-bar {
+  height: 6px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: var(--bg-secondary, rgba(127, 127, 127, 0.18));
+}
+
+.vision-optimize-progress-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--accent-primary, #6366f1);
+  /* 宽度只随真实阶段切换跳变（deriveOptimizationPercent）；过渡只是视觉平滑，不推进数值 */
+  transition: width 0.4s ease;
+}
+
+.vision-optimize-progress.is-completed .vision-optimize-progress-fill { background: var(--accent-success, #059669); }
+
+/* 进行中流光：提示「正在运行」的动画，不改变宽度（Progress Honesty §36） */
+.vision-optimize-progress-fill.is-animated {
+  background-image: linear-gradient(
+    100deg,
+    rgba(255, 255, 255, 0) 30%,
+    rgba(255, 255, 255, 0.35) 50%,
+    rgba(255, 255, 255, 0) 70%
+  );
+  background-size: 200% 100%;
+  animation: vision-optimize-sheen 1.4s linear infinite;
+}
+
+@keyframes vision-optimize-sheen {
+  0% { background-position: 120% 0; }
+  100% { background-position: -80% 0; }
+}
+
+.vision-optimize-progress-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  min-width: 0;
+}
+
+.vision-optimize-progress-stage {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+
+.vision-optimize-progress-percent {
+  flex-shrink: 0;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.vision-optimize-progress-elapsed {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.vision-optimize-progress-error {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.vision-optimize-progress-error p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  word-break: break-word;
+}
+
+/* ===== 区域替换（§28 / §9 / V6.8 §四：素材替换的第三个子面板）===== */
+.vision-regions {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px 14px;
+  /* 子面板卡：中性边框（区域替换不是维度启用卡，不带强调边框，V6.6 强调边框仅限已启用维度卡） */
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  background: var(--bg-section);
+}
+
 .vision-regions-empty { margin: 0; }
+
+.vision-region-count-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border: 1px solid var(--accent-primary);
+  border-radius: 999px;
+  background: var(--accent-primary-light);
+  color: var(--accent-primary-text);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+/* V6.8 §七：素材替换步骤的显式确认 footer——完成 = 用户点击，不靠字段反推 */
+.vision-step-confirm {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-light);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.vision-step-confirm-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
 
 .vision-region-card {
   border: 1px solid var(--border-color, #e5e5e5);
@@ -688,9 +994,8 @@
 
 .vision-region-source-img { display: none; }
 
-/* ===== 人物替换合同 V2 控制区 ===== */
+/* ===== 人物替换合同 V2 控制区（V6.3：嵌在「执行范围」分组内，不再自带外距） ===== */
 .vision-person-contract {
-  margin-top: 12px;
   border: 1px solid var(--border-color, #e5e5e5);
   border-radius: 10px;
   padding: 12px 14px;
@@ -2084,6 +2389,21 @@
   color: var(--text-muted);
 }
 
+/* ===== V6.3 面板分组（主体 / 来源 / 执行范围 / 替换强度：一行一组语义） ===== */
+.vision-person-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.vision-person-group-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  color: var(--text-tertiary);
+}
+
 /* --- 视觉映射：画面模板 → 替换人物（宽屏双栏 + 中央箭头；窄屏纵向） --- */
 .vision-person-mapping {
   display: grid;
@@ -2099,14 +2419,17 @@
   min-width: 0;
 }
 
+/* V6.3 紧凑卡：缩略图左（150px）+ 信息右（横排），预览 120-160px——
+   不再上大图下文字竖排铺开（旧版单卡高 ~300px+） */
 .vision-person-map-card {
   display: flex;
-  flex-direction: column;
-  gap: 8px;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
   border: 1px solid var(--border-default);
   border-radius: 10px;
   background: var(--bg-card);
-  padding: 10px;
+  padding: 8px 10px;
 }
 
 .vision-person-map-card.is-person {
@@ -2116,10 +2439,11 @@
 .vision-person-map-card.is-empty {
   border: 1px dashed var(--border-default);
   background: transparent;
+  flex-direction: row;
   align-items: center;
-  padding: 18px 10px;
-  gap: 4px;
-  cursor: pointer;
+  justify-content: space-between;
+  padding: 12px;
+  gap: 12px;
   color: var(--text-tertiary);
   transition: border-color 0.15s ease, color 0.15s ease;
 }
@@ -2136,28 +2460,40 @@
 }
 
 .vision-person-map-empty-hint {
+  display: block;
+  margin-top: 4px;
   font-size: 11px;
   color: var(--text-muted);
 }
 
-/* 真实大图预览：完整展示（contain 不裁切），点击进 ImageViewer 放大 */
+.vision-person-map-empty-copy { min-width: 0; }
+
+/* V6.8 §三：来源菜单（图片库 / 本地导入 / 文字描述）锚定在人物卡下方的独立行，
+   占整列宽——绝不参与卡内宽度计算、不挤压信息区；边框 / 圆角 / 底色 / 内边距
+   全部归卡根所有，卡内节点一律无边框 */
+.vision-person-map-source-row {
+  min-width: 0;
+}
+
+/* 紧凑预览：固定 150px 宽（120-160px 区间），点击进全局 ImageViewer 看大图 */
 .vision-person-map-thumb {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 100%;
+  flex: 0 0 150px;
+  width: 150px;
   border-radius: 8px;
   border: 1px solid var(--border-light);
   background: var(--bg-section);
-  padding: 6px;
+  padding: 4px;
   cursor: zoom-in;
   overflow: hidden;
 }
 
 .vision-person-map-thumb img {
-  /* 真实图片按原始比例完整呈现（人物全身 / 脸部 / 服装都不裁掉） */
+  /* 按原始比例 contain（不裁切），高度收敛到 140px 内——大图交给 ImageViewer */
   max-width: 100%;
-  max-height: 260px;
+  max-height: 140px;
   width: auto;
   height: auto;
   object-fit: contain;
@@ -2170,7 +2506,7 @@
   align-items: center;
   justify-content: center;
   width: 100%;
-  min-height: 120px;
+  min-height: 96px;
   font-size: 12px;
   color: var(--text-muted);
 }
@@ -2196,6 +2532,7 @@
   display: flex;
   flex-direction: column;
   gap: 3px;
+  flex: 1;
   min-width: 0;
 }
 
@@ -2247,7 +2584,6 @@
   border-radius: 50%;
   color: var(--accent-primary);
   background: var(--accent-primary-light);
-  margin-top: 26px;
 }
 
 /* 窄屏：模板在上、人物在下，箭头转 90°（不溢出 / 不压卡片） */
@@ -2954,6 +3290,270 @@
   color: var(--text-secondary);
 }
 
+/* ===== V6.4 Visual Workbench UI：项目预览 / 可折叠业务区 / 独立服装面板 ===== */
+.vision-subpanel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.vision-subpanel-head > div:first-child { min-width: 0; }
+
+.vision-subpanel-title {
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.vision-subpanel-head p {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.vision-subpanel-actions,
+.vision-project-preview-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.vision-project-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.vision-project-preview-body {
+  display: grid;
+  grid-template-columns: minmax(120px, 180px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.vision-project-preview-image {
+  width: 100%;
+  min-height: 120px;
+  padding: 8px;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: var(--bg-section);
+  color: var(--text-muted);
+  cursor: zoom-in;
+}
+
+.vision-project-preview-image img {
+  display: block;
+  width: 100%;
+  max-height: 180px;
+  object-fit: contain;
+  border-radius: 6px;
+}
+
+.vision-project-preview-content {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.vision-project-preview-facts {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+}
+
+.vision-project-preview-facts > div {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.vision-project-preview-facts dt { color: var(--text-muted); }
+.vision-project-preview-facts dd { margin: 0; color: var(--text-secondary); }
+
+.vision-custom-content-head { margin-bottom: 8px; }
+.vision-custom-content-body { min-width: 0; }
+
+.vision-intent-chip-source {
+  margin-left: 4px;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--badge-info-text);
+}
+
+.vision-section-collapse { margin-left: auto; }
+
+.vision-person-source {
+  gap: 8px;
+  border-top: none;
+  padding-top: 0;
+}
+
+.vision-person-source-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.vision-person-source-action {
+  min-width: 0;
+  justify-content: center;
+  white-space: nowrap;
+}
+
+.vision-person-source-action.active {
+  border-color: var(--accent-primary);
+  background: var(--accent-primary-light);
+  color: var(--accent-primary-text);
+}
+
+.vision-clothing-panel {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px 14px;
+  /* V6.6 已启用卡统一强调边框（与人物替换卡同款，修三卡不一致） */
+  border: 1px solid var(--accent-primary);
+  box-shadow: 0 0 0 1px var(--accent-primary-light);
+  border-radius: 10px;
+  background: var(--bg-section);
+}
+
+.vision-clothing-body,
+.vision-dimension-edit-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.vision-dimension-edit-panel {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px 14px;
+  /* V6.6 已启用卡统一强调边框（与人物替换卡同款，修三卡不一致） */
+  border: 1px solid var(--accent-primary);
+  box-shadow: 0 0 0 1px var(--accent-primary-light);
+  border-radius: 10px;
+  background: var(--bg-section);
+}
+
+.vision-dimension-requirement { margin: 0; }
+
+.vision-dimension-requirement textarea {
+  width: 100%;
+  min-height: 64px;
+  resize: vertical;
+}
+
+.vision-dimension-reference {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-light);
+}
+
+.vision-dimension-reference-head,
+.vision-clothing-multi,
+.vision-person-multi-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.vision-dimension-reference-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.vision-dimension-reference-card {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 8px;
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  background: var(--bg-card);
+}
+
+.vision-dimension-reference-thumb {
+  width: 72px;
+  height: 72px;
+  padding: 4px;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: var(--bg-section);
+  color: var(--text-muted);
+  cursor: zoom-in;
+}
+
+.vision-dimension-reference-thumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border-radius: 6px;
+}
+
+.vision-dimension-reference-card strong,
+.vision-clothing-multi strong,
+.vision-person-multi-row strong {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.vision-dimension-reference-card p,
+.vision-clothing-multi p,
+.vision-person-multi-row p {
+  margin: 4px 0 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.vision-clothing-multi,
+.vision-person-multi-row {
+  padding: 10px 12px;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: var(--bg-card);
+}
+
+@media (max-width: 719px) {
+  .vision-project-preview-body { grid-template-columns: minmax(0, 1fr); }
+  .vision-project-preview-image { width: min(100%, 240px); }
+  .vision-person-source-actions { grid-template-columns: minmax(0, 1fr); }
+  .vision-person-map-card,
+  .vision-person-map-card.is-empty { flex-wrap: wrap; }
+  /* V6.8：来源菜单已在卡下方整列宽——窄屏保持三入口一行，不折成单列 */
+  .vision-person-map-source-row .vision-person-source-actions { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .vision-dimension-reference-head,
+  .vision-clothing-multi,
+  .vision-person-multi-row { align-items: stretch; flex-direction: column; }
+  .vision-dimension-reference-card { grid-template-columns: 64px minmax(0, 1fr); }
+  .vision-dimension-reference-card > .app-btn { grid-column: 1 / -1; }
+  .vision-subpanel-head { align-items: stretch; }
+  .vision-subpanel-actions { justify-content: flex-start; }
+}
+
 .vision-person-block-head {
   display: flex;
   align-items: baseline;
@@ -2964,4 +3564,207 @@
 .vision-person-block-hint {
   font-size: 11px;
   color: var(--text-muted);
+}
+.vision-project-more{right:0;left:auto;min-width:180px;padding:6px}.vision-project-more-action{display:block;width:100%;padding:9px 10px;border:0;border-radius:7px;background:transparent;text-align:left;color:var(--text-primary,#172033)}.vision-project-more-action:hover,.vision-project-more-action:focus-visible{background:#f1f5f9}.vision-project-more-action.is-danger{color:#dc2626}
+
+/* ===== V6.7 四步向导（视图理解 / 需求描述 / 素材替换 / 最终提示词；纯视图） ===== */
+
+/* V6.8.1：向导（含底部操作 Footer）与后续收尾区（高级设置等）之间的标准 section gap，
+   取 spacing scale 标准档 24px（tokens.md §3）；卡片自身只有 margin-bottom，
+   不给 wizard 底边距会让操作按钮与「高级设置」贴在一起。 */
+.vision-wizard {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+  margin-bottom: 24px;
+}
+
+.vision-step-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  position: sticky;
+  top: 12px;
+}
+
+.vision-step-btn {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-areas: "index title" "index state";
+  column-gap: 8px;
+  row-gap: 2px;
+  align-items: center;
+  min-height: 52px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  background: var(--bg-card);
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.vision-step-btn:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 1px;
+}
+
+.vision-step-btn.is-active {
+  border-color: var(--accent-primary);
+  background: var(--accent-primary-light);
+}
+
+.vision-step-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.vision-step-index {
+  grid-area: index;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 1px solid var(--border-default);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.vision-step-btn.is-done .vision-step-index {
+  border-color: var(--accent-success);
+  color: var(--accent-success);
+}
+
+.vision-step-title {
+  grid-area: title;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.vision-step-state {
+  grid-area: state;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.vision-step-state.is-done {
+  color: var(--accent-success);
+}
+
+.vision-step-btn.is-active .vision-step-state {
+  color: var(--accent-primary-text);
+}
+
+.vision-step-rail-note {
+  margin: 2px 2px 0;
+  color: var(--text-tertiary);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.vision-step-content {
+  min-width: 0;
+}
+
+.vision-step-footer {
+  margin-top: 12px;
+}
+
+.vision-step-guide {
+  margin: 10px 0 0;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.vision-step-empty {
+  margin: 6px 0 0;
+  padding: 12px 14px;
+  border: 1px dashed var(--border-default);
+  border-radius: 10px;
+  color: var(--text-tertiary);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+/* ContextRail 项目进度 checklist */
+.vision-rail-progress-list {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.vision-rail-progress-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+
+.vision-rail-progress-list li.is-active {
+  background: var(--accent-primary-light);
+  color: var(--accent-primary-text);
+  font-weight: 600;
+}
+
+.vision-rail-progress-list li.is-done {
+  color: var(--text-primary);
+}
+
+.vision-rail-progress-index {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px solid var(--border-default);
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.vision-rail-progress-list li.is-done .vision-rail-progress-index {
+  border-color: var(--accent-success);
+  color: var(--accent-success);
+}
+
+.vision-rail-progress-label {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.vision-rail-progress-state {
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+@media (max-width: 1100px) {
+  .vision-wizard {
+    grid-template-columns: 1fr;
+  }
+
+  .vision-step-rail {
+    position: static;
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
+  .vision-step-btn {
+    flex: 1 1 140px;
+    min-height: 44px;
+  }
 }

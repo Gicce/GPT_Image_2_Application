@@ -63,7 +63,8 @@ describe('默认折叠契约（V4.1：折叠 / Tab 全部迁移到 useVisionView
 
 describe('修改意图核心区（V4.1：结构化维度选择器）', () => {
   test('意图问题是页面核心标题 + 结构化 Chip 组件 + 自由文本聚焦行为', () => {
-    expect(pageSrc).toContain('ADJUST_INPUT.title');
+    expect(pageSrc).toContain('自定义修改内容');
+    expect(pageSrc).toContain('ADJUST_INPUT.desc');
     expect(pageSrc).toContain('ModificationChips');
     expect(pageSrc).toContain('intentInputRef');
   });
@@ -84,7 +85,7 @@ describe('修改意图核心区（V4.1：结构化维度选择器）', () => {
 
   test('分析中阶段使用 VisualAnalysisProgress（参考图反馈 + 文案轮播）', () => {
     expect(pageSrc).toContain('VisualAnalysisProgress');
-    expect(pageSrc).toMatch(/\{stage === 'analyzing' && \(/);
+    expect(pageSrc).toMatch(/\{wizardStep === 1 && stage === 'analyzing' && \(/);
   });
 });
 
@@ -124,12 +125,11 @@ describe('生成结果 + 评价闭环（Phase 12~17）', () => {
     expect(pageSrc).toContain('writeEvaluationSettings');
   });
 
-  test('页面不常驻绝对路径：sourcePath 只进 tooltip / title', () => {
-    const sourceSection = pageSrc.slice(
-      pageSrc.indexOf('vision-source-loaded'),
-      pageSrc.indexOf('vision-dropzone'),
-    );
-    expect(sourceSection).toContain('title={sourcePath}');
-    expect(sourceSection).not.toMatch(/<p className="vision-source-path"/);
+  test('项目预览不常驻绝对路径：原图仍可进入查看器与所在目录', () => {
+    const previewSrc = readFileSync(resolve(__dirname, '../../features/vision/project/ProjectPreviewPanel.tsx'), 'utf-8');
+    expect(pageSrc).toContain('<ProjectPreviewPanel');
+    expect(previewSrc).toContain('点击在内置图片查看器中查看');
+    expect(previewSrc).toContain('onOpenFolder');
+    expect(previewSrc).not.toContain('vision-source-path');
   });
 });

@@ -45,7 +45,14 @@ describe('resolveVisionCarryPatch（图生图携带完整状态，不要求用�
     );
     expect(patch.generationType).toBe('i2i');
     expect(patch.generationMode).toBe('single');
-    expect(patch.i2iSources).toEqual([{ path: 'D:\\vision\\source.png', name: 'source.png' }]);
+    // V6.2：计划参考图携带语义角色（template=模板图）+ plan 来源 + 展示名
+    expect(patch.i2iSources).toEqual([{
+      path: 'D:\\vision\\source.png',
+      name: 'source.png',
+      role: 'template',
+      origin: 'plan',
+      label: '原图',
+    }]);
     // V4.0.9.1：最终 Prompt 前置确定性「图片使用说明」——gpt-image-2 收到的 prompt 必声明每张附图职责
     expect(patch.i2iPrompt).toContain('【图片使用说明（强制执行）】');
     expect(patch.i2iPrompt).toContain('图片1（@原图，画面模板）');

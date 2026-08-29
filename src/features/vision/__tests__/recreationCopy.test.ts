@@ -135,13 +135,21 @@ describe('重新优化 / 重新开始 / 无可用视觉模型文案（V4.0.7）'
   });
 });
 
-describe('人物替换 / 服装来源 / 分析阶段文案（V4.1 视觉映射口径）', () => {
-  it('人物来源三种固定叫法（图片库 / 本地导入 / 文字描述，Segmented Control 短标签）', () => {
+describe('人物替换 / 服装来源 / 分析阶段文案（V6.3 紧凑分组口径）', () => {
+  it('身份来源三种固定叫法（图片库 / 本地导入 / 文字描述，Segmented Control 短标签）', () => {
     expect(PERSON_REPLACEMENT.sourceGallery).toBe('图片库');
     expect(PERSON_REPLACEMENT.sourceLocal).toBe('本地导入');
     expect(PERSON_REPLACEMENT.sourceDescription).toBe('文字描述');
+    expect(PERSON_REPLACEMENT.sourceLabel).toBe('身份来源');
     expect(PERSON_REPLACEMENT.removeButton).toBe('移除人物替换');
-    expect(PERSON_REPLACEMENT.changeButton).toBe('更换人物');
+    expect(PERSON_REPLACEMENT.changeButton).toBe('更换人物参考');
+  });
+
+  it('V6.3 四分组标签（主体 / 来源 / 执行范围 / 替换强度）', () => {
+    expect(PERSON_REPLACEMENT.groupSubject).toBe('主体');
+    expect(PERSON_REPLACEMENT.groupSource).toBe('来源');
+    expect(PERSON_REPLACEMENT.groupScope).toBe('执行范围');
+    expect(PERSON_REPLACEMENT.groupStrength).toBe('替换强度');
   });
 
   it('业务卡文案：人物替换是高优先级业务动作，区分画面模板与替换人物', () => {
@@ -159,11 +167,36 @@ describe('人物替换 / 服装来源 / 分析阶段文案（V4.1 视觉映射�
   it('服装来源三种策略 + 自定义输入（Segmented Control 短标签；默认值语义不变）', () => {
     expect(CLOTHING_POLICY.sectionLabel).toBe('服装来源');
     expect(CLOTHING_POLICY.preserveOriginal).toBe('原图服装');
-    expect(CLOTHING_POLICY.preserveOriginalHint).toContain('沿用原图服装');
     expect(CLOTHING_POLICY.useSubjectReference).toBe('人物服装');
-    expect(CLOTHING_POLICY.useSubjectReferenceHint).toContain('以人物参考图为准');
     expect(CLOTHING_POLICY.custom).toBe('自定义');
     expect(CLOTHING_POLICY.customInputLabel).toBe('服装描述');
+  });
+
+  it('V6.8 减法版：每个来源一句上下文提示（单句、不解释实现规则）', () => {
+    expect(CLOTHING_POLICY.preserveOriginalHint).toBe('保持原图服装不变。');
+    expect(CLOTHING_POLICY.useSubjectReferenceHint).toBe('将使用人物参考图中的服装。');
+    expect(CLOTHING_POLICY.customHint).toBe('描述希望替换的服装与造型。');
+    expect(CLOTHING_POLICY.customInputPlaceholder).toContain('描述');
+    // 单句铁律：以句号结尾且句中无第二个句号 / 分号
+    for (const hint of [
+      CLOTHING_POLICY.preserveOriginalHint,
+      CLOTHING_POLICY.useSubjectReferenceHint,
+      CLOTHING_POLICY.customHint,
+    ]) {
+      expect(hint.endsWith('。')).toBe(true);
+      expect(hint.split('。').filter(Boolean)).toHaveLength(1);
+      expect(hint).not.toContain('；');
+      expect(hint).not.toContain('维度');   // 实现规则（clothing 维度自动启停）不向用户解释
+      expect(hint).not.toContain('自动');
+    }
+  });
+
+  it('V6.8 服装参考 / 多人服装文案（参考仅自定义时可选；多人单行入口）', () => {
+    expect(CLOTHING_POLICY.referenceLabel).toBe('服装参考');
+    expect(CLOTHING_POLICY.referenceHintCustom).toContain('服装');
+    expect(CLOTHING_POLICY.multiLabel).toBe('多人服装');
+    expect(CLOTHING_POLICY.multiButton).toBe('分别设置');
+    expect(CLOTHING_POLICY.refCardNote).toContain('参考');
   });
 
   it('@图片引用与建议条文案（V4.0.9）', () => {

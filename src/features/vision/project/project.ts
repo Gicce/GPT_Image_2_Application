@@ -124,6 +124,9 @@ function normalizeWorkspace(workspace: VisualProjectWorkspace | undefined): Visu
     iterations: [],
     visionTaskId: '',
     sessionId: '',
+    // 保守恢复铁律：旧项目没有「新版显式确认」字段 = 素材替换未确认，
+    // 绝不凭旧 editState / 优化产物 / 已有素材配置反推完成
+    materialReplacementDone: false,
   };
   if (!workspace || typeof workspace !== 'object') return base;
   return {
@@ -168,6 +171,20 @@ export function normalizeVisualProject(project: VisualProject | null | undefined
       ? project.animeCharacter
       : undefined,
     enabledSkillIds: Array.isArray(project.enabledSkillIds) ? project.enabledSkillIds : undefined,
+    originSkill: project.originSkill && typeof project.originSkill === 'object'
+      && project.originSkill.skillId
+      ? {
+        skillId: String(project.originSkill.skillId),
+        skillName: String(project.originSkill.skillName ?? ''),
+        sourceProjectId: String(project.originSkill.sourceProjectId ?? ''),
+        sourceRevision: Number.isFinite(project.originSkill.sourceRevision) ? project.originSkill.sourceRevision : 0,
+        baselineFinalPrompt: String(project.originSkill.baselineFinalPrompt ?? ''),
+        baselineSections: Array.isArray(project.originSkill.baselineSections)
+          ? project.originSkill.baselineSections.map(String)
+          : [],
+        savedAt: String(project.originSkill.savedAt ?? ''),
+      }
+      : undefined,
     createdAt: project.createdAt || new Date().toISOString(),
     updatedAt: project.updatedAt || new Date().toISOString(),
     projectVersion: 1,
@@ -297,7 +314,9 @@ export type SemanticChangeReason =
   | 'rendering_contract'
   | 'template'
   | 'free_text'
-  | 'generation_result';
+  | 'generation_result'
+  /** V6.1：受限局部插图补充识别（只补实例的模板分析修复）。 */
+  | 'detail_insert_repair';
 
 /** 语义状态更新唯一入口（revision +1 由本函数裁决，组件不得自行累加）。 */
 export function updateVisualProjectSemanticState(
@@ -307,6 +326,23 @@ export function updateVisualProjectSemanticState(
 ): VisualProject {
   const next = mutate(project);
   return { ...next, revision: next.revision + 1, updatedAt: new Date().toISOString() };
+}
+
+/**
+ * 素材域语义修改后，「素材替换已确认」检查点失效（回到编辑 = 步骤回到进行中）。
+ * generation_result 不是素材编辑（生成不撤销素材确认）；其余语义 reason 全部失效。
+ */
+export function unconfirmMaterialReplacement(project: VisualProject): VisualProject {
+  if (!project.workspace?.materialReplacementDone) return project;
+  return {
+    ...project,
+    workspace: { ...project.workspace, materialReplacementDone: false },
+  };
+}
+
+/** 该语义 reason 是否属于素材/方案内容域（用于撤销素材替换完成确认）。 */
+export function isMaterialDomainReason(reason: SemanticChangeReason): boolean {
+  return reason !== 'generation_result';
 }
 
 /**

@@ -12,15 +12,17 @@ use crate::task_failure::{
 };
 use crate::RuntimeAuthState;
 
+/// Images generations 请求契约形状（deny_unknown_fields = 严格契约：
+/// 请求体新增任何字段必须同步更新这里与契约测试，防止被删参数悄悄回归）。
 #[derive(Debug, serde::Deserialize)]
 #[allow(dead_code)]
+#[serde(deny_unknown_fields)]
 struct ApiRequestBody {
     model: String,
     prompt: String,
     size: String,
     quality: String,
     output_format: String,
-    response_format: String,
     n: u32,
 }
 
@@ -36,7 +38,44 @@ struct ApiResponse {
     data: Vec<ApiResponseImage>,
 }
 
-fn extract_error_parts(text: &str) -> (Option<String>, Option<String>, Option<String>) {
+/// Images API 请求契约（V4.2 Contract Hotfix）：gpt-image-2 Provider 不接受
+/// `response_format`（HTTP 400 unknown_parameter），且无论是否传参都固定返回
+/// data[0].b64_json。因此请求一律不发送 response_format，响应继续解析 b64_json。
+/// 字段增删必须同步维护 tests 模块的契约测试。
+fn generations_request_body(
+    prompt: &str,
+    size: &str,
+    quality: &str,
+    output_format: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "model": "gpt-image-2",
+        "prompt": prompt,
+        "size": size,
+        "quality": quality,
+        "output_format": output_format,
+        "n": 1
+    })
+}
+
+/// edits multipart 的文本字段（image[] / mask 部件在调用方追加）。
+fn edits_text_fields(prompt: &str, size: &str) -> Vec<(&'static str, String)> {
+    vec![
+        ("model", "gpt-image-2".to_string()),
+        ("prompt", prompt.to_string()),
+        ("n", "1".to_string()),
+        ("size", size.to_string()),
+    ]
+}
+
+/// edits 源图部件名：多文件 image[] 语法（单/多参考图统一使用）。
+const EDITS_IMAGE_PART_NAME: &str = "image[]";
+
+/// 从上游错误正文提取 (primary 文案, code, request_id, error.type)。
+/// error.type 如 packy_invalid_request_error / packy_image_generation_user_error。
+fn extract_error_parts(
+    text: &str,
+) -> (Option<String>, Option<String>, Option<String>, Option<String>) {
     let parsed = serde_json::from_str::<serde_json::Value>(text).ok();
     if let Some(value) = parsed {
         let detail = value
@@ -64,6 +103,13 @@ fn extract_error_parts(text: &str) -> (Option<String>, Option<String>, Option<St
             .map(str::trim)
             .filter(|v| !v.is_empty())
             .map(str::to_string);
+        let error_type = value
+            .get("error")
+            .and_then(|v| v.get("type"))
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_string);
         let request_id = value
             .get("request_id")
             .or_else(|| value.get("requestId"))
@@ -75,17 +121,18 @@ fn extract_error_parts(text: &str) -> (Option<String>, Option<String>, Option<St
                 // packyapi 把 request id 埋在 body 文本里（无独立字段）
                 crate::task_failure::extract_request_id(text)
             });
-        return (detail, code, request_id);
+        return (detail, code, request_id, error_type);
     }
 
     let trimmed = text.trim();
     if trimmed.is_empty() {
-        (None, None, None)
+        (None, None, None, None)
     } else {
         (
             Some(trimmed.to_string()),
             None,
             crate::task_failure::extract_request_id(trimmed),
+            None,
         )
     }
 }
@@ -115,7 +162,7 @@ fn format_upstream_image_error_parts(
 }
 
 fn format_upstream_image_error(status: reqwest::StatusCode, text: &str, url: &str) -> String {
-    let (detail, code, _) = extract_error_parts(text);
+    let (detail, code, _, _) = extract_error_parts(text);
     let primary = detail
         .clone()
         .or_else(|| code.clone())
@@ -125,7 +172,7 @@ fn format_upstream_image_error(status: reqwest::StatusCode, text: &str, url: &st
 
 /// 上游非 2xx 失败 → 稳定展示文案 + 结构化快照（V4.1 canonical failure model）。
 fn upstream_image_failure(status: reqwest::StatusCode, text: &str, url: &str) -> TaskFailure {
-    let (detail, code, request_id) = extract_error_parts(text);
+    let (detail, code, request_id, error_type) = extract_error_parts(text);
     let primary = detail
         .clone()
         .or_else(|| code.clone())
@@ -136,6 +183,7 @@ fn upstream_image_failure(status: reqwest::StatusCode, text: &str, url: &str) ->
         code.as_deref(),
         &primary,
         request_id.as_deref(),
+        error_type.as_deref(),
         url,
     );
     TaskFailure { message, detail: Some(snapshot) }
@@ -652,18 +700,15 @@ async fn generate_single_image(
     task: &Task,
     index: usize,
 ) -> Result<ImageRecord, TaskFailure> {
-    let body = serde_json::json!({
-        "model": "gpt-image-2",
-        "prompt": compose_model_instruction(
+    let body = generations_request_body(
+        &compose_model_instruction(
             &effective_prompt(task, index),
             &effective_negative_prompt(task, index),
         ),
-        "size": task.size,
-        "quality": task.quality,
-        "output_format": task.output_format,
-        "response_format": "b64_json",
-        "n": 1
-    });
+        &task.size,
+        &task.quality,
+        &task.output_format,
+    );
 
     let url = ImageExecutionRoute::Generations.endpoint_url(base_url);
 
@@ -891,19 +936,18 @@ async fn edit_single_image(
         _ => None,
     };
 
+    let text_fields = edits_text_fields(&prompt_text, &size_text);
     let build_form = || {
-        let mut form = reqwest::multipart::Form::new()
-            .text("model", "gpt-image-2")
-            .text("prompt", prompt_text.clone())
-            .text("n", "1")
-            .text("size", size_text.clone())
-            .text("response_format", "b64_json");
+        let mut form = reqwest::multipart::Form::new();
+        for (name, value) in &text_fields {
+            form = form.text(*name, value.clone());
+        }
         for (file_name, bytes, mime) in &image_parts {
             let part = reqwest::multipart::Part::bytes(bytes.clone())
                 .file_name(file_name.clone())
                 .mime_str(mime)
                 .unwrap();
-            form = form.part("image[]", part);
+            form = form.part(EDITS_IMAGE_PART_NAME, part);
         }
         if let Some(bytes) = &mask_bytes {
             let part = reqwest::multipart::Part::bytes(bytes.clone())
@@ -984,7 +1028,8 @@ async fn edit_single_image(
 mod tests {
     use super::{
         format_upstream_image_error, is_frontend_driven_task, resolve_execution_route,
-        ImageExecutionRoute,
+        ApiRequestBody, ImageExecutionRoute, EDITS_IMAGE_PART_NAME, edits_text_fields,
+        extract_error_parts, generations_request_body,
     };
     use crate::models::{SubTask, Task};
 
@@ -1105,5 +1150,79 @@ mod tests {
         assert!(message.contains("[code: text_conversation_not_supported]"));
         assert!(message.contains("[endpoint: https://www.packyapi.com/v1/images/edits]"));
         assert!(message.contains("(HTTP 400)"));
+    }
+
+    /// V4.2 Contract Hotfix 防回归：gpt-image-2 Provider 不接受这些参数
+    /// （response_format 实测 HTTP 400 unknown_parameter），任何一个重新进入
+    /// Images API 请求都会直接打挂正式链路。
+    const FORBIDDEN_IMAGE_API_PARAMS: [&str; 5] = [
+        "response_format",
+        "stream",
+        "partial_images",
+        "style",
+        "input_fidelity",
+    ];
+
+    #[test]
+    fn generations_body_contract_locks_allowed_and_forbidden_fields() {
+        let body = generations_request_body("a red apple", "1024x1024", "low", "png");
+        for key in ["model", "prompt", "size", "quality", "output_format", "n"] {
+            assert!(
+                body.get(key).is_some(),
+                "generations 请求体缺少必需字段 {key}"
+            );
+        }
+        for key in FORBIDDEN_IMAGE_API_PARAMS {
+            assert!(
+                body.get(key).is_none(),
+                "generations 请求体禁止出现 {key}（Provider 会 400 unknown_parameter）"
+            );
+        }
+        // 严格反序列化：deny_unknown_fields 保证请求体新增字段必须显式过契约
+        let parsed: ApiRequestBody =
+            serde_json::from_value(body).expect("generations 请求体违反严格契约");
+        assert_eq!(parsed.model, "gpt-image-2");
+        assert_eq!(parsed.n, 1);
+    }
+
+    #[test]
+    fn generations_body_contract_rejects_response_format_regression() {
+        // 模拟回归：有人把 response_format 加回请求体 -> 严格契约必须报错
+        let mut body = generations_request_body("p", "1024x1024", "low", "png");
+        body["response_format"] = serde_json::json!("b64_json");
+        let parsed: Result<ApiRequestBody, _> = serde_json::from_value(body);
+        assert!(parsed.is_err(), "response_format 不允许重新进入 generations 请求体");
+    }
+
+    #[test]
+    fn edits_form_contract_locks_text_fields_and_image_part_name() {
+        let fields = edits_text_fields("repaint", "1024x1024");
+        let names: Vec<&str> = fields.iter().map(|(name, _)| *name).collect();
+        for key in ["model", "prompt", "n", "size"] {
+            assert!(
+                names.contains(&key),
+                "edits multipart 文本字段缺少必需字段 {key}"
+            );
+        }
+        for key in FORBIDDEN_IMAGE_API_PARAMS {
+            assert!(
+                !names.contains(&key),
+                "edits multipart 禁止出现 {key}（Provider 会 400 unknown_parameter）"
+            );
+        }
+        // image[] 多文件部件名（单/多参考图统一），防止被误改为单数 image
+        assert_eq!(EDITS_IMAGE_PART_NAME, "image[]");
+    }
+
+    #[test]
+    fn extract_error_parts_captures_provider_error_type() {
+        let body = r#"{"error":{"type":"packy_invalid_request_error","code":"unknown_parameter","message":"Unknown parameter: response_format"}}"#;
+        let (detail, code, _request_id, error_type) = extract_error_parts(body);
+        assert_eq!(detail.as_deref(), Some("Unknown parameter: response_format"));
+        assert_eq!(code.as_deref(), Some("unknown_parameter"));
+        assert_eq!(
+            error_type.as_deref(),
+            Some("packy_invalid_request_error")
+        );
     }
 }

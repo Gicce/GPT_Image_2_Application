@@ -13,15 +13,18 @@ import { MODIFICATION_CHIP_DEFS, REPLICATION_BOOST_LABEL, type ModificationDraft
 interface ModificationChipsProps {
   draft: ModificationDraft;
   disabled?: boolean;
+  /** 当前修改要求自动识别出的维度（展示辅助；activeDimensions 仍是执行事实源）。 */
+  autoDetectedDimensions?: ReadonlyArray<ModificationDimension>;
   onToggleDimension: (key: ModificationDimension) => void;
   onToggleBoost: () => void;
 }
 
-export default function ModificationChips({ draft, disabled, onToggleDimension, onToggleBoost }: ModificationChipsProps) {
+export default function ModificationChips({ draft, disabled, autoDetectedDimensions, onToggleDimension, onToggleBoost }: ModificationChipsProps) {
   return (
     <div className="vision-intent-chips" role="group" aria-label="快捷修改维度">
       {MODIFICATION_CHIP_DEFS.map(chip => {
         const active = draft.activeDimensions.includes(chip.key);
+        const autoDetected = autoDetectedDimensions?.includes(chip.key) ?? false;
         return (
           <button
             key={chip.key}
@@ -32,6 +35,7 @@ export default function ModificationChips({ draft, disabled, onToggleDimension, 
             onClick={() => onToggleDimension(chip.key)}
           >
             {active ? `✓ ${chip.label}` : chip.label}
+            {active && autoDetected && <span className="vision-intent-chip-source">自动</span>}
           </button>
         );
       })}

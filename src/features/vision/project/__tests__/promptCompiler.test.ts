@@ -160,18 +160,21 @@ describe('mergeFinalGenerationPrompt（分层合同编译）', () => {
     project = updateVisualProjectSemanticState(project, 'regions', draft => ({
       ...draft,
       regions: [region],
-      references: [{ id: 'ref-1', path: 'D:/imgs/person.png', label: '人物参考', kind: 'person', source: 'local_import' }],
+      references: [{ id: 'ref-1', path: 'D:/imgs/person-b.png', label: '人物 B', kind: 'person', source: 'local_import' }],
     }));
     const compiled = mergeFinalGenerationPrompt({
       project,
       finalDescription: 'X',
-      imageReferences: refs,
+      imageReferences: [
+        ...refs,
+        { path: 'D:/imgs/person-b.png', label: '人物 B', role: 'generic_reference' },
+      ],
       personReplacementEnabled: false,
     });
     expect(compiled.prompt).toContain('【区域编辑合同（共 1 个区域）】');
     expect(compiled.prompt).toContain('区域1（区域 1）');
     expect(compiled.prompt).toContain('左侧');
-    expect(compiled.prompt).toContain('替换对象=@人物参考');
+    expect(compiled.prompt).toContain('替换对象=图片3（@人物 B，人物身份以该参考为准）');
     expect(compiled.prompt).toContain('范围=脸部');
     expect(compiled.prompt).toContain('区域外画面严格保持画面模板不变');
   });

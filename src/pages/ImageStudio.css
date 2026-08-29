@@ -39,46 +39,6 @@
   letter-spacing: 0.02em;
 }
 
-/* Segmented Control：轨道 = surface.section，选中 = 卡片浮起 + 品牌文字（Medium 档） */
-.studio-seg {
-  display: inline-flex;
-  gap: 4px;
-  padding: 3px;
-  border: 1px solid var(--border-light);
-  border-radius: 8px;
-  background: var(--bg-section);
-}
-
-.studio-seg-btn {
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
-  padding: 6px 16px;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 13px;
-  font-family: inherit;
-  line-height: 1.4;
-  transition: background 0.12s ease, color 0.12s ease;
-}
-
-.studio-seg-btn:hover {
-  color: var(--text-primary);
-}
-
-.studio-seg-btn.active {
-  background: var(--bg-card);
-  color: var(--accent-primary-text);
-  font-weight: 600;
-  /* light：卡片阴影浮起；dark（--card-shadow: none）：内描边仍提供清晰边缘 */
-  box-shadow: var(--card-shadow), inset 0 0 0 1px var(--border-light);
-}
-
-.studio-seg-btn:focus-visible {
-  outline: 2px solid var(--accent-primary);
-  outline-offset: 1px;
-}
-
 .studio-mode-meta {
   margin-left: auto;
   align-self: flex-end;
@@ -647,6 +607,51 @@
   white-space: nowrap;
 }
 
+.studio-req-stale {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--badge-warn-bg);
+  color: var(--badge-warn-text);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.studio-visual-understanding {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: var(--bg-card);
+}
+
+.studio-visual-understanding > div {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+}
+
+.studio-visual-understanding strong {
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.studio-visual-understanding p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.studio-visual-understanding .warning strong,
+.studio-visual-understanding .warning p {
+  color: var(--badge-warn-text);
+}
+
 .studio-req-result-actions {
   display: flex;
   gap: 8px;
@@ -720,6 +725,105 @@
   color: var(--badge-muted-text);
   font-size: 10px;
   letter-spacing: 0.03em;
+}
+
+.studio-media-role {
+  position: absolute;
+  left: 4px;
+  top: 4px;
+  max-width: calc(100% - 32px);
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--bg-overlay);
+  color: var(--text-on-accent);
+  font-size: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* V6.2 语义参考：计划图片徽标（语义标签 + 🔒，角色由方案冻结） */
+.studio-media-role.is-plan {
+  background: var(--accent-primary);
+  color: var(--text-on-accent);
+}
+
+.studio-media-role-lock {
+  margin-right: 2px;
+  font-size: 9px;
+}
+
+/* 手动图片 ⋯ 用途菜单 */
+.studio-media-more-wrap {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+}
+
+.studio-media-more {
+  width: 24px;
+  height: 22px;
+  border: none;
+  border-radius: 6px;
+  background: var(--bg-overlay);
+  color: var(--text-on-accent);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.studio-media-more:hover {
+  background: var(--accent-primary);
+  color: var(--text-on-accent);
+}
+
+.studio-media-role-menu {
+  position: absolute;
+  right: 0;
+  bottom: 26px;
+  z-index: 60;
+  min-width: 148px;
+}
+
+/* 方案参考摘要行（模板图：@xx · 人物参考：@yy） */
+.studio-plan-refs-summary {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+/* V6.2 Skill Direct Session banner */
+.studio-skill-session {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+  padding: 10px 14px;
+  border: 1px solid var(--accent-primary);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent-primary) 10%, var(--bg-card));
+}
+
+.studio-skill-session-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.studio-skill-session-text b {
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.studio-skill-session-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 /* 移除 = secondary danger：默认 neutral 遮罩圆钮，Hover 才 danger */
@@ -868,48 +972,6 @@
 .studio-dropzone.drag-active .studio-dropzone-title,
 .studio-dropzone.drag-active .studio-dropzone-icon {
   color: var(--accent-primary-text);
-}
-
-.studio-gallery-modal {
-  max-width: 720px;
-}
-
-.studio-gallery-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
-  gap: 10px;
-}
-
-.studio-gallery-cell {
-  border: 1px solid var(--border-light);
-  border-radius: 8px;
-  background: transparent;
-  cursor: pointer;
-  padding: 6px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  align-items: center;
-}
-
-.studio-gallery-cell:hover {
-  border-color: var(--accent-primary);
-}
-
-.studio-gallery-cell img {
-  width: 100%;
-  aspect-ratio: 1;
-  object-fit: cover;
-  border-radius: 6px;
-}
-
-.studio-gallery-cell span {
-  font-size: 11px;
-  color: var(--text-muted);
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 /* ===== TaskSidebar：摘要 + 最近任务（同一卡片容器，sticky 跟随） ===== */
@@ -1246,3 +1308,4 @@
     flex-wrap: wrap;
   }
 }
+.studio-media-role-select{position:absolute;left:6px;right:6px;bottom:6px;width:calc(100% - 12px);height:28px;padding:0 6px;border:1px solid var(--border-light);border-radius:6px;background:var(--bg-card);color:var(--text-primary);font-size:11px}.studio-media-tile:has(.studio-media-role-select) .studio-media-role{bottom:39px}

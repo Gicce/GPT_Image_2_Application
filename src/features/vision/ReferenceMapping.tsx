@@ -1,16 +1,21 @@
 /**
- * ReferenceMapping（V4.1）——人物替换的视觉映射主体：
+ * ReferenceMapping（V6.3 / V6.8 版）——人物替换的视觉映射主体（「主体」分组）：
  *
  *   [画面模板 @原图]  →  [替换人物 @人物参考]
+ *                          [图片库更换][本地导入][文字描述]（卡下方整列宽）
  *
- * 双栏卡片 + 中央替换箭头；窄屏（<720px）纵向堆叠。
+ * 双栏卡片 + 中央替换箭头；窄屏（<720px）纵向堆叠。卡片为紧凑横排
+ * （缩略图左 150px + 信息右，预览 120-160px；大图交给全局 ImageViewer）。
  *  - 模板卡：缩略图 + @原图 token + 文件名小字（tooltip 全路径）+ 更换模板；
- *  - 人物卡：空态选择块（＋ 选择人物参考）/ 图片卡（标题「人物参考」、文件名小字、
- *    更换人物）/ 文字描述卡（摘要 + 更换）——「已选 + 大空选择入口」绝不并存。
+ *  - 人物卡：空态选择块（＋ 选择人物参考）/ 图片卡（标题「人物参考」、文件名小字）/
+ *    文字描述卡（摘要）——「已选 + 大空选择入口」绝不并存；
+ *  - 来源菜单（图片库 / 本地导入 / 文字描述）固定在人物卡下方的独立行，
+ *    绝不进入卡片内部宽度计算（V6.8 §三：边框归卡根所有，内部节点无边框）。
  * 缩略图点击进全局 ImageViewer；卡内按钮是普通 secondary action。
  */
 
 import { useImageViewerStore } from '../../store/useImageViewerStore';
+import type { ReactNode } from 'react';
 import { PERSON_REPLACEMENT } from './recreationCopy';
 import { personHasImage, type PersonReplacement } from './modificationIntent';
 import { useThumb } from './usePersonThumb';
@@ -20,11 +25,9 @@ interface ReferenceMappingProps {
   template?: PersonPanelTemplate | null;
   person: PersonReplacement | null;
   disabled?: boolean;
+  /** 右侧人物卡内的图片库 / 本地导入 / 文字描述直接入口。 */
+  sourceControls?: ReactNode;
   onTemplateChange?: () => void;
-  /** 空态选择块点击（默认进图片库）。 */
-  onPickPerson: () => void;
-  /** 已有人物时点「更换人物」进入选择态。 */
-  onChangePerson: () => void;
 }
 
 function fileNameOf(path: string | undefined): string {
@@ -35,9 +38,8 @@ export default function ReferenceMapping({
   template,
   person,
   disabled,
+  sourceControls,
   onTemplateChange,
-  onPickPerson,
-  onChangePerson,
 }: ReferenceMappingProps) {
   const templateThumb = useThumb(template?.path);
   const hasImage = personHasImage(person);
@@ -148,14 +150,6 @@ export default function ReferenceMapping({
                 {person.source === 'gallery' ? PERSON_REPLACEMENT.personCardSourceGallery : PERSON_REPLACEMENT.personCardSourceLocal}
                 {' · '}{person.label || fileNameOf(person.path)}
               </p>
-              <button
-                type="button"
-                className="vision-btn vision-btn-sm"
-                disabled={disabled}
-                onClick={onChangePerson}
-              >
-                {PERSON_REPLACEMENT.changeButton}
-              </button>
             </div>
           </div>
         ) : person?.source === 'description' ? (
@@ -166,28 +160,19 @@ export default function ReferenceMapping({
             <div className="vision-person-map-meta">
               <p className="vision-person-map-token">{PERSON_REPLACEMENT.personTextCardTitle}</p>
               <p className="vision-person-map-desc" title={person.description}>{person.description}</p>
-              <button
-                type="button"
-                className="vision-btn vision-btn-sm"
-                disabled={disabled}
-                onClick={onChangePerson}
-              >
-                {PERSON_REPLACEMENT.changeButton}
-              </button>
             </div>
           </div>
         ) : (
-          <button
-            type="button"
-            className="vision-person-map-card is-empty"
-            disabled={disabled}
-            onClick={onPickPerson}
-          >
-            <span className="vision-person-pick-plus" aria-hidden="true">＋</span>
-            <span className="vision-person-map-empty-label">{PERSON_REPLACEMENT.personEmptyAction}</span>
-            <span className="vision-person-map-empty-hint">{PERSON_REPLACEMENT.personEmptyHint}</span>
-          </button>
+          <div className="vision-person-map-card is-empty" aria-live="polite">
+            <div className="vision-person-map-empty-copy">
+              <span className="vision-person-map-empty-label">{PERSON_REPLACEMENT.personEmptyAction}</span>
+              <span className="vision-person-map-empty-hint">从下方选择人物来源</span>
+            </div>
+          </div>
         )}
+        {/* 来源入口（V6.8 §三）：锚定在人物卡下方、占整列宽度——
+            不参与卡内宽度计算、不挤压信息区；卡根独占边框/圆角/底色/内边距 */}
+        {sourceControls && <div className="vision-person-map-source-row">{sourceControls}</div>}
       </div>
     </div>
   );

@@ -5,20 +5,72 @@ import {
   buildModificationInstruction,
   clearPersonReplacement,
   clothingPolicyInstruction,
+  detectExplicitModificationDimensions,
   describePerson,
   dimensionDirectiveInstruction,
   hasStructuredIntent,
   isModificationDraftEmpty,
   migrateModificationDraft,
   personHasImage,
+  readDimensionRequirement,
   setPersonReplacement,
   toggleModificationDimension,
   toggleReplicationBoost,
+  writeDimensionRequirement,
   type ModificationDraft,
 } from '../modificationIntent';
 import { getVisualAnalysisMessage } from '../recreationCopy';
 
 const empty = (): ModificationDraft => ({ ...EMPTY_MODIFICATION_DRAFT });
+
+describe('Prompt 自动勾选（纯前端辅助）', () => {
+  it('只勾选用户明确要求修改的维度，保持项不误选', () => {
+    expect(detectExplicitModificationDimensions(
+      '把人物换成银发女生，穿黑色夹克，背景改成夜晚街道，动作保持不变',
+    )).toEqual(['subject', 'clothing', 'scene']);
+  });
+
+  it('镜头、风格和动作可组合识别；空文本不产生选择', () => {
+    expect(detectExplicitModificationDimensions('动作改成奔跑，镜头切换成俯拍，整体改为水彩风格'))
+      .toEqual(['pose', 'camera', 'style']);
+    expect(detectExplicitModificationDimensions('')).toEqual([]);
+  });
+});
+
+describe('维度配置卡与自由文本同源', () => {
+  it('动作 / 背景要求按独立行写入、更新和移除，不覆盖用户其它原话', () => {
+    let text = '把人物换成银发女生';
+    text = writeDimensionRequirement(text, 'pose', '双手抱胸站立');
+    text = writeDimensionRequirement(text, 'scene', '夜晚霓虹街道');
+    expect(readDimensionRequirement(text, 'pose')).toBe('双手抱胸站立');
+    expect(readDimensionRequirement(text, 'scene')).toBe('夜晚霓虹街道');
+    expect(text).toContain('把人物换成银发女生');
+    text = writeDimensionRequirement(text, 'pose', '挥手奔跑');
+    expect(text.match(/动作要求：/g)).toHaveLength(1);
+    expect(readDimensionRequirement(text, 'pose')).toBe('挥手奔跑');
+    expect(writeDimensionRequirement(text, 'scene', '')).not.toContain('背景要求：');
+  });
+
+  it('维度参考图职责进入合成修改指令', () => {
+    const draft: ModificationDraft = {
+      ...empty(),
+      activeDimensions: ['pose', 'scene', 'style', 'clothing'],
+      clothingPolicy: 'custom',
+      customClothing: '参照服装图',
+      extraImageRefs: [
+        { path: 'D:/pose.png', label: '动作图', purpose: 'pose' },
+        { path: 'D:/bg.png', label: '背景图', purpose: 'scene' },
+        { path: 'D:/style.png', label: '风格图', purpose: 'style' },
+        { path: 'D:/clothes.png', label: '服装图', purpose: 'clothing' },
+      ],
+    };
+    const instruction = buildModificationInstruction(draft);
+    expect(instruction).toContain('动作参考图：以「动作图」');
+    expect(instruction).toContain('背景参考图：以「背景图」');
+    expect(instruction).toContain('风格参考图：以「风格图」');
+    expect(instruction).toContain('服装参考图：以「服装图」');
+  });
+});
 
 describe('Modification Dimension Selector（结构化维度选择器）', () => {
   it('维度 toggle：激活 → 唯一槽位；再次点击 → 取消（永远不产生重复槽位）', () => {

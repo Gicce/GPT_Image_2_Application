@@ -147,3 +147,42 @@ export function applyDetailInsertInstances(
   });
   return { ...snapshot, mediaStructure: { ...media, regions } };
 }
+
+/** 单层提取结果（IO 层产出；instances 为空/null = 该层识别失败，绝不清空旧分析）。 */
+export interface DetailInsertRepairInput {
+  regionId: string;
+  instances: Array<Pick<DetailInsertInstance, 'label' | 'cropType' | 'mediaType'> & Partial<DetailInsertInstance>> | null;
+}
+
+export interface DetailInsertRepairOutcome {
+  /** 合并后的模板快照（repaired = 0 时与入参同一引用，绝不产出半成品）。 */
+  snapshot: VisualTemplateSnapshot;
+  repaired: number;
+  failed: number;
+  /** 合并后全项目的实例计数（成功提示 / Rail 展示口径）。 */
+  after: InsertInstanceCounts;
+}
+
+/**
+ * 受限补充识别的合并唯一入口（纯函数；页面只负责逐层调用视觉提取 IO）：
+ *  - 只通过 applyDetailInsertInstances 碰 regions[].instances；
+ *  - 全部失败（repaired = 0）⇒ 原快照原样返回（旧分析绝不丢失）；
+ *  - 部分失败 ⇒ 已成功层照常合入（下次只补剩余层）。
+ */
+export function mergeDetailInsertRepairResults(
+  snapshot: VisualTemplateSnapshot,
+  results: DetailInsertRepairInput[],
+): DetailInsertRepairOutcome {
+  let merged = snapshot;
+  let repaired = 0;
+  let failed = 0;
+  for (const result of results) {
+    if (result.instances && result.instances.length > 0) {
+      merged = applyDetailInsertInstances(merged, result.regionId, result.instances);
+      repaired += 1;
+    } else {
+      failed += 1;
+    }
+  }
+  return { snapshot: merged, repaired, failed, after: countInsertInstances(merged.mediaStructure) };
+}

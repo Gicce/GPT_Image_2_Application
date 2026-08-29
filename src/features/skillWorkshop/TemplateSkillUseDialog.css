@@ -1,0 +1,412 @@
+/* ============================================================
+   模板复用 Skill 使用弹窗（V6）
+   结构：overlay > dialog(grid: header / body 滚动 / footer 固定)
+   Token 全部来自 App.css var(--*)；滚动只发生在 .skill-use-body。
+   ============================================================ */
+
+.skill-use-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: var(--bg-overlay);
+}
+
+.skill-use-dialog {
+  width: min(760px, calc(100vw - 32px));
+  max-height: min(720px, calc(100vh - 32px));
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  border-radius: 16px;
+  box-shadow: var(--card-shadow);
+}
+
+/* ---------- 固定头部 ---------- */
+.skill-use-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 20px;
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--border-default);
+}
+
+.skill-use-header h2 { margin: 0 0 4px; font-size: 18px; }
+.skill-use-header p { margin: 0; color: var(--text-muted); font-size: 12px; }
+
+/* ---------- 可滚正文 ---------- */
+.skill-use-body {
+  overflow-y: auto;
+  min-height: 0;
+  padding: 14px 24px 20px;
+  display: grid;
+  gap: 14px;
+  align-content: start;
+}
+
+/* ---------- 槽位卡片 ---------- */
+.skill-use-slot {
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.skill-use-slot > header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.skill-use-slot h4 { margin: 0; font-size: 14px; display: flex; align-items: center; gap: 8px; }
+
+.skill-use-badge {
+  font-size: 10px;
+  line-height: 1;
+  padding: 3px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+  background: var(--badge-muted-bg);
+  color: var(--badge-muted-text);
+}
+
+.skill-use-badge.is-fixed { background: var(--badge-info-bg); color: var(--badge-info-text); }
+.skill-use-badge.is-ok { background: var(--badge-success-bg); color: var(--badge-success-text); }
+.skill-use-badge.is-checking { background: var(--badge-muted-bg); color: var(--badge-muted-text); }
+.skill-use-badge.is-missing { background: var(--badge-danger-bg); color: var(--badge-danger-text); }
+
+.skill-use-hint { font-size: 12px; color: var(--text-muted); }
+
+.skill-use-asset {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+}
+
+.skill-use-asset.is-empty {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  padding: 6px 0 0;
+}
+
+.skill-use-asset.is-empty p { margin: 0; color: var(--text-secondary); font-size: 13px; }
+.skill-use-asset.is-empty .skill-use-asset-ops { justify-content: flex-start; }
+
+.skill-use-thumb {
+  width: 72px;
+  height: 72px;
+  object-fit: cover;
+  border-radius: 8px;
+  cursor: zoom-in;
+  display: block;
+}
+
+.skill-use-thumb.is-placeholder {
+  display: grid;
+  place-items: center;
+  background: var(--bg-card-alt);
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.skill-use-asset-meta { display: grid; gap: 6px; min-width: 0; }
+
+.skill-use-asset-meta b {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skill-use-asset-meta p { margin: 0; color: var(--text-muted); font-size: 12px; }
+
+.skill-use-asset-ops { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+
+.skill-use-warn {
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--badge-danger-bg);
+  color: var(--badge-danger-text);
+  font-size: 12px;
+}
+
+/* ---------- V6.3 Preflight Status Card（四态高可见：ready/repairable/needs_input/blocked） ---------- */
+.skill-use-status {
+  border-radius: 10px;
+  padding: 12px 14px;
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--border-default);
+  background: var(--bg-card-alt);
+}
+
+.skill-use-status > header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.skill-use-status h4 { margin: 0; font-size: 14px; }
+
+.skill-use-status-note { font-size: 11px; color: var(--text-muted); }
+
+.skill-use-status ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 8px;
+}
+
+.skill-use-status li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.skill-use-status li b {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+  background: var(--badge-muted-bg);
+  color: var(--badge-muted-text);
+}
+
+/* Ready：绿色确认 + 就绪清单（✓ 行内联，逐项可读） */
+.skill-use-status.is-ready {
+  border-color: var(--badge-success-border, var(--border-default));
+  background: var(--badge-success-bg);
+}
+
+.skill-use-status.is-ready h4 { color: var(--badge-success-text); }
+
+.skill-use-status-checklist {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.skill-use-status-checklist li { font-size: 12px; color: var(--text-secondary); }
+
+.skill-use-status-checklist li.is-ok { color: var(--badge-success-text); }
+
+.skill-use-status-checklist li.is-ok::before { content: '✓ '; }
+
+/* Repairable / Needs input：橙色高可见（用户当前操作焦点，绝不藏进说明小字） */
+.skill-use-status.is-repairable,
+.skill-use-status.is-needs_input {
+  border-color: var(--accent-orange);
+  background: color-mix(in srgb, var(--accent-orange) 10%, var(--bg-card));
+}
+
+.skill-use-status.is-repairable h4,
+.skill-use-status.is-needs_input h4 { color: var(--accent-orange); }
+
+.skill-use-status-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.skill-use-status-actions .app-btn {
+  font-weight: 600;
+}
+
+/* Blocked：红色阻断（方案级问题，唯一出口 = 工作台） */
+.skill-use-status.is-blocked {
+  border-color: var(--badge-danger-border, var(--border-default));
+  background: var(--badge-danger-bg);
+}
+
+.skill-use-status.is-blocked h4 { color: var(--badge-danger-text); }
+
+.skill-use-status-hint { margin: 0; font-size: 12px; color: var(--text-muted); }
+
+/* ---------- Slot Contract V2：combined slot 用途徽标 + 服装文本槽 ---------- */
+.skill-use-badge.is-usage {
+  background: var(--accent-primary-light);
+  color: var(--accent-primary-text);
+}
+
+.skill-use-badge.is-required {
+  background: color-mix(in srgb, var(--accent-orange) 16%, transparent);
+  color: var(--accent-orange);
+}
+
+.skill-use-clothing-text {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--border-input);
+  border-radius: 9px;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 13px;
+  background: var(--bg-card);
+  color: var(--text-primary);
+  resize: vertical;
+}
+
+/* ---------- V6.2 内嵌 Repair（与视觉工作台 Rail 同一执行体） ---------- */
+.skill-use-repair {
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  padding: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.skill-use-repair > header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.skill-use-repair h4 { margin: 0; font-size: 14px; }
+.skill-use-repair p { margin: 0; font-size: 12px; color: var(--text-secondary); }
+.skill-use-repair-note { color: var(--text-muted); }
+
+.skill-use-repair-done { color: var(--badge-success-text); }
+.skill-use-repair-failed { color: var(--badge-danger-text); }
+
+/* indeterminate 进度条：模型调用无 token 级进度，禁止伪造百分比 */
+.skill-use-repair-bar {
+  height: 4px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--bg-card-alt);
+  position: relative;
+}
+
+.skill-use-repair-bar::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 34%;
+  border-radius: 999px;
+  background: var(--accent-primary);
+  animation: skill-use-repair-slide 1.4s ease-in-out infinite;
+}
+
+@keyframes skill-use-repair-slide {
+  0% { left: -34%; }
+  100% { left: 100%; }
+}
+
+.skill-use-badge.is-repair-running { background: var(--badge-info-bg); color: var(--badge-info-text); }
+.skill-use-badge.is-repair-success { background: var(--badge-success-bg); color: var(--badge-success-text); }
+.skill-use-badge.is-repair-cancelled { background: var(--badge-muted-bg); color: var(--badge-muted-text); }
+.skill-use-badge.is-repair-error { background: var(--badge-danger-bg); color: var(--badge-danger-text); }
+
+/* ---------- 方案概要 ---------- */
+.skill-use-summary {
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.skill-use-summary h4 { margin: 0; font-size: 14px; }
+
+.skill-use-summary dl {
+  margin: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.skill-use-summary dl > div {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 10px;
+  align-items: baseline;
+}
+
+.skill-use-summary dt { font-size: 12px; color: var(--text-muted); }
+.skill-use-summary dd { margin: 0; font-size: 13px; color: var(--text-secondary); word-break: break-word; }
+
+/* ---------- 基线 Prompt ---------- */
+.skill-use-baseline { display: grid; gap: 8px; }
+
+.skill-use-baseline-toggle {
+  justify-self: start;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent-primary-text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.skill-use-baseline-toggle:hover { text-decoration: underline; }
+
+.skill-use-baseline-text {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--border-input);
+  border-radius: 9px;
+  padding: 10px 12px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 400;
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  resize: vertical;
+  white-space: pre-wrap;
+}
+
+/* ---------- 固定底部 ---------- */
+.skill-use-footer {
+  display: grid;
+  gap: 10px;
+  padding: 12px 24px;
+  border-top: 1px solid var(--border-light);
+  background: var(--bg-card);
+}
+
+.skill-use-error {
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--badge-danger-bg);
+  color: var(--badge-danger-text);
+  font-size: 12px;
+}
+
+.skill-use-footer-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.skill-use-footer-group { display: flex; gap: 10px; }
+
+.skill-use-note { font-size: 12px; color: var(--text-muted); }
+
+/* ---------- 小屏 ---------- */
+@media (max-width: 720px) {
+  .skill-use-overlay { padding: 12px; }
+  .skill-use-dialog { width: calc(100vw - 24px); max-height: calc(100vh - 24px); }
+  .skill-use-body { padding: 12px 16px 16px; }
+  .skill-use-header { padding: 12px 16px; }
+  .skill-use-footer { padding: 10px 16px; }
+  .skill-use-asset { grid-template-columns: auto minmax(0, 1fr); }
+  .skill-use-asset-ops { grid-column: 1 / -1; justify-content: flex-start; }
+}

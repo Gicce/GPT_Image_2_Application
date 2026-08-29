@@ -1,11 +1,8 @@
 /**
- * CharacterSourcePicker（V4.1）——人物来源 Segmented Control + 分来源入口。
+ * CharacterSourcePicker（V6.4 直接入口版）——替换人物卡内的三种身份来源操作。
  *
- * 只在选择人物阶段可见（未选 / 更换中 / 文字描述编辑中）：
- *  - 图片库 → 空态选择块（点击开图库弹层）；
- *  - 本地导入 → 空态选择块（点击开系统文件选择）；
- *  - 文字描述 → textarea（输入即创建 / 更新描述人物，本地防抖后走语义通道）。
- * 已选择图片人物时整个区块隐藏（卡片 + 更换人物 二选一，禁止“已选 + 大空选择框”并存）。
+ * 图片库 / 本地导入点击即进入原有选择流程；文字描述在同一卡片内原位展开。
+ * 来源按钮只改变选择视图，真正选中图片或输入描述后才走语义回调。
  */
 
 import { useRef } from 'react';
@@ -22,8 +19,8 @@ interface CharacterSourcePickerProps {
   person: PersonReplacement | null;
   activeTab: PersonSource;
   disabled?: boolean;
-  /** 更换中（已有图片人物、点「更换人物」进入选择态）时显示取消按钮。 */
-  picking: boolean;
+  /** 兼容旧调用；直接入口版不再需要额外“更换中”页面。 */
+  picking?: boolean;
   onCancelPick?: () => void;
   onTabChange: (tab: PersonSource) => void;
   onGalleryPick: () => void;
@@ -36,8 +33,6 @@ export default function CharacterSourcePicker({
   person,
   activeTab,
   disabled,
-  picking,
-  onCancelPick,
   onTabChange,
   onGalleryPick,
   onLocalPick,
@@ -52,53 +47,26 @@ export default function CharacterSourcePicker({
 
   return (
     <div className="vision-person-source">
-      <div className="vision-person-block-head">
-        <span className="vision-person-label">{PERSON_REPLACEMENT.sourceLabel}</span>
-        {picking && onCancelPick && (
-          <button
-            type="button"
-            className="vision-btn vision-btn-sm vision-person-source-cancel"
-            disabled={disabled}
-            onClick={onCancelPick}
-          >
-            {PERSON_REPLACEMENT.cancelPickButton}
-          </button>
-        )}
-      </div>
-      <div className="vision-person-seg" role="tablist" aria-label={PERSON_REPLACEMENT.sourceLabel}>
+      <div className="vision-person-source-actions" role="group" aria-label={PERSON_REPLACEMENT.sourceLabel}>
         {PERSON_SOURCE_TABS.map(tab => (
           <button
             key={tab.key}
             type="button"
-            role="tab"
-            aria-selected={activeTab === tab.key}
-            className={`vision-person-seg-btn${activeTab === tab.key ? ' active' : ''}`}
+            aria-pressed={activeTab === tab.key}
+            className={`app-btn app-btn-secondary app-btn-sm vision-person-source-action${activeTab === tab.key ? ' active' : ''}`}
             disabled={disabled}
-            onClick={() => onTabChange(tab.key)}
+            onClick={() => {
+              onTabChange(tab.key);
+              if (tab.key === 'gallery') onGalleryPick();
+              if (tab.key === 'local') onLocalPick();
+            }}
           >
-            {tab.label}
+            {tab.key === 'gallery' ? PERSON_REPLACEMENT.galleryChangeButton
+              : tab.key === 'local' ? PERSON_REPLACEMENT.localChangeButton
+                : PERSON_REPLACEMENT.descriptionChangeButton}
           </button>
         ))}
       </div>
-
-      {activeTab === 'gallery' && (
-        <div className="vision-person-entry">
-          <button type="button" className="vision-person-pick-tile" disabled={disabled} onClick={onGalleryPick}>
-            <span className="vision-person-pick-plus" aria-hidden="true">＋</span>
-            <span className="vision-person-pick-label">{PERSON_REPLACEMENT.galleryPickButton}</span>
-          </button>
-          {!personHasImage(person) && <p className="vision-hint">{PERSON_REPLACEMENT.personEmptyHint}</p>}
-        </div>
-      )}
-      {activeTab === 'local' && (
-        <div className="vision-person-entry">
-          <button type="button" className="vision-person-pick-tile" disabled={disabled} onClick={onLocalPick}>
-            <span className="vision-person-pick-plus" aria-hidden="true">＋</span>
-            <span className="vision-person-pick-label">{PERSON_REPLACEMENT.localPickButton}</span>
-          </button>
-          <p className="vision-hint">{PERSON_REPLACEMENT.localDropHint}</p>
-        </div>
-      )}
       {activeTab === 'description' && (
         <div className="vision-person-entry">
           <textarea
@@ -114,6 +82,7 @@ export default function CharacterSourcePicker({
           <p className="vision-hint">{PERSON_REPLACEMENT.descriptionHint}</p>
         </div>
       )}
+      {activeTab !== 'description' && !personHasImage(person) && <span className="vision-person-source-empty">请选择来源</span>}
     </div>
   );
 }

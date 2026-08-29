@@ -431,13 +431,19 @@ export interface VisionRecreationOptimizeInput {
    * 优化器只负责表达，不负责重新决定。
    */
   hardContractLines?: ReadonlyArray<string>;
+  /**
+   * V6.8 真实阶段回调（Progress Honesty）：在真实边界触发——
+   * collecting（读取参考图前）→ optimizing（发出模型请求前）→ validating（收到回复后）。
+   * 仅报告已发生的事实，UI 百分比只随这些切换跳变。
+   */
+  onStage?: (stage: 'collecting' | 'optimizing' | 'validating') => void;
 }
 
 /** 优化器多模态图片引用（role 决定标注文案与模型使用方式）。 */
 export interface OptimizerImageReference {
   path: string;
   label: string;
-  role: 'template_reference' | 'person_replacement_reference' | 'source_reference' | 'generated_result_reference' | 'background_reference' | 'generic_reference';
+  role: 'template_reference' | 'person_replacement_reference' | 'source_reference' | 'generated_result_reference' | 'background_reference' | 'style_reference' | 'generic_reference';
 }
 
 /** 图片引用的角色标注（随消息图片清单行；模型按角色使用图片）。 */
@@ -453,6 +459,8 @@ export function describeOptimizerImageReference(role: OptimizerImageReference['r
       return '当前任务生成结果——本任务此前生成的图片';
     case 'background_reference':
       return '背景参考——仅用于背景 / 环境参照';
+    case 'style_reference':
+      return '风格参考——仅用于画风、材质、色彩与视觉语言参照，不提供人物身份';
     case 'generic_reference':
     default:
       return '参考图——按调整要求中的引用语境使用';
@@ -473,6 +481,7 @@ export function collectOptimizerImageReferences(input: {
     person_replacement_reference: 1,
     generated_result_reference: 0,
     background_reference: 0,
+    style_reference: 0,
     generic_reference: 0,
   };
   const refs: OptimizerImageReference[] = [];
@@ -724,6 +733,7 @@ export async function optimizeVisionRecreation(
   let receivedPersonImage = false;
 
   // 图片引用（模板图 + 人物图 + @引用）：优化器具备视觉能力时按清单顺序真实附上
+  input.onStage?.('collecting');
   const imageRefs = collectOptimizerImageReferences({
     personReferencePath: input.personReferencePath,
     imageReferences: input.imageReferences,
@@ -755,6 +765,7 @@ export async function optimizeVisionRecreation(
   }
 
   try {
+    input.onStage?.('optimizing');
     const runResult = await api.runAgentRequest({
       mode: 'chat',
       role: 'vision_prompt_optimizer',
@@ -785,6 +796,8 @@ export async function optimizeVisionRecreation(
     }
 
     const reply = runResult.reply || '';
+    // 已收到模型回复：进入格式校验（真实边界；parse_failed 也发生在该阶段之后）
+    input.onStage?.('validating');
     if (!reply.trim()) {
       logVisionOptimizerFailure('empty_response', { model: byok.model, replyLength: 0 });
       return {

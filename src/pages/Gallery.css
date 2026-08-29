@@ -606,3 +606,64 @@
   opacity: 0.55;
   cursor: not-allowed;
 }
+
+/* ===== V6.6 图库自定义文件夹（ADR-029）===== */
+
+.gallery-folder-create {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.gallery-folder-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--bg-overlay, rgba(15, 15, 20, 0.56));
+}
+
+.gallery-folder-dialog {
+  width: min(440px, calc(100vw - 48px));
+  display: grid;
+  gap: 12px;
+  padding: 20px;
+  background: var(--bg-dialog, var(--bg-card, #fff));
+  border: 1px solid var(--border-light, #f3f4f6);
+  border-radius: 14px;
+  box-shadow: var(--card-shadow, 0 24px 60px rgba(0, 0, 0, 0.3));
+}
+
+.gallery-folder-dialog h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.gallery-folder-hint {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.gallery-folder-dialog input {
+  padding: 9px 12px;
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  font-size: 13px;
+  font-family: inherit;
+  background: var(--bg-input);
+  color: var(--text-primary);
+}
+
+.gallery-folder-dialog input:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 1px;
+}
+
+.gallery-folder-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}

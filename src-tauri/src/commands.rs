@@ -2547,6 +2547,11 @@ fn sync_images(app: &tauri::AppHandle) -> Vec<ImageRecord> {
             &mut discovered_paths,
         );
     }
+    // 图库自定义文件夹（ADR-029）：注册表路径并入扫描根，
+    // 使 default_output_dir 之外（如系统图片目录回落）的文件夹内图片同样进图库。
+    for folder_root in crate::image_folders::folder_scan_roots(app) {
+        collect_image_files(Path::new(&folder_root), &mut discovered_paths);
+    }
 
     let discovered_set: HashSet<String> = discovered_paths
         .iter()
@@ -6718,7 +6723,6 @@ pub async fn generate_test_image(app: tauri::AppHandle) -> Result<GenerateTestIm
         "size": "1024x1024",
         "quality": "low",
         "output_format": "png",
-        "response_format": "b64_json",
         "n": 1
     });
 

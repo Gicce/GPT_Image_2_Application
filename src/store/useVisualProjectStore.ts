@@ -22,6 +22,8 @@ import {
   normalizeVisualProject,
   createVisualProjectFromAnalysis,
   resolveRestoredAnalysis,
+  isMaterialDomainReason,
+  unconfirmMaterialReplacement,
   type SemanticChangeReason,
 } from '../features/vision/project/project';
 import { markWorkspaceClaimedByProject } from '../features/vision/project/migrate';
@@ -32,14 +34,32 @@ import type {
 
 const PERSIST_DEBOUNCE_MS = 600;
 
+/**
+ * 自动保存状态（V6.2）。600ms 防抖落库早已存在，用户感知不到是因为没有
+ * 诚实的状态 UI（旧代码把保存按钮接到了列表 loading 上）。本状态按
+ * projectId 隔离——切换项目后旧值立即失效，UI 必须忽略非当前项目的状态；
+ * error 态内存文档保持 dirty，retrySave 重投同一文档。
+ */
+export interface ProjectSaveState {
+  status: 'idle' | 'pending' | 'saving' | 'saved' | 'error';
+  projectId: string | null;
+  savedAt?: string;
+  savedRevision?: number;
+  error?: string;
+}
+
 export interface VisualProjectState {
   projects: VisualProjectSummary[];
   active: VisualProject | null;
   /** 列表 / 落库最近一次错误（UI 横幅；空 = 无错）。 */
   lastError: string;
   listLoading: boolean;
+  /** 自动保存状态（按 projectId 隔离；见 ProjectSaveState）。 */
+  saveState: ProjectSaveState;
   /** 立即落库（组件卸载 / 页面切换前冲刷防抖）。 */
   flushPersist: () => Promise<void>;
+  /** 保存失败重试（error 态重投当前文档；成功即回 saved）。 */
+  retrySave: () => Promise<void>;
   refreshList: () => Promise<void>;
   /** 分析成功 → 建项目（模板基线冻结）并设为当前项目。 */
   createFromAnalysis: (input: Parameters<typeof createVisualProjectFromAnalysis>[0]) => Promise<VisualProject>;
@@ -118,10 +138,22 @@ function serialize(project: VisualProject): string {
   return JSON.stringify(project);
 }
 
+/** 只对「仍是当前打开项目」的保存写状态（非 active 落库不污染其保存指示）。 */
+function setSaveStateFor(
+  projectId: string,
+  patch: Partial<ProjectSaveState> & { status: ProjectSaveState['status'] },
+): void {
+  if (useVisualProjectStore.getState().active?.id !== projectId) return;
+  useVisualProjectStore.setState(state => ({
+    saveState: { ...state.saveState, ...patch, projectId },
+  }));
+}
+
 async function persistProject(project: VisualProject, immediate = false): Promise<void> {
   if (deletedProjectIds.has(project.id)) return;
   const run = async () => {
     if (deletedProjectIds.has(project.id)) return;
+    setSaveStateFor(project.id, { status: 'saving', error: undefined });
     try {
       await api.saveVisualProject({
         id: project.id,
@@ -136,10 +168,19 @@ async function persistProject(project: VisualProject, immediate = false): Promis
         lastError: '',
         projects: upsertSummary(state.projects, project),
       }));
+      // 保存期间又有新编辑进入防抖（persistTimer 非空）时不得显示「已保存」
+      if (!persistTimer) {
+        setSaveStateFor(project.id, {
+          status: 'saved',
+          savedAt: new Date().toISOString(),
+          savedRevision: project.revision,
+        });
+      }
     } catch (error) {
-      useVisualProjectStore.setState({
-        lastError: error instanceof Error ? error.message : '项目保存失败。',
-      });
+      const message = error instanceof Error ? error.message : '项目保存失败。';
+      useVisualProjectStore.setState({ lastError: message });
+      // 失败保 dirty：内存文档绝不清空，UI 给重试
+      setSaveStateFor(project.id, { status: 'error', error: message });
     }
   };
   if (immediate) {
@@ -150,6 +191,7 @@ async function persistProject(project: VisualProject, immediate = false): Promis
     return;
   }
   if (persistTimer) clearTimeout(persistTimer);
+  setSaveStateFor(project.id, { status: 'pending' });
   persistTimer = setTimeout(() => {
     persistTimer = null;
     const current = useVisualProjectStore.getState().active;
@@ -176,6 +218,7 @@ export const useVisualProjectStore = create<VisualProjectState>((set, get) => ({
   active: null,
   lastError: '',
   listLoading: false,
+  saveState: { status: 'idle', projectId: null },
 
   flushPersist: async () => {
     if (persistInFlight) await persistInFlight.catch(() => undefined);
@@ -185,6 +228,12 @@ export const useVisualProjectStore = create<VisualProjectState>((set, get) => ({
       const current = get().active;
       if (current) await persistProject(current, true);
     }
+  },
+
+  retrySave: async () => {
+    const current = get().active;
+    if (!current) return;
+    await persistProject(current, true);
   },
 
   refreshList: async () => {
@@ -228,6 +277,9 @@ export const useVisualProjectStore = create<VisualProjectState>((set, get) => ({
 
   openProject: async id => {
     try {
+      // V6.2：切换项目前先冲刷旧项目在途防抖——否则上一个项目的最后一次
+      // 编辑要等 600ms 后才落库，期间用户可能直接关掉应用（丢最后一步修改）。
+      await get().flushPersist();
       const raw = await api.loadVisualProject(id);
       if (!raw) {
         set({ lastError: '项目不存在或已被删除。' });
@@ -268,10 +320,11 @@ export const useVisualProjectStore = create<VisualProjectState>((set, get) => ({
       revision: current.revision + 1,
       updatedAt: new Date().toISOString(),
     };
+    // 素材域语义修改 ⇒ 「素材替换已确认」检查点失效（回到编辑 = 步骤回到进行中）
+    const next = isMaterialDomainReason(reason) ? unconfirmMaterialReplacement(withRevision) : withRevision;
     pendingSemantic = false;
-    void reason;
-    set({ active: withRevision });
-    void persistProject(withRevision);
+    set({ active: next });
+    void persistProject(next);
   },
 
   updateActiveDebounced: (reason, mutate) => {
@@ -279,9 +332,9 @@ export const useVisualProjectStore = create<VisualProjectState>((set, get) => ({
     if (!current) return;
     const mutated = mutate(current);
     pendingSemantic = true;
-    void reason;
-    set({ active: { ...mutated, updatedAt: new Date().toISOString() } });
-    void persistProject(mutated);
+    const next = isMaterialDomainReason(reason) ? unconfirmMaterialReplacement(mutated) : mutated;
+    set({ active: { ...next, updatedAt: new Date().toISOString() } });
+    void persistProject(next);
   },
 
   flushPendingSemantic: () => {

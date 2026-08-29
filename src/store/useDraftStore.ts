@@ -60,6 +60,27 @@ export interface VisionCarryDraft {
     originalPrompt: string;
     optimizedAt: string;
   };
+  // ===== V6.2 Skill Direct Execution / Handoff Responsiveness =====
+  /**
+   * 进入图片工作室后自动发起生成（仅 Skill 直接生成链路）：
+   * ImageStudio 消费 carry 时自动走 submitSingle（报价确认层照常弹出——
+   * 计费授权单一入口不变），绝不绕过 QuoteConfirmDialog。
+   */
+  autoStartGeneration?: boolean;
+  /**
+   * Skill 直接生成会话（ephemeral）：originSkill 溯源 + 未持久化项目提示。
+   * 工作台 banner 提供「保存为视觉项目 / 进入工作台调整」；不 adopt。
+   */
+  skillSession?: {
+    skillId: string;
+    skillName: string;
+    skillVersion?: string;
+    executionMode: 'direct_generate';
+    optimizationPolicy: 'reuse_recipe' | 'adaptive' | 'always_reoptimize';
+    personRebound: boolean;
+    /** ephemeral 项目文档（未入库；保存按钮把它 adopt 成持久项目）。 */
+    project: import('../features/vision/project/types').VisualProject;
+  };
 }
 
 // 内存级草稿，重启应用清空

@@ -22,6 +22,9 @@ import { runtimeSkillById } from './registry';
 import { buildSkillTraceMarkdown } from './exportTrace';
 import { copyText } from '../../../utils/clipboard';
 import { toastSuccess } from '../../../components/Toast';
+import { computePromptDiff } from '../promptDiff';
+import { skillOriginSectionLabel } from '../project/skillOriginGuard';
+import type { VisualProjectOriginSkill } from '../project/types';
 import './skills.css';
 
 const STATUS_LABELS: Record<SkillExecutionRecord['status'], string> = {
@@ -195,12 +198,114 @@ export interface SkillTraceDrawerProps {
   snapshot: SkillExecutionSnapshot | null;
   /** 工作台实况编译分段（mode=prompt 且无冻结分段时的「将写入」预览）。 */
   liveSections?: ReadonlyArray<SkillCompiledSection> | null;
+  /** 实况编译的最终 Prompt 全文（模板复用 Skill 与保存基线的逐字对比用）。 */
+  livePromptText?: string;
+  /** 实况编译的合同层名（Compiler sections 口径；与保存基线做结构级对比）。 */
+  liveCompilerSections?: string[];
   /** 项目名（复制导出头部元信息用；快照只存 projectId）。 */
   projectName?: string;
+  /** 模板复用 Skill 来源标记（V6：Prompt 对比视图 = 保存基线 vs 当前实况）。 */
+  originSkill?: VisualProjectOriginSkill | null;
+  /** Skill Origin Guard 当前要求的合同块名（originSkill 存在时随项目态计算）。 */
+  originRequiredBlocks?: string[];
   onClose: () => void;
 }
 
-export default function SkillTraceDrawer({ open, mode, snapshot, liveSections, projectName, onClose }: SkillTraceDrawerProps) {
+/**
+ * Skill Origin 对比卡（V6 Goal D）—— 模板复用 Skill 派生项目专用：
+ *  - 结构级对比：保存基线合同块 vs 当前实况合同块（缺块 = 降级信号，红色标出）；
+ *  - 全文 Diff：保存基线 Prompt → 当前实况 Prompt（复用 computePromptDiff 唯一实现）。
+ * 数据铁律：originSkill / 实况文本全部由调用方传入（确定性编译产物），本组件零推断。
+ */
+export function SkillOriginCompareCard({ originSkill, livePromptText, liveCompilerSections, requiredBlocks }: {
+  originSkill: VisualProjectOriginSkill;
+  livePromptText?: string;
+  liveCompilerSections?: string[];
+  /** 当前项目状态下 Skill Origin Guard 实际要求的合同块（区分「降级缺失」与「按需未编译」）。 */
+  requiredBlocks?: string[];
+}) {
+  const hasLive = livePromptText !== undefined && liveCompilerSections !== undefined;
+  const baselineSet = new Set(originSkill.baselineSections);
+  const liveSet = new Set(liveCompilerSections ?? []);
+  const requiredSet = new Set(requiredBlocks ?? []);
+  const missingBlocks = originSkill.baselineSections.filter(block => !liveSet.has(block));
+  const blockingBlocks = missingBlocks.filter(block => requiredSet.has(block));
+  const optionalMissingBlocks = missingBlocks.filter(block => !requiredSet.has(block));
+  const addedBlocks = (liveCompilerSections ?? []).filter(block => !baselineSet.has(block));
+  const diff = hasLive
+    ? computePromptDiff(originSkill.baselineFinalPrompt, livePromptText ?? '')
+    : null;
+  const structureChanged = missingBlocks.length > 0 || addedBlocks.length > 0;
+
+  return (
+    <section className="skill-origin-card" data-testid="skill-origin-compare">
+      <header className="skill-origin-head">
+        <h4>来源 Skill 基线对比</h4>
+        <span className="skill-origin-meta">
+          {originSkill.skillName} · 源修订 R{originSkill.sourceRevision} · 保存于 {originSkill.savedAt.slice(0, 19).replace('T', ' ')}
+        </span>
+      </header>
+      <p className="skill-origin-desc">
+        本项目由模板复用 Skill「{originSkill.skillName}」重建。下方对比保存 Skill 时刻的
+        编译基线与当前实况编译——合同结构应保持同级，缺块即代表降级。
+      </p>
+
+      {hasLive ? (
+        <>
+          <div className="skill-origin-structure">
+            <h5>结构级对比（保存基线 {originSkill.baselineSections.length} 块 → 当前 {liveCompilerSections!.length} 块）</h5>
+            <ul>
+              {originSkill.baselineSections.map(block => (
+                <li key={block} className={liveSet.has(block) ? 'is-kept' : requiredSet.has(block) ? 'is-missing' : 'is-optional'}>
+                  {liveSet.has(block) ? '✓' : requiredSet.has(block) ? '✗' : '○'} {skillOriginSectionLabel(block)}
+                </li>
+              ))}
+              {addedBlocks.map(block => (
+                <li key={`added-${block}`} className="is-added">＋ {skillOriginSectionLabel(block)}（新增）</li>
+              ))}
+            </ul>
+            {!structureChanged && <p className="skill-origin-ok">合同结构与保存基线完全一致——Skill 执行未降级。</p>}
+            {optionalMissingBlocks.length > 0 && (
+              <p className="skill-origin-note">
+                按需未编译（当前项目状态不要求）：{optionalMissingBlocks.map(skillOriginSectionLabel).join('、')}——如需启用请绑定对应参考。
+              </p>
+            )}
+            {blockingBlocks.length > 0 && (
+              <p className="skill-origin-warn">
+                缺少 {blockingBlocks.length} 个必需合同块：{blockingBlocks.map(skillOriginSectionLabel).join('、')}。
+                生成前会被 Skill Origin Guard 阻断。
+              </p>
+            )}
+          </div>
+
+          {diff && (
+            <div className="skill-origin-diff">
+              <h5>
+                全文 Diff（基线 → 当前实况）
+                {diff.addedCount > 0 && <span className="is-added">+{diff.addedCount}</span>}
+                {diff.removedCount > 0 && <span className="is-removed">-{diff.removedCount}</span>}
+                {diff.addedCount === 0 && diff.removedCount === 0 && <span className="is-same">（逐字一致）</span>}
+              </h5>
+              <pre className="skill-origin-diff-text">
+                {diff.segments.map((seg, i) => seg.type === 'equal'
+                  ? <span key={i}>{seg.text}</span>
+                  : <span key={i} className={`diff-seg ${seg.type === 'added' ? 'diff-added' : 'diff-removed'}`}>
+                      {seg.type === 'added' ? '+' : '-'}{seg.text}
+                    </span>)}
+              </pre>
+            </div>
+          )}
+        </>
+      ) : (
+        <p className="vision-hint">尚未取得当前实况编译——点击「Prompt 来源」刷新后将显示对比。</p>
+      )}
+    </section>
+  );
+}
+
+export default function SkillTraceDrawer({
+  open, mode, snapshot, liveSections, livePromptText, liveCompilerSections, projectName, originSkill, originRequiredBlocks, onClose,
+}: SkillTraceDrawerProps) {
   useEffect(() => {
     if (!open) return;
     const onKey = (event: KeyboardEvent) => {
@@ -257,6 +362,14 @@ export default function SkillTraceDrawer({ open, mode, snapshot, liveSections, p
               )
           ) : (
             <>
+              {originSkill && (
+                <SkillOriginCompareCard
+                  originSkill={originSkill}
+                  livePromptText={livePromptText}
+                  liveCompilerSections={liveCompilerSections}
+                  requiredBlocks={originRequiredBlocks}
+                />
+              )}
               {snapshot?.compiledSections
                 ? <SkillPromptSourceContent sections={snapshot.compiledSections} />
                 : (

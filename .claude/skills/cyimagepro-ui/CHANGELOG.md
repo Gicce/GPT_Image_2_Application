@@ -1,5 +1,84 @@
 # cyimagepro-ui CHANGELOG
 
+## Skill 23.0.0 / UI System 1.2.0（2026-08-28，V6.8.1 视觉理解最终收口）
+
+- SKILL.md 新增规则 33「Effective Intent Optimization Input & Save-as-Skill CTA（V6.8.1 三铁律）」：Single Instruction Builder（优化入口指令唯一组装器，禁止组件自拼 / workspace JSON 进模型）/ Effective State Only（存储残留读取边界清洗、全部生效意图变化触发 needsOptimization）/ Secondary Actions Never Compete with Primary（复刻成我的技能复用原链路落位 CTA 区 + 标准档分区间距）。
+- visual-workflow.md：新增 §12「Recreation Optimization Input」（统一组装器结构、区域内容级块、Effective State 清洗、三入口过期同步、Save-as-Skill CTA、24px section gap）。
+- 配套代码（ADR-030）：`features/vision/recreationOptimizationInput.ts`（buildRecreationOptimizationInstruction / getEffectiveModificationDraft / collectEffectiveRegionReplacements / buildRegionReplacementLines / buildPersonContractLines）、VisionUnderstanding 页（统一构建器接线 + syncRecreationInstructionFromProject 三入口 + saveRecreationAsSkill/canSaveAsSkill）、`recreationCopy.ts#SAVE_AS_SKILL_ACTION`、ContextRail（Secondary Action 按钮与 props）、`.vision-wizard` 24px 间距。
+- 守卫测试：新增 `recreationOptimizationInput.test.ts`（Case A–F 内容级 payload 断言 + 4 条源码接线契约），`visionMentionUi.test.ts` 优化入口断言同步；vitest 1710 全绿。
+
+## Skill 22.0.0 / UI System 1.2.0（2026-08-28，V6.8 视觉理解工作流状态与 UI 收口）
+
+- SKILL.md 新增规则 32「Workflow Step Status & Material Confirm（V6.8 四铁律）」：Unified Step Selector / Material explicit confirm + 旧数据保守恢复 / Source Menu Anchored Below Card / Stage-Anchored Progress。
+- visual-workflow.md：新增 §11「Workflow Step Status Model」（selector、materialReplacementDone 持久化与复位、promptReady 派生、onStage 阶段边界、失败态无进度条）；§1c.2 来源入口改为卡下方整列宽锚定；§1d 增补 V6.8 减法版 UI 注记（单句提示 / 仅 custom 展开参考与描述 / 多人单行），语义合同不变。
+- 配套代码：`features/vision/visionWizard.ts`（getVisualWorkflowState 统一 selector，取代 editState 反推）、`project/types.ts` + `project.ts`（materialReplacementDone + unconfirmMaterialReplacement + isMaterialDomainReason）、`useVisualProjectStore`（素材域 reason 自动复位）、`useVisionWorkspaceStore.setMaterialReplacementDone`、`features/vision/optimizeProgress.ts` + `OptimizeProgressCard.tsx`（阶段型真实进度卡）、`promptOptimizer.onStage`（collecting→optimizing→validating 真实边界）、ReferenceMapping 来源行 / ClothingChangePanel 减法版 / RegionEditorPanel 子面板头部 / ContextRail 进度卡与区域行定位 / 步骤 3 显式确认 footer。
+- 守卫测试：`visionWizard.test.ts` 重写（统一 selector + 老项目保守恢复 4 用例）、新增 `optimizeProgress.test.ts`（纯函数 + onStage 顺序 + 进度卡源码契约）、`useVisualProjectStore.test.ts` / `useVisionWorkspaceStore.test.ts` 增补确认持久化 / 复位 / 保守恢复用例，vitest 1698 全绿。
+
+## Skill 21.0.0 / UI System 1.2.0（2026-08-28，V6.7 视觉理解四步向导）
+
+- SKILL.md 规则 31 ③「Staged Modification」改写为四步向导表述（步骤栏 / 门禁 `visionStepReachable` / 自动前进 / ContextRail 项目进度卡）；patterns.md §46 第三条同步改写。
+- 配套代码：`features/vision/visionWizard.ts`（步骤定义 + 门禁/完成态纯函数）、`useVisionViewStore.wizardStep`、VisionUnderstanding 页四步重排、ContextRail `wizardProgress` 进度卡。
+- 守卫测试：`features/vision/__tests__/visionWizard.test.ts` + `pages/__tests__/visionWizardUi.test.ts`；取代 V6.6 阶段条用例。
+
+## Skill 20.0.0 / UI System 1.2.0（2026-08-28，V6.6 图库文件夹 + 修改区阶段化）
+
+- SKILL.md：新增规则 31「Gallery Folders & Staged Modification 四铁律」（Physical Folder Binding / Single Output Path Picker / Staged Modification / Enabled-Card Consistency）；patterns.md 新增 §46。
+- 配套代码（ADR-029）：`src-tauri/src/image_folders.rs`（image_folders 表 + 3 命令）、`components/OutputPathPicker.tsx`（唯一输出位置选择器）、`store/useGalleryFolderStore.ts`、Gallery 文件夹筛选与新建对话框；视觉页 `modificationStages.ts` + `useVisionViewStore.activeStage` 阶段化重构 + 三面板 accent 边框统一。
+- 守卫测试：`utils/__tests__/galleryFolders.test.ts` + `pages/__tests__/visionModificationStages.test.ts` + visionViewState UI-only 矩阵阶段切换用例。
+
+## UI System 1.2.0（2026-08-28，V6.4 视觉理解工作台信息架构）
+
+- 视觉理解主流程新增项目预览、自定义修改内容、人物替换、服装更改四个独立折叠区；折叠全部进入 `useVisionViewStore`，不写项目 revision。
+- 人物来源的图片库、本地导入、文字描述三个原能力改为右侧人物卡直接入口；人物替换强度、替换范围、身份应用与区域编辑合同保持不变。
+- 服装策略独立成卡，继续复用 `ClothingSourceControl` 和既有状态不变量；输入文字可保守自动勾选明确修改维度，手动选择与 Prompt 优化识别优先级不变。
+- 项目预览集中原图、理解摘要、模型、状态和“重新视觉理解”；手动保存收入“更多”，自动保存状态常驻，“创建可复用技能”保存后再打开创作器。
+- 无 Token、数据合同、Prompt 编译、持久化或后端接口变更。
+
+## Skill 19.0.0 / UI System 1.2.0（2026-08-28，V6.3 Direct UX Closure 五铁律）
+
+规则层（无 Token 变更，UI System 保持 1.2.0）：
+
+- SKILL.md 新增最高优先级规则 30（Direct UX Closure V6.3 五铁律：Semantic Feedback Severity / Direct Preflight Status / Modification Slot Fidelity / Compact Subject Replacement / Entity Cover）。
+- patterns.md 新增 §41-§45：
+  - §41 Semantic Feedback Severity：修正 Toast 严重级按最终用户状态判定（系统已修正 ⇒ success 绿；剥离内容确实来自用户当前指令才 warning），唯一判定入口 contractCorrectionSeverity / lockCorrectionSeverity。
+  - §42 Direct Preflight Status：快速生成前置检查四态状态卡（ready/repairable/needs_input/blocked），分类唯一入口 classifySkillDirectPreflight，禁止弱化小字、禁止第二套校验。
+  - §43 Modification Slot Fidelity：输入槽位由修改合同派生（deriveSkillInputSlots：combined 身份+服装槽 / 独立身份槽 / 服装文本槽 / preserve_template 零槽）；换绑 = 重绑 facts + 确定性重编译 + 丢弃实例优化 delta，绝不触发「重新优化 Prompt」。
+  - §44 Compact Subject Replacement：四分组（主体/来源/执行范围/替换强度）+ 120-160px 紧凑缩略图 + 全局 ImageViewer 看大图 + 「更换人物参考」措辞。
+  - §45 Entity Cover：封面 display-only（自定义＞样例＞模板图＞图标）；复用唯一 ImageLibraryPicker；绝不进投稿载荷、绝不删图库文件。
+
+配套实现（V6.3）：`handoffOperation.ts` CorrectionSeverity 契约 + VisionUnderstanding 三 Guard Toast 绿/橙分流（toastSuccess 增加 action 参数）；`skillDirectExecution.ts` classifySkillDirectPreflight 四态分类 + TemplateSkillUseDialog Preflight 状态卡；`skillRecipe.ts` modificationTemplate 驱动 deriveSkillInputSlots/skillPersonSlotRequired + buildProjectFromSkillRecipe 漂移回基线 + 重建执行态复位 + safePolicy 独立 custom 修复；`userSkill.ts` SkillCover 类型/合法化/优先级解析 + 投稿剥离；PersonReplacementPanel/ReferenceMapping/CharacterSourcePicker 四分组紧凑重构（recreationCopy 文案组标签）+ VisionUnderstanding.css 紧凑卡样式；SkillWorkshop 卡片真实缩略图 + 更换封面菜单 + applySkillCover 持久化；SkillCreatorDialog 末步封面卡（恢复默认/图库选择）。
+
+测试（V6.3 新增 31 项）：handoffSeverity 6 / skillRecipe Slot Contract V2 6 / skillDirectExecution 四态+直接编译铁律 8 / personReplacementUiV2 7 / skillCover 12。
+
+---
+
+## Skill 18.0.0 / UI System 1.2.0（2026-08-28，V6.2 Product Maturity 五铁律）
+
+规则层（无 Token 变更，UI System 保持 1.2.0）：
+
+- SKILL.md 新增最高优先级规则 29（Product Maturity V6.2 五铁律：Progress Honesty / Direct Execution / Semantic Reference Label / Auto Save State / Handoff Responsiveness）。
+- patterns.md 新增 §36-§40：
+  - §36 Progress Honesty：进度模型只含真实事实（阶段/层数/时间戳，禁止 percent）；runner/UI 分离；取消=层间诚实停止；operationId+projectId 隔离。
+  - §37 Direct Execution：快速生成/高级调整双路径同一引擎；headless 零 AI 调用；ephemeral 会话不落库双出口；autoStart 不绕报价确认。
+  - §38 Semantic Reference Label：SEMANTIC_REFERENCE_LABELS 唯一事实源；计划图角色冻结无 dropdown、手动图 ⋯ 菜单；摘要行对照「图片N」。
+  - §39 Auto Save State：四态指示；persistTimer 非空不得标已保存；失败保 dirty 重试；切项目冲刷在途。
+  - §40 Handoff Responsiveness：守卫后 100ms 级关弹窗切过渡态；预热并行；防重入 ref；correction toast operationId 去重。
+
+配套实现（V6.2）：`detailInsertRepairRunner`（Rail + Skill 弹窗共用执行体）+ ContextRail 真实进度；`skillDirectExecution.ts`（headless 直接生成管线 + Preflight + 内嵌 Repair 合并）+ TemplateSkillUseDialog 双按钮重构 + SkillCreatorDialog「AI 提炼复用规则」文案 + executionMode/optimizationPolicy 字段；ImageStudio 语义参考徽标 + ⋯ 用途菜单 + 摘要行 + skillSession banner（保存为视觉项目/进工作台）；useVisualProjectStore 保存状态四态 + ProjectHeaderBar 内联指示 + openProject 冲刷；VisionUnderstanding handoff 过渡态 + 防重入 + toast 去重 + 外貌解析预热。
+
+---
+
+## Skill 17.0.0 / UI System 1.2.0（2026-08-28，V6.1 GUI Closure 四铁律）
+
+规则层（无 Token 变更，UI System 保持 1.2.0）：
+
+- SKILL.md 新增最高优先级规则 25-28：Recoverable Blocker Pattern、Nested Modal / Picker Pattern、Wizard Geometry Pattern、Destructive CRUD Pattern。
+- patterns.md 新增 §32-§35：受限修复闭环（文案同源/失败保旧/成功消阻断）、二级弹窗 Portal 铁律（createPortal + galleryOpenRef Escape 栈 + 1300 层级 + auto-fill 网格）、多步骤创作器几何稳定（三段式 + 折叠 + ≤860px 水平 stepper）、删除 CRUD 闭环（danger 确认 + 范围文案纯函数 + 持久层幂等）。
+
+配套实现（V6.1）：Detail Insert 阻断卡「识别局部插图」修复闭环（`detailInsertIncompleteErrors` 文案同源 + `mergeDetailInsertRepairResults` 受限合并 + `detail_insert_repair` 语义修订）；SkillCreatorDialog 几何 960×720 + Recipe 折叠卡 + 发布页 content stack；ImageLibraryPicker Portal 化重写；我的技能删除（`describeSkillDeleteNotice` + `SkillDeleteDialog` + Rust `delete_user_skill` 行为测试）。
+
+---
+
 ## Skill 16.0.0 / UI System 1.2.0（2026-08-25，Visual Consistency V5）
 
 规则层（无 Token 变更，UI System 保持 1.2.0）：

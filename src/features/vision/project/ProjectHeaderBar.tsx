@@ -11,6 +11,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../../../services/api';
 import { describeProjectStatus } from './project';
+import type { ProjectSaveState } from '../../../store/useVisualProjectStore';
 import type { VisualProject, VisualProjectSummary } from './types';
 
 interface ProjectHeaderBarProps {
@@ -21,8 +22,13 @@ interface ProjectHeaderBarProps {
   thumbUrl: string;
   visionModelLabel: string;
   saving?: boolean;
+  /** 自动保存状态（V6.2；projectId 与当前项目一致才展示，跨项目绝不串台）。 */
+  saveState?: ProjectSaveState;
+  /** 保存失败重试（saveState=error 时的内联重试入口）。 */
+  onRetrySave?: () => void;
   onRename: (name: string) => void;
   onSave: () => void;
+  onSaveAsSkill: () => void;
   onDerive: () => void;
   onReanalyze: () => void;
   onOpenProject: (id: string) => void;
@@ -75,8 +81,11 @@ export default function ProjectHeaderBar({
   thumbUrl,
   visionModelLabel,
   saving,
+  saveState,
+  onRetrySave,
   onRename,
   onSave,
+  onSaveAsSkill,
   onDerive,
   onReanalyze,
   onOpenProject,
@@ -87,6 +96,7 @@ export default function ProjectHeaderBar({
 }: ProjectHeaderBarProps) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
   const [nameDraft, setNameDraft] = useState('');
 
   const commitRename = () => {
@@ -96,6 +106,11 @@ export default function ProjectHeaderBar({
   };
 
   const recent = projects.slice(0, 6);
+
+  // 自动保存指示只认当前项目的状态（切项目后旧状态立即失效）
+  const autosave = saveState && saveState.projectId === project?.id ? saveState : null;
+  const autosaveBusy = autosave?.status === 'pending' || autosave?.status === 'saving';
+  const saveBusy = Boolean(saving) || autosaveBusy;
 
   return (
     <div className="vision-project-header" data-testid="vision-project-header">
@@ -135,6 +150,24 @@ export default function ProjectHeaderBar({
             {describeProjectStatus(project.status)} · Revision {project.revision}
             {' · '}
             {visionModelLabel || '—'}
+            {autosave && (
+              <span
+                className={`vision-autosave-state is-${autosave.status}`}
+                data-testid="vision-autosave-state"
+              >
+                {autosaveBusy && <>· 自动保存中…</>}
+                {autosave.status === 'saved' && <>· 已自动保存</>}
+                {autosave.status === 'error' && (
+                  <>· 自动保存失败{onRetrySave && (
+                    <button
+                      type="button"
+                      className="vision-autosave-retry"
+                      onClick={onRetrySave}
+                    >重试</button>
+                  )}</>
+                )}
+              </span>
+            )}
           </span>
         )}
       </div>
@@ -187,18 +220,18 @@ export default function ProjectHeaderBar({
         </div>
         {project && (
           <>
-            <button type="button" className="vision-btn vision-btn-sm" disabled={saving} onClick={onSave}>
-              {saving ? '保存中…' : '保存'}
-            </button>
-            <button type="button" className="vision-btn vision-btn-sm" onClick={onDerive}>基于此方案新建</button>
-            <button type="button" className="vision-btn vision-btn-sm" onClick={onReanalyze}>重新识别</button>
-            {onDeleteProject && (
-              <button
-                type="button"
-                className="vision-btn vision-btn-sm vision-btn-danger"
-                onClick={() => { setPickerOpen(false); onDeleteProject(project.id); }}
-              >删除当前项目</button>
-            )}
+            <button type="button" className="app-btn app-btn-brand-soft app-btn-sm" onClick={onSaveAsSkill}>创建可复用技能</button>
+            <div className="vision-project-picker">
+              <button type="button" className="vision-btn vision-btn-sm" aria-expanded={moreOpen} onClick={() => setMoreOpen(value => !value)}>更多 ▾</button>
+              {moreOpen && <div className="vision-project-popover vision-project-more" role="menu">
+                <button type="button" className="vision-project-more-action" disabled={saveBusy} onClick={() => { setMoreOpen(false); onSave(); }}>
+                  {saveBusy ? '保存中…' : '立即保存'}
+                </button>
+                <button type="button" className="vision-project-more-action" onClick={() => { setMoreOpen(false); onDerive(); }}>基于此方案新建</button>
+                <button type="button" className="vision-project-more-action" onClick={() => { setMoreOpen(false); onReanalyze(); }}>重新识别</button>
+                {onDeleteProject && <button type="button" className="vision-project-more-action is-danger" onClick={() => { setMoreOpen(false); onDeleteProject(project.id); }}>删除当前项目</button>}
+              </div>}
+            </div>
           </>
         )}
       </div>

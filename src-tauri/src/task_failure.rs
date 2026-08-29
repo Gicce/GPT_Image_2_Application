@@ -114,18 +114,20 @@ pub fn build_send_failure_detail(kind: &str, url: &str, is_timeout: bool) -> Sub
         retryable,
         http_status: None,
         provider_code: None,
+        provider_type: None,
         request_id: None,
         endpoint: Some(url.to_string()),
         message: format!("图片服务连接失败（{}）", kind),
     }
 }
 
-/// 上游 HTTP 非 2xx 失败：body 的 detail/code 由调用方解析传入。
+/// 上游 HTTP 非 2xx 失败：body 的 detail/code/type 由调用方解析传入。
 pub fn build_upstream_failure_detail(
     status: u16,
     code: Option<&str>,
     primary: &str,
     request_id: Option<&str>,
+    provider_type: Option<&str>,
     url: &str,
 ) -> SubTaskErrorDetail {
     let (category, retryable) = classify_upstream_failure(status, code, Some(primary));
@@ -135,6 +137,7 @@ pub fn build_upstream_failure_detail(
         retryable,
         http_status: Some(status),
         provider_code: code.map(str::to_string),
+        provider_type: provider_type.map(str::to_string),
         request_id: request_id.map(str::to_string),
         endpoint: Some(url.to_string()),
         message: primary.to_string(),
@@ -149,6 +152,7 @@ pub fn build_local_failure_detail(category: &str, message: &str, retryable: bool
         retryable,
         http_status: None,
         provider_code: None,
+        provider_type: None,
         request_id: None,
         endpoint: None,
         message: message.to_string(),

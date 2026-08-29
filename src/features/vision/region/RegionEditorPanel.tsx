@@ -1,9 +1,10 @@
 /**
- * RegionEditorPanel（§28）—— 主工作区的区域替换面板。
+ * RegionEditorPanel（§28 / V6.8 §四）—— 素材替换的第三个子面板（区域替换）。
  *
  *  - 列表态：区域卡（名称 / 用途 / 替换对象 / 范围 / 约束 / mask 状态 / 编辑 / 删除）+
- *    [打开区域编辑器] 入口；
+ *    [添加替换区域] 入口；
  *  - 编辑态：全宽 RegionCanvasEditor（页面级切换，不塞 Modal）；
+ *  - 区域数据（project.regions）与人物替换 scope 完全分离，互不推导；
  *  - 所有变更经页面语义通道（onRegionsChange → 项目 store，revision +1）；
  *    打开 / 关闭编辑器 / 切工具 = 视图操作（不触发修订）。
  */
@@ -26,6 +27,8 @@ interface RegionEditorPanelProps {
   references: ReadonlyArray<VisualReferenceAsset>;
   /** 外部「打开区域编辑器」请求（递增计数信号；0 = 无请求）。 */
   openRequest?: number;
+  /** 外部打开时预设新区域用途；多人映射入口传 person。 */
+  openPurpose?: RegionReplaceType;
   disabled?: boolean;
   onRegionsChange: (updater: (regions: RegionReplacement[]) => RegionReplacement[]) => void;
   /** 单区域 mask PNG 落盘（导出该区域自身 mask 并回填路径）。 */
@@ -48,6 +51,7 @@ export default function RegionEditorPanel({
   regions,
   references,
   openRequest,
+  openPurpose,
   disabled,
   onRegionsChange,
   onPersistRegionMask,
@@ -55,11 +59,15 @@ export default function RegionEditorPanel({
 }: RegionEditorPanelProps) {
   const [editorOpen, setEditorOpen] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [pendingPurpose, setPendingPurpose] = useState<RegionReplaceType>('custom');
 
   // 外部打开信号（PersonPanel custom_region 空区域提示的 CTA）
   useEffect(() => {
-    if (openRequest && openRequest > 0) setEditorOpen(true);
-  }, [openRequest]);
+    if (openRequest && openRequest > 0) {
+      setPendingPurpose(openPurpose ?? 'custom');
+      setEditorOpen(true);
+    }
+  }, [openPurpose, openRequest]);
 
   if (editorOpen) {
     return (
@@ -68,10 +76,11 @@ export default function RegionEditorPanel({
         disabled={disabled}
         onBack={() => setEditorOpen(false)}
         onCommit={shape => {
+          const created = createRegion({ shape, replaceType: pendingPurpose });
           onRegionsChange(list => {
-            const created = createRegion({ shape, replaceType: 'custom' });
             return [...list, created];
           });
+          setExpandedId(created.id);
           setEditorOpen(false);
         }}
       />
@@ -79,22 +88,28 @@ export default function RegionEditorPanel({
   }
 
   return (
-    <div className="vision-regions" data-testid="region-panel">
-      <div className="vision-regions-head">
+    <section className="vision-regions vision-subpanel" data-testid="region-panel" aria-label="区域替换">
+      <header className="vision-subpanel-head">
         <div>
-          <h3>区域替换</h3>
-          <p className="vision-hint">框选 / 涂抹画面中的局部区域，只对区域内容执行替换（如只换左边人物）。</p>
+          <span className="vision-subpanel-title">区域替换</span>
+          <p>选择画面区域并指定新的内容。</p>
         </div>
-        <button
-          type="button"
-          className="vision-btn vision-btn-sm"
-          disabled={disabled}
-          onClick={() => setEditorOpen(true)}
-        >打开区域编辑器</button>
-      </div>
+        <div className="vision-subpanel-actions">
+          {regions.length > 0 && (
+            <span className="vision-region-count-badge" data-testid="vision-region-count">{regions.length} 个区域</span>
+          )}
+          <button
+            type="button"
+            className="vision-btn vision-btn-sm"
+            data-testid="vision-region-add"
+            disabled={disabled}
+            onClick={() => { setPendingPurpose('custom'); setEditorOpen(true); }}
+          >添加替换区域</button>
+        </div>
+      </header>
 
       {regions.length === 0 && (
-        <p className="vision-hint vision-regions-empty">还没有区域。打开区域编辑器创建第一个区域。</p>
+        <p className="vision-hint vision-regions-empty">还没有区域。点击「添加替换区域」框选第一个区域。</p>
       )}
 
       {regions.map(region => {
@@ -243,6 +258,6 @@ export default function RegionEditorPanel({
           </div>
         );
       })}
-    </div>
+    </section>
   );
 }

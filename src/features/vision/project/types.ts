@@ -23,6 +23,7 @@ import type {
 import type { RecreationState } from '../recreationPlan';
 import type {
   ClothingPolicy,
+  DimensionReferenceImage,
   ModificationDimension,
   PersonSource,
 } from '../modificationIntent';
@@ -183,7 +184,7 @@ export interface ModificationContract {
   customClothing: string;
   replicationBoost: boolean;
   mentions: ImageMention[];
-  extraImageRefs: Array<{ assetId?: string; path: string; label?: string }>;
+  extraImageRefs: DimensionReferenceImage[];
 }
 
 // ===== Region Replacement V1（§9）=====
@@ -476,6 +477,29 @@ export interface AnimeCharacterAttribute<F = CharacterHairFacts | CharacterFaceF
   facts?: F;
 }
 
+// ===== Skill Recipe Origin（模板复用 Skill 派生标记）=====
+
+/**
+ * 模板复用 Skill 来源标记：项目由 Skill Recipe 重建时写入。
+ * 携带保存时刻的编译基线（最终 Prompt + 合同块清单），供：
+ *  - 工作台 Trace 识别「本方案来自模板复用 Skill」；
+ *  - Prompt 对比（复用编译 vs 保存基线）；
+ *  - 生成门禁 Guard（模板复用项目缺关键合同块即阻断）。
+ * 普通项目 / 通用 Skill 项目缺省 = 无标记。
+ */
+export interface VisualProjectOriginSkill {
+  /** 来源本地 Skill id（UserSkillDraft.id）。 */
+  skillId: string;
+  skillName: string;
+  sourceProjectId: string;
+  sourceRevision: number;
+  /** 保存 Skill 时刻视觉理解链编译出的最终 Prompt（对比基线）。 */
+  baselineFinalPrompt: string;
+  /** 保存时刻编译产出的合同层名（结构级对比；Compiler sections 口径）。 */
+  baselineSections: string[];
+  savedAt: string;
+}
+
 // ===== VisualProject（§3.1）=====
 
 /**
@@ -505,6 +529,13 @@ export interface VisualProjectWorkspace {
    * 存在时生成直接提交该文本、不再装配合同层；清空 = 恢复系统编译。
    */
   fullPromptOverride?: string;
+  /**
+   * V6.8 工作流步骤状态：素材替换（第 3 步）已由用户显式确认（点击「继续 · 生成最终提示词」）。
+   * 旧项目缺省 = false（保守恢复：绝不允许凭旧 editState/优化产物反推「素材替换已完成」）；
+   * 素材域语义修改（updateActive）会将其复位为 false（回到编辑 = 步骤回到进行中）。
+   * 写入走 updateActiveMeta（工作流检查点不是方案内容，不加修订）。
+   */
+  materialReplacementDone?: boolean;
 }
 
 export interface VisualProject {
@@ -554,6 +585,8 @@ export interface VisualProject {
   animeConsistency?: AnimeConsistencyConfig;
   /** 最近一次执行时生效的技能清单（信息性冻结；生效判定在 runtime skill store）。 */
   enabledSkillIds?: string[];
+  /** 模板复用 Skill 来源标记（Recipe 重建项目时写入；普通项目缺省）。 */
+  originSkill?: VisualProjectOriginSkill;
   projectVersion: 1;
   workspace: VisualProjectWorkspace;
 }

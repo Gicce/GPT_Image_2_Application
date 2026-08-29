@@ -1,0 +1,44 @@
+/* Skill 删除确认弹窗（V6.1）——对齐 DeleteConvDialog 的居中确认层模式，
+   层级 1300：位于模板复用使用弹窗（1200）之上。 */
+
+.skill-delete-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1300;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--bg-overlay);
+}
+
+.skill-delete-dialog {
+  width: min(440px, calc(100vw - 48px));
+  display: grid;
+  gap: 14px;
+  padding: 20px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  border-radius: 14px;
+  box-shadow: var(--card-shadow);
+}
+
+.skill-delete-dialog h3 { margin: 0; font-size: 16px; }
+
+.skill-delete-body { display: grid; gap: 8px; }
+
+.skill-delete-lead { margin: 0; font-size: 13px; font-weight: 600; }
+
+.skill-delete-body ul { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
+
+.skill-delete-body li { font-size: 13px; color: var(--text-secondary); }
+
+.skill-delete-submission {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--badge-info-bg);
+  color: var(--badge-info-text);
+  font-size: 12px;
+}
+
+.skill-delete-actions { display: flex; justify-content: flex-end; gap: 10px; }

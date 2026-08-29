@@ -19,6 +19,7 @@ export type AiModelRole =
   | 'batch_planner'
   | 'vision_analysis'
   | 'vision_prompt_optimizer'
+  | 'skill_authoring'
   | 'image_evaluation'
   | 'image_generation';
 
@@ -66,6 +67,15 @@ export const AI_MODEL_ROLES: readonly AiRoleDefinition[] = [
     capability: 'text',
     configurable: 'routing',
     defaultFollow: 'vision_analysis',
+  },
+  {
+    role: 'skill_authoring',
+    label: 'Skill 通用化整理',
+    description: '把视觉项目中的确定事实整理为可复用的 Skill 规则、素材槽位与向导字段。',
+    group: 'vision',
+    capability: 'text',
+    configurable: 'routing',
+    defaultFollow: 'vision_prompt_optimizer',
   },
   {
     role: 'image_evaluation',

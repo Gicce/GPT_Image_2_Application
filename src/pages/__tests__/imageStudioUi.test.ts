@@ -98,8 +98,10 @@ describe('图片生成页 UI 契约（Golden Sample）', () => {
     expect(name).toContain('white-space: nowrap');
   });
 
-  test('Segmented 选中态不得使用实底强紫（品牌 Strong 只属于 Primary CTA）', () => {
-    const active = rule(css, '.studio-seg-btn.active');
+  test('Segmented 使用公共原语，选中态不得使用实底强紫', () => {
+    expect(tsx).toContain('className="app-segmented"');
+    expect(tsx).toContain('app-segmented-btn');
+    const active = rule(appCss, '.app-segmented-btn.active,\n.app-segmented-btn[aria-pressed="true"]');
     expect(active).toContain('color: var(--accent-primary-text)');
     expect(active).not.toContain('background: var(--accent-primary)');
   });
@@ -160,14 +162,33 @@ describe('ReferenceImageInput 契约（Media Input Pattern）', () => {
     expect(add).toContain('var(--accent-primary-text)');
   });
 
-  test('AI 优化是提示词的辅助操作：字段头内嵌，四态可区分', () => {
+  test('提示词优化是字段头辅助操作，图生图使用真实参考图视觉优化', () => {
     expect(tsx).toContain('studio-prompt-head');
-    expect(tsx).toContain("'✨ AI 优化'");
-    expect(tsx).toContain("optimizing ? 'AI 优化中…'");
+    expect(tsx).toContain("'结合参考图优化'");
+    expect(tsx).toContain("'优化提示词'");
+    expect(tsx).toContain("'正在理解并优化…'");
+    expect(tsx).toContain('optimizeVisualEditPrompt({');
+    expect(tsx).toContain('roleLabel: IMAGE_MENTION_ROLE_LABELS');
     expect(tsx).toContain("hasResult ? '重新优化'");
     // completed 态用 Brand Soft 档区分（studio-btn-ai），未完成用 secondary
-    expect(tsx).toMatch(/hasResult \? ' studio-btn-ai' : ' settings-btn-secondary'/);
+    expect(tsx).toMatch(/hasResult \? ' studio-btn-ai' : ' app-btn-secondary'/);
     // 独立成行的旧优化操作行不得回流
     expect(css).not.toMatch(/\.studio-optimizer-row/);
+  });
+
+  test('参考图显示语义角色徽标（V6.2：计划角色冻结 + 手动角色菜单），按钮统一公共尺寸基类', () => {
+    // V6.2 语义参考：计划图片角色 = 方案冻结徽标（无 dropdown）；手动图片 = ⋯ 菜单
+    expect(tsx).toContain("planRoleBadge");
+    expect(tsx).toContain("index === 0 && !item.origin ? '主编辑图' : manualRoleBadge(item)");
+    expect(tsx).toContain('app-btn app-btn-secondary app-btn-sm');
+    expect(tsx).toContain('app-btn app-btn-primary studio-cta-btn');
+  });
+
+  test('需求或参考图变化后旧候选失效，并阻止视觉理解编译方案二次优化', () => {
+    expect(tsx).toContain("status: 'stale', useOptimized: false");
+    expect(tsx).toContain('setI2iOpt(staleOptimization)');
+    expect(tsx).toContain('setT2iOpt(staleOptimization)');
+    expect(tsx).toContain('visualCarryLocked');
+    expect(tsx).toContain('当前方案已由视觉理解完成 Prompt 编译');
   });
 });

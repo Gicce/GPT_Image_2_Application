@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BUILTIN_DESK_PACKAGE } from '../builtinCatalog';
+import { BUILTIN_DESK_PACKAGE, BUILTIN_UI_PACKAGE } from '../builtinCatalog';
 import { compileSkillPrompt } from '../compiler';
 import type { SkillProject } from '../types';
 
@@ -37,5 +37,18 @@ describe('compileSkillPrompt', () => {
     expect(result.blockers).toEqual([]);
     expect(result.prompt).toContain('使用附件原始 Logo');
     expect(result.prompt.indexOf('已确认素材卡')).toBeLessThan(result.prompt.indexOf('领域硬规则'));
+  });
+
+  it('compiles the UI concept package with its domain rules', () => {
+    const p = project({ skillId: 'ui_concept', skillVersion: '1.0.0', styleId: 'minimal', themeId: 'none', platformId: 'desktop-web' });
+    const result = compileSkillPrompt(BUILTIN_UI_PACKAGE, p);
+    expect(result.blockers).toEqual([]);
+    expect(result.prompt).toContain('8pt');
+    expect(result.prompt).toContain('信息层级');
+    expect(result.prompt).toContain('留白');
+  });
+
+  it('keeps the custom-theme asset guard for the UI domain', () => {
+    expect(compileSkillPrompt(BUILTIN_UI_PACKAGE, project({ themeId: 'custom' })).blockers[0]).toContain('自定义');
   });
 });

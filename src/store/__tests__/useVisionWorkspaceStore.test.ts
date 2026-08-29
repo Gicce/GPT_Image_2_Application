@@ -374,3 +374,53 @@ describe('生成方式（V4.0.8：文生图 / 图生图，切页面回来不丢�
     expect(reloaded.getState().generationMode).toBe('i2i');
   });
 });
+
+describe('V6.8 素材替换显式确认（无项目链路快照字段）', () => {
+  it('默认未确认；旧快照无该字段恢复为 false（保守恢复，不从优化产物反推）', async () => {
+    expect(store.getState().materialReplacementDone).toBe(false);
+    store.getState().setSource('D:/imgs/ref.png');
+    // 手工构造 V6.8 前的旧快照（含曾优化过的 recreation）
+    const legacy = makeRecreation('P');
+    store.getState().setRecreation(legacy);
+    const raw = JSON.parse(localStorage.getItem('vision_workspace_v1')!);
+    delete raw.materialReplacementDone;
+    localStorage.setItem('vision_workspace_v1', JSON.stringify(raw));
+
+    const reloaded = await freshStore();
+    expect(reloaded.getState().materialReplacementDone).toBe(false);
+    expect(reloaded.getState().recreation?.originalPrompt).toBe('P'); // 优化产物照常保留
+  });
+
+  it('setMaterialReplacementDone(true) 立即落盘，重启后恢复', async () => {
+    store.getState().setSource('D:/imgs/ref.png');
+    store.getState().setMaterialReplacementDone(true);
+    expect(JSON.parse(localStorage.getItem('vision_workspace_v1')!).materialReplacementDone).toBe(true);
+
+    const reloaded = await freshStore();
+    expect(reloaded.getState().materialReplacementDone).toBe(true);
+  });
+
+  it('removeSource / applyAnalysis（重新理解）复位确认位', () => {
+    store.getState().setSource('D:/imgs/ref.png');
+    store.getState().setMaterialReplacementDone(true);
+    store.getState().removeSource();
+    expect(store.getState().materialReplacementDone).toBe(false);
+
+    store.getState().setMaterialReplacementDone(true);
+    store.getState().applyAnalysis({
+      analysis: makeAnalysis(),
+      reverseResult: makeReverseResult(),
+      recreation: makeRecreation('P'),
+      genParams: { size: '1024x1024', quality: 'auto', count: 1 },
+      visionProfileId: 'p', visionModelId: 'm', visionTaskId: 't', sessionId: 's',
+    });
+    expect(store.getState().materialReplacementDone).toBe(false);
+  });
+
+  it('reset 清空确认位（与全部工作区状态一致）', () => {
+    store.getState().setSource('D:/imgs/ref.png');
+    store.getState().setMaterialReplacementDone(true);
+    store.getState().reset();
+    expect(store.getState().materialReplacementDone).toBe(false);
+  });
+});

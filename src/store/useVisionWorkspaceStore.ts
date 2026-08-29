@@ -77,6 +77,12 @@ export interface VisionWorkspaceSnapshot {
   sessionId: string;
   stage: VisionStage;
   errorText: string;
+  /**
+   * V6.8 工作流步骤状态：素材替换（第 3 步）已显式确认（无项目链路的持久化位；
+   * 项目化链路的唯一事实源 = project.workspace.materialReplacementDone）。
+   * 旧快照缺省 false（保守恢复）；任何修改意图提交后复位。
+   */
+  materialReplacementDone: boolean;
   updatedAt: string;
 }
 
@@ -107,6 +113,7 @@ const INITIAL: VisionWorkspaceSnapshot = {
   sessionId: '',
   stage: 'idle',
   errorText: '',
+  materialReplacementDone: false,
   updatedAt: '',
 };
 
@@ -189,6 +196,8 @@ interface VisionWorkspaceState extends VisionWorkspaceSnapshot {
   setNegativeDraft: (value: string) => void;
   /** 结构化修改意图变更（debounce=true 用于 freeText 按键输入；toggle / 人物 / 服装立即）。 */
   setModificationDraft: (draft: ModificationDraft, opts?: { debounce?: boolean }) => void;
+  /** V6.8 素材替换步骤确认位（工作流检查点，非方案内容；随快照持久化）。 */
+  setMaterialReplacementDone: (done: boolean) => void;
   /** debounce=true 用于按键驱动的逐步更新（调整要求输入 / 手动编辑原始 Prompt） */
   setRecreation: (next: RecreationState | null, opts?: { debounce?: boolean }) => void;
   setGenParams: (partial: Partial<VisionGenParams>) => void;
@@ -258,6 +267,7 @@ export const useVisionWorkspaceStore = create<VisionWorkspaceState>((set, get) =
         sessionId: '',
         stage: 'idle',
         errorText: '',
+        materialReplacementDone: false,
       },
       false,
     )(set, get);
@@ -298,6 +308,8 @@ export const useVisionWorkspaceStore = create<VisionWorkspaceState>((set, get) =
         sessionId: input.sessionId,
         stage: 'ready',
         errorText: '',
+        // 新分析 = 新任务：素材替换确认位复位
+        materialReplacementDone: false,
       },
       false,
     )(set, get);
@@ -319,6 +331,10 @@ export const useVisionWorkspaceStore = create<VisionWorkspaceState>((set, get) =
     // 服装策略状态不变量的最终收口：任何写入路径（含页面直接展开 {...current}）
     // 都不可能把「修改服装 + 原图服装」矛盾态留进 store / 持久化
     setAndPersist({ modificationDraft: normalizeModificationState(draft) }, opts?.debounce === true)(set, get);
+  },
+
+  setMaterialReplacementDone: done => {
+    setAndPersist({ materialReplacementDone: done }, false)(set, get);
   },
 
   setRecreation: (next, opts) => {

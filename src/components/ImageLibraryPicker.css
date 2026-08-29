@@ -1,0 +1,150 @@
+/* ============================================================
+   ImageLibraryPicker（V6.1 Portal 独立弹窗）
+   自包含样式：不依赖 Settings.css / 父弹窗任何类（懒加载 chunk
+   缺失曾导致 .template-modal* 无样式、弹窗被父 grid 压成窄长条）。
+   尺寸：min(960px, 100vw - 48px) × min(720px, 100vh - 48px)。
+   层级：1300 = 位于 Skill 弹窗（1200）之上、ImageViewer（4000）之下。
+   ============================================================ */
+
+.image-picker-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1300;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--bg-overlay, rgba(15, 15, 20, 0.56));
+}
+
+.image-picker-modal {
+  width: min(960px, calc(100vw - 48px));
+  height: min(720px, calc(100vh - 48px));
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
+  background: var(--bg-dialog, var(--bg-card, #fff));
+  border: 1px solid var(--border-light, #e5e5e5);
+  border-radius: 14px;
+  box-shadow: var(--card-shadow, 0 24px 60px rgba(0, 0, 0, 0.3));
+}
+
+.image-picker-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border-light, #e5e5e5);
+}
+
+.image-picker-heading h3 { margin: 0; font-size: 18px; }
+.image-picker-heading p { margin: 4px 0 0; font-size: 12px; color: var(--text-muted, #666); }
+
+.image-picker-close {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border-light, #e5e5e5);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary, #666);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.image-picker-close:hover { border-color: var(--accent-primary, #6366f1); color: var(--accent-primary, #6366f1); }
+.image-picker-close:focus-visible { outline: 2px solid var(--accent-primary-light, #c7d2fe); }
+
+.image-picker-body {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 16px 20px;
+}
+
+.image-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 12px;
+}
+
+.image-picker-cell {
+  position: relative;
+  display: grid;
+  gap: 6px;
+  justify-items: stretch;
+}
+
+.image-picker-pick {
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--border-light, #e5e5e5);
+  border-radius: 10px;
+  background: transparent;
+  cursor: pointer;
+  text-align: center;
+}
+
+.image-picker-pick:hover { border-color: var(--accent-primary, #6366f1); }
+.image-picker-pick:focus-visible { outline: 2px solid var(--accent-primary-light, #c7d2fe); }
+
+.image-picker-thumb {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  border-radius: 8px;
+  display: block;
+}
+
+.image-picker-thumb.is-placeholder {
+  display: grid;
+  place-items: center;
+  background: var(--bg-card-alt, #f2f2f4);
+  color: var(--text-muted, #666);
+  font-size: 12px;
+}
+
+.image-picker-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--text-secondary, #666);
+}
+
+.image-picker-preview-btn {
+  justify-self: center;
+  padding: 2px 10px;
+  border: 1px solid var(--border-light, #e5e5e5);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted, #666);
+  font-size: 11px;
+  line-height: 1.6;
+  cursor: pointer;
+}
+
+.image-picker-preview-btn:hover { border-color: var(--accent-primary, #6366f1); color: var(--accent-primary, #6366f1); }
+.image-picker-preview-btn:focus-visible { outline: 2px solid var(--accent-primary-light, #c7d2fe); }
+
+.image-picker-empty { grid-column: 1 / -1; text-align: center; }
+
+.image-picker-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--border-light, #e5e5e5);
+}
+
+.image-picker-note { font-size: 12px; color: var(--text-muted, #666); }
+
+@media (max-width: 640px) {
+  .image-picker-overlay { padding: 12px; }
+  .image-picker-modal { width: calc(100vw - 24px); height: calc(100vh - 24px); }
+}

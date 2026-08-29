@@ -1,0 +1,689 @@
+/* ============================================================
+   Skill 创作器（V4.2.3 三段式弹窗 / V6.1 Wizard Geometry 收口）
+   结构：overlay > dialog(grid: header / layout) >
+        layout(grid: 步骤栏 / main) >
+        main(grid: 固定标题 / 可滚正文 / 固定状态+操作底部)
+   关键：所有 grid 子项 min-height:0，滚动只发生在 .skill-creator-body
+   与 .skill-creator-steps 两处，保证 1024×768 下按钮永远可达；
+   五步共用同一固定几何（宽高只随视口），步骤差异一律由正文内部滚动消化。
+   ============================================================ */
+
+.skill-creator-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--bg-overlay);
+}
+
+.skill-creator-dialog {
+  width: min(960px, calc(100vw - 48px));
+  height: min(720px, calc(100vh - 48px));
+  max-height: calc(100vh - 32px);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  border-radius: 16px;
+  box-shadow: var(--card-shadow);
+}
+
+/* 嵌套图库选择器打开：底层正文滚动锁定（V6.1 Nested Modal 铁律） */
+.skill-creator-dialog.is-picker-open .skill-creator-body { overflow: hidden; }
+
+/* ---------- 固定头部 ---------- */
+.skill-creator-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 20px;
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--border-default);
+}
+
+.skill-creator-header h2 { margin: 0 0 4px; font-size: 18px; }
+.skill-creator-header p { margin: 0; color: var(--text-muted); font-size: 12px; }
+
+/* ---------- 中部：步骤栏 + 主区 ---------- */
+.skill-creator-layout {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  min-height: 0;
+}
+
+.skill-creator-steps {
+  padding: 12px;
+  background: var(--bg-section);
+  border-right: 1px solid var(--border-default);
+  overflow-y: auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.skill-creator-steps button {
+  display: flex;
+  width: 100%;
+  gap: 10px;
+  align-items: center;
+  padding: 10px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-muted);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+
+.skill-creator-steps button:focus-visible { outline: 2px solid var(--accent-primary-light); }
+
+.skill-creator-steps button.is-active {
+  background: var(--accent-primary-light);
+  color: var(--accent-primary-text);
+}
+
+.skill-creator-steps button.is-done b {
+  background: var(--badge-success-bg);
+  color: var(--badge-success-text);
+}
+
+.skill-creator-steps b {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--bg-card-alt);
+  flex-shrink: 0;
+}
+
+/* ---------- 主区三行：固定标题 / 可滚正文 / 固定底部 ---------- */
+.skill-creator-main {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+.skill-creator-title { padding: 16px 24px 0; }
+.skill-creator-title h3 { margin: 0 0 4px; font-size: 16px; }
+.skill-creator-title p { margin: 0; color: var(--text-muted); font-size: 12px; }
+
+.skill-creator-body {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  min-height: 0;
+  padding: 14px 24px 20px;
+}
+
+/* ---------- 表单（步骤 0） ---------- */
+.skill-creator-form {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+}
+
+.skill-creator-form label:last-child,
+.skill-creator-form label:has(textarea) { grid-column: 1 / -1; }
+
+/* V6.2 默认执行方式 / Prompt 策略（仅模板复用 Skill 展示） */
+.skill-execution-policy-hint {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.skill-creator-body label {
+  display: grid;
+  gap: 7px;
+  font-weight: 600;
+}
+
+.skill-creator-body input,
+.skill-creator-body select,
+.skill-creator-body textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--border-input);
+  border-radius: 9px;
+  padding: 10px 12px;
+  font: inherit;
+  font-weight: 400;
+  background: var(--bg-card);
+  color: var(--text-primary, inherit);
+  resize: vertical;
+}
+
+.skill-creator-body input:focus,
+.skill-creator-body select:focus,
+.skill-creator-body textarea:focus {
+  outline: 2px solid var(--accent-primary-light);
+  border-color: var(--accent-primary);
+}
+
+/* ---------- 来源事实（步骤 1）：紧凑分组列表 ---------- */
+.skill-fact-section { display: grid; gap: 16px; align-content: start; }
+
+.skill-fact-group {
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.skill-fact-group > header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background: var(--bg-section);
+}
+
+.skill-fact-group h4 { margin: 0; font-size: 13px; }
+.skill-fact-count { font-size: 11px; color: var(--text-muted); }
+
+.skill-fact-list { display: grid; }
+
+.skill-fact-row {
+  padding: 8px 12px;
+  border-top: 1px solid var(--border-light);
+}
+
+.skill-fact-row:first-child { border-top: 0; }
+
+.skill-fact-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.skill-fact-label { font-weight: 600; font-size: 13px; }
+
+/* 只读轻量徽标 */
+.skill-fact-readonly {
+  flex-shrink: 0;
+  font-style: normal;
+  font-size: 10px;
+  line-height: 1;
+  padding: 3px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+  background: var(--badge-muted-bg);
+  color: var(--badge-muted-text);
+}
+
+.skill-fact-value {
+  margin: 4px 0 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* 长内容默认收起为两行 */
+.skill-fact-value.is-clamped {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.skill-fact-toggle {
+  margin-top: 4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent-primary-text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.skill-fact-toggle:hover { text-decoration: underline; }
+
+/* ---------- AI 通用化（步骤 2）：卡片居中，固定几何下留白自然 ---------- */
+.skill-ai-stage {
+  display: grid;
+  justify-items: start;
+  gap: 14px;
+  width: min(640px, 100%);
+  margin: 24px auto;
+  padding: 28px;
+  border: 1px solid var(--border-prompt);
+  border-radius: 14px;
+  background: var(--accent-primary-light);
+}
+
+.skill-ai-stage p { margin: 0; max-width: 560px; color: var(--text-secondary); }
+
+.skill-model-note,
+.skill-risk-note {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--accent-primary-light);
+  color: var(--accent-primary-text);
+  font-size: 12px;
+}
+
+/* ---------- 检查规则（步骤 3）：三卡片行编辑 ---------- */
+.skill-rules-section { display: grid; gap: 14px; align-content: start; }
+
+/* 规则状态条：渲染在固定标题区（长规则滚动时状态始终可见） */
+.skill-rules-statusbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  background: var(--bg-card);
+}
+
+.skill-state-badge {
+  font-size: 11px;
+  line-height: 1;
+  padding: 4px 10px;
+  border-radius: 999px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.skill-state-badge.is-project_template { background: var(--badge-muted-bg); color: var(--badge-muted-text); }
+.skill-state-badge.is-ai_candidate { background: var(--badge-info-bg); color: var(--badge-info-text); }
+.skill-state-badge.is-confirmed { background: var(--badge-success-bg); color: var(--badge-success-text); }
+
+/* ===== V6 Skill 类型徽标（通用流程 / 模板复用）===== */
+
+.skill-type-badge {
+  display: inline-block;
+  vertical-align: 2px;
+  margin-left: 8px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  padding: 4px 10px;
+  border-radius: 999px;
+  white-space: nowrap;
+  background: var(--badge-muted-bg);
+  color: var(--badge-muted-text);
+}
+
+.skill-type-badge.is-template {
+  background: var(--badge-info-bg);
+  color: var(--badge-info-text);
+}
+
+/* ---------- V6.1 Recipe 卡：摘要行 + 默认折叠的完整方案（层级化排版） ---------- */
+.skill-recipe-note {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--accent-primary);
+  border-radius: 10px;
+  background: var(--bg-card);
+}
+
+.skill-recipe-note header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.skill-recipe-note h4 { margin: 0; font-size: 13px; color: var(--accent-primary-text); }
+
+.skill-recipe-badge {
+  flex-shrink: 0;
+  font-size: 10px;
+  line-height: 1;
+  padding: 4px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+  background: var(--badge-info-bg);
+  color: var(--badge-info-text);
+}
+
+.skill-recipe-facts { display: grid; gap: 4px; }
+
+.skill-recipe-fact {
+  display: flex;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.skill-recipe-fact > b { flex-shrink: 0; color: var(--text-muted); font-weight: 500; min-width: 64px; }
+.skill-recipe-fact > span { color: var(--text-secondary); min-width: 0; }
+
+.skill-recipe-toggle {
+  justify-self: start;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent-primary-text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.skill-recipe-toggle:hover { text-decoration: underline; }
+
+/* 完整 Recipe（默认折叠）：说明段 + 全部合同块标签 + 隐私说明 */
+.skill-recipe-detail { display: grid; gap: 8px; padding-top: 8px; border-top: 1px dashed var(--border-light); }
+
+.skill-recipe-detail p { margin: 0; font-size: 12px; color: var(--text-secondary); }
+
+.skill-recipe-detail ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.skill-recipe-detail li {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--badge-info-bg);
+  color: var(--badge-info-text);
+}
+
+.skill-recipe-privacy { color: var(--text-muted); font-size: 11px !important; }
+
+.skill-rules-model { font-size: 12px; color: var(--text-muted); }
+
+.skill-rules-errors {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--badge-danger-bg);
+  color: var(--badge-danger-text);
+}
+
+.skill-rules-errors p { margin: 0; font-size: 12px; }
+
+.skill-rule-card {
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.skill-rule-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.skill-rule-card-head h4 { margin: 0; font-size: 14px; }
+.skill-rule-count { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
+.skill-rule-hint { margin: 0; font-size: 12px; color: var(--text-muted); }
+
+.skill-rule-empty {
+  margin: 0;
+  padding: 14px;
+  border: 1px dashed var(--border-default);
+  border-radius: 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.skill-rule-rows { display: grid; gap: 8px; }
+
+.skill-rule-row {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.skill-rule-index {
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.skill-rule-row input {
+  min-width: 0;
+  border: 1px solid var(--border-input);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font: inherit;
+  background: var(--bg-card);
+  color: var(--text-primary, inherit);
+}
+
+.skill-rule-row input:focus {
+  outline: 2px solid var(--accent-primary-light);
+  border-color: var(--accent-primary);
+}
+
+.skill-rule-ops { display: flex; gap: 4px; }
+
+.skill-rule-ops button {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.skill-rule-ops button:hover:not(:disabled) {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary-text);
+}
+
+.skill-rule-ops button:focus-visible { outline: 2px solid var(--accent-primary-light); }
+
+.skill-rule-ops button:disabled { opacity: 0.4; cursor: default; }
+
+.skill-rule-ops button.is-remove:hover:not(:disabled) {
+  border-color: var(--badge-danger-text);
+  color: var(--badge-danger-text);
+}
+
+.skill-rule-add { justify-self: start; }
+
+/* 确认按钮行：正文末尾普通行（底部操作栏固定，无需 sticky） */
+.skill-rules-actions { display: flex; justify-content: flex-end; }
+
+/* ---------- 保存与发布（步骤 4）：自然 content stack（模式说明 → 样例 → 授权 → 状态） ---------- */
+.skill-publish-section { display: grid; gap: 14px; align-content: start; }
+
+.skill-publish-summary {
+  padding: 14px;
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  background: var(--bg-section);
+  display: grid;
+  gap: 8px;
+}
+
+.skill-publish-summary h4 { margin: 0; font-size: 13px; }
+
+.skill-publish-summary p { margin: 0; font-size: 13px; color: var(--text-secondary); }
+
+.skill-publish-summary p b { color: var(--text-primary, inherit); }
+
+.skill-publish-card {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+}
+
+.skill-publish-card > header h4 { margin: 0; font-size: 13px; }
+
+.skill-publish-card > header p { margin: 4px 0 0; font-size: 12px; color: var(--text-muted); }
+
+.skill-publish-status {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--bg-section);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.skill-resume-note {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--badge-info-bg);
+  color: var(--badge-info-text);
+  font-size: 12px;
+}
+
+.skill-sample-empty {
+  display: grid;
+  gap: 12px;
+  justify-items: start;
+  padding: 16px;
+  border: 1px dashed var(--border-default);
+  border-radius: 10px;
+}
+
+.skill-sample-empty p { margin: 0; color: var(--text-muted); font-size: 13px; }
+
+.skill-sample-entry { display: flex; gap: 10px; }
+
+.skill-sample-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+}
+
+.skill-sample-thumb {
+  width: 72px;
+  height: 72px;
+  object-fit: cover;
+  border-radius: 8px;
+  cursor: zoom-in;
+  display: block;
+}
+
+.skill-sample-thumb.is-placeholder {
+  display: grid;
+  place-items: center;
+  background: var(--bg-card-alt);
+  color: var(--text-muted);
+}
+
+.skill-sample-meta { display: grid; gap: 6px; min-width: 0; }
+
+.skill-sample-name {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skill-sample-tags { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+.skill-sample-source-badge {
+  flex-shrink: 0;
+  font-size: 10px;
+  line-height: 1;
+  padding: 3px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+  background: var(--badge-info-bg);
+  color: var(--badge-info-text);
+}
+
+.skill-sample-dim { font-size: 12px; color: var(--text-muted); }
+
+.skill-sample-ops { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+
+.skill-authorize-check {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 12px;
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 400;
+  cursor: pointer;
+}
+
+.skill-authorize-check.is-disabled { opacity: 0.55; cursor: default; }
+
+.skill-authorize-check input { width: 16px; height: 16px; margin: 1px 0 0; flex-shrink: 0; accent-color: var(--accent-primary); }
+
+/* ---------- 固定底部：紧凑状态条 + 操作行 ---------- */
+.skill-creator-footer {
+  display: grid;
+  gap: 10px;
+  padding: 12px 24px;
+  border-top: 1px solid var(--border-light);
+  background: var(--bg-card);
+}
+
+.skill-creator-status { display: grid; gap: 6px; }
+
+.skill-creator-message {
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.skill-creator-message.is-error { background: var(--badge-danger-bg); color: var(--badge-danger-text); }
+.skill-creator-message.is-success { background: var(--badge-success-bg); color: var(--badge-success-text); }
+
+.skill-creator-footer-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.skill-creator-footer-group { display: flex; gap: 10px; }
+
+/* ---------- 小屏（≤1100px，覆盖 1024×768） ---------- */
+@media (max-width: 1100px) {
+  .skill-creator-overlay { padding: 12px; }
+  .skill-creator-dialog { width: calc(100vw - 24px); height: calc(100vh - 24px); }
+  .skill-creator-layout { grid-template-columns: 160px minmax(0, 1fr); }
+  .skill-creator-body { padding: 12px 16px 16px; }
+  .skill-creator-title { padding: 12px 16px 0; }
+  .skill-creator-footer { padding: 10px 16px; }
+  .skill-creator-header { padding: 12px 16px; }
+  .skill-creator-form { grid-template-columns: 1fr; }
+  .skill-sample-card { grid-template-columns: auto minmax(0, 1fr); }
+  .skill-sample-ops { grid-column: 1 / -1; justify-content: flex-start; }
+}
+
+/* ---------- 窄宽度（≤860px）：步骤栏转顶部水平 stepper（Wizard Geometry） ---------- */
+@media (max-width: 860px) {
+  .skill-creator-layout { grid-template-columns: minmax(0, 1fr); }
+  .skill-creator-steps {
+    flex-direction: row;
+    overflow-x: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--border-default);
+  }
+  .skill-creator-steps button { flex: 0 0 auto; width: auto; }
+  .skill-creator-steps button span { white-space: nowrap; }
+}

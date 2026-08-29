@@ -126,20 +126,24 @@ describe('人物替换业务卡（V4.1 视觉映射：画面模板 → 替换人
     expect(mappingSrc).toContain('vision-person-map-name');
   });
 
-  test('空态 / 已选态二选一：未选人物只显示选择空态，已选显示卡片 + 更换（禁止同时大面积出现）', () => {
+  test('空态 / 已选态都保留紧凑人物卡，三种来源入口锚定在人物卡下方整列宽（V6.8 §三）', () => {
     expect(mappingSrc).toContain('vision-person-map-card is-empty');
     expect(mappingSrc).toContain('personEmptyAction');
-    expect(panelSrc).toContain('showSourcePicker');
-    // 已选图片人物时来源选择区隐藏，由「更换人物」进入选择态
-    expect(panelSrc).toMatch(/picking \|\| !hasImageRef/);
+    expect(panelSrc).toContain('sourceControls={(');
+    expect(mappingSrc).toContain('{sourceControls}');
+    expect(mappingSrc).toContain('vision-person-map-source-row');
   });
 
-  test('人物来源收成 Segmented Control（图片库 / 本地导入 / 文字描述）', () => {
-    expect(pickerSrc).toContain('vision-person-seg');
-    expect(pickerSrc).toContain('role="tab"');
+  test('人物来源是右卡直接操作（图片库更换 / 本地导入 / 文字描述）', () => {
+    expect(pickerSrc).toContain('vision-person-source-actions');
+    expect(pickerSrc).toContain('role="group"');
+    expect(pickerSrc).toContain('aria-pressed');
     expect(pickerSrc).toContain('PERSON_REPLACEMENT.sourceGallery');
     expect(pickerSrc).toContain('PERSON_REPLACEMENT.sourceLocal');
     expect(pickerSrc).toContain('PERSON_REPLACEMENT.sourceDescription');
+    expect(pickerSrc).toContain('galleryChangeButton');
+    expect(pickerSrc).toContain('localChangeButton');
+    expect(pickerSrc).toContain('descriptionChangeButton');
   });
 
   test('服装来源收成 Segmented Control：一行动态说明 + 仅自定义展开输入', () => {
@@ -186,8 +190,9 @@ describe('优化器 payload（双图真实进入 multimodal）', () => {
   });
 
   test('合成指令带双图上下文（模板标签 / 人物 mention）', () => {
-    // V4.2：复刻度增强技能停用时以关闭 boost 的草稿视图进指令（语义不变）
-    expect(pageSrc).toMatch(/buildModificationInstruction\(\s*\/\/ 复刻度增强技能停用[\s\S]*?: wstore\.modificationDraft,/);
+    // V4.2：复刻度增强技能停用时以关闭 boost 的草稿视图进指令（语义不变）；
+    // V6.8.1：优化入口改用统一有效意图构建器（需求描述 + 素材替换 + 区域 + 人物合同 V2）
+    expect(pageSrc).toMatch(/buildRecreationOptimizationInstruction\(\s*\/\/ 复刻度增强技能停用[\s\S]*?: wstore\.modificationDraft,/);
     expect(pageSrc).toContain('template: mentionResolution.template ? { label: mentionResolution.template.label } : undefined,');
   });
 });

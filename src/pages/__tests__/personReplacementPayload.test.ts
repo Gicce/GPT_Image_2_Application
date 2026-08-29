@@ -54,9 +54,11 @@ describe('ImageStudio：提交 payload 按序携带全部参考图 + 确定性�
     expect(studioPage).toContain('source_images: isEdit ? i2iSources.map(item => item.path) : []');
   });
 
-  it('carry 应用：i2iPrompt / i2iSources / i2iNegative 全部来自 resolveVisionCarryPatch', () => {
+  it('carry 应用：i2iPrompt / i2iSources / i2iNegative 全部来自 resolveVisionCarryPatch（V6.2 计划图带语义角色）', () => {
     expect(studioPage).toContain('setI2iPrompt(patch.i2iPrompt)');
-    expect(studioPage).toContain('updateI2iSources(patch.i2iSources)');
+    // V6.2：计划参考图映射时剥离 mention role，携带 generationRole / origin / label
+    expect(studioPage).toContain('updateI2iSources(patch.i2iSources.map(source => ({');
+    expect(studioPage).toContain('generationRole: source.role');
     expect(studioPage).toContain('patch.i2iNegative');
   });
 
@@ -82,7 +84,10 @@ describe('carryApply：角色清单 → 参考图 + 指令编译（纯函数层�
 describe('Rust 上传端：全部 source_images 按序上传 gpt-image-2', () => {
   it('edit_single_image 对每张源图构建 multipart part（image[]），无单图截断', () => {
     expect(taskRunner).toContain('for (file_name, bytes, mime) in &image_parts');
-    expect(taskRunner).toContain('form.part("image[]", part)');
+    // V4.2 Contract Hotfix：部件名收敛到常量，契约由 Rust 侧
+    // edits_form_contract_locks_text_fields_and_image_part_name 守卫
+    expect(taskRunner).toContain('const EDITS_IMAGE_PART_NAME: &str = "image[]"');
+    expect(taskRunner).toContain('form.part(EDITS_IMAGE_PART_NAME, part)');
     // 源图全部预读进 image_parts（模板 + 人物 + 额外参考一张不少）
     expect(taskRunner).toMatch(/for img_path in &source_images[\s\S]*?image_parts\.push/);
   });
