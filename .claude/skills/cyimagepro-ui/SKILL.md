@@ -7,9 +7,9 @@ description: CyImagePro UI Design System（cyimagepro-ui）——本仓库所有
 
 ```text
 Skill ID:       cyimagepro-ui
-Skill Version:  23.0.0
-UI System Version: 1.2.0
-Last Updated:   2026-08-28
+Skill Version:  23.1.0
+UI System Version: 1.3.0
+Last Updated:   2026-09-02
 Owner Code:     src/App.css（Token 定义唯一事实源）
                 src/components/（公共组件）
 ```

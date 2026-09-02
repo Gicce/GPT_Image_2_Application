@@ -150,6 +150,10 @@ pub struct SubTask {
     /// 历史 attempt 的结构化快照（与 attempt_errors 尾部对齐；旧任务缺失）
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attempt_details: Vec<SubTaskErrorDetail>,
+    /// V4.2.4 该槽位真实发送给 Provider 的执行指令（set-running 时由 task_runner
+    /// 回写；含负面词适配层组合，失败也保留）。旧任务缺失 = 未记录。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub executed_prompt: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -179,6 +183,9 @@ pub struct TaskBatchItem {
     pub plan_tags: Vec<String>,
     #[serde(default)]
     pub plan_description: String,
+    /// V4.2.4 系列批量变量取值（{zodiac: "鼠"}；普通批量为 None，前端透传不解释）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub variables: Option<serde_json::Value>,
 }
 
 /// 单张复合构图布局（一张图内部的分格结构），与 batch 互斥。
@@ -333,6 +340,10 @@ pub struct Task {
     /// 服装策略 / 模型记录；schema 由前端 TS 单一维护，此处 JSON 透传，旧数据缺省兼容）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provenance: Option<serde_json::Value>,
+    /// V4.2.4 Prompt 执行快照（生成前冻结的唯一执行真相：用户要求 / 正负 Prompt /
+    /// 来源 / 参考图 / 参数 / 批量成员；schema 由前端 TS 单一维护，JSON 透传，旧任务缺省兼容）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_snapshot: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -479,6 +490,9 @@ pub struct CreateTaskParams {
     /// 生成溯源快照（前端冻结后透传落库，不在此处解释 schema）
     #[serde(default)]
     pub provenance: Option<serde_json::Value>,
+    /// V4.2.4 Prompt 执行快照（前端冻结后透传落库，不在此处解释 schema）
+    #[serde(default)]
+    pub execution_snapshot: Option<serde_json::Value>,
 }
 
 /// 视觉理解任务的阶段性状态更新（前端驱动；task_runner 不参与执行）。
@@ -824,4 +838,52 @@ pub struct RuntimeAuthConfig {
     pub postprocess_token: String,
     #[serde(default)]
     pub postprocess_base_url: String,
+}
+
+#[cfg(test)]
+mod v424_tests {
+    use super::*;
+
+    /// V4.2.4 旧任务兼容：SubTask.executed_prompt / Task.execution_snapshot /
+    /// TaskBatchItem.variables 全部 serde default，旧 tasks.json 反序列化不丢字段。
+    #[test]
+    fn legacy_task_json_defaults_new_fields() {
+        let task: Task = serde_json::from_str(
+            r#"{"id":"t","prompt":"p","negative_prompt":"","size":"1024x1024","quality":"auto",
+                "output_format":"png","count":1,"status":"completed","created_at":"2026-01-01",
+                "output_dir":"/tmp","success_count":1,"failed_count":0,
+                "sub_tasks":[{"index":0,"status":"completed","image_id":"img"}],
+                "batch_items":[{"id":"b","label":"方案 1"}]}"#,
+        )
+        .unwrap();
+        assert!(task.execution_snapshot.is_none());
+        assert!(task.sub_tasks[0].executed_prompt.is_none());
+        assert!(task.batch_items[0].variables.is_none());
+    }
+
+    /// 新字段 JSON 透传落库（schema 由前端维护，Rust 只存取不解释）。
+    #[test]
+    fn new_fields_roundtrip_passthrough() {
+        let task: Task = serde_json::from_str(
+            r#"{"id":"t","prompt":"p","negative_prompt":"","size":"1024x1024","quality":"auto",
+                "output_format":"png","count":2,"status":"pending","created_at":"2026-01-01",
+                "output_dir":"/tmp","success_count":0,"failed_count":0,
+                "sub_tasks":[{"index":0,"status":"pending"},{"index":1,"status":"pending"}],
+                "execution_snapshot":{"schemaVersion":1,"promptSource":"batch-derived",
+                    "series":{"presetId":"chinese-zodiac","sourceTaskId":"src"}},
+                "batch_items":[
+                    {"id":"b0","label":"十二生肖 · 鼠","variables":{"zodiac":"鼠"}},
+                    {"id":"b1","label":"十二生肖 · 牛","variables":{"zodiac":"牛"}}]}"#,
+        )
+        .unwrap();
+        let snapshot = task.execution_snapshot.as_ref().unwrap();
+        assert_eq!(snapshot["promptSource"], "batch-derived");
+        assert_eq!(snapshot["series"]["presetId"], "chinese-zodiac");
+        assert_eq!(task.batch_items[0].variables.as_ref().unwrap()["zodiac"], "鼠");
+        // 序列化再反序列化：透传字段不丢失（tasks.json 持久化链路）
+        let json = serde_json::to_string(&task).unwrap();
+        let back: Task = serde_json::from_str(&json).unwrap();
+        assert!(back.execution_snapshot.is_some());
+        assert!(back.batch_items[1].variables.is_some());
+    }
 }

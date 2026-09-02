@@ -417,6 +417,30 @@ body {
   box-shadow: none;
 }
 
+/* 键盘焦点（与 .app-segmented-btn:focus-visible 同规范） */
+.app-btn:focus-visible,
+.settings-btn:focus-visible,
+.browse-btn:focus-visible,
+.start-btn:focus-visible,
+.dtd-btn:focus-visible,
+.dcd-btn:focus-visible,
+.sd-btn:focus-visible,
+.ti-btn:focus-visible,
+.buy-btn:focus-visible,
+.account-avatar-btn:focus-visible,
+.auth-submit:focus-visible,
+.order-action-btn:focus-visible,
+.update-notif-btn:focus-visible,
+.btn-check-update:focus-visible,
+.btn-update-now:focus-visible,
+.error-boundary-btn:focus-visible,
+.gallery-actions button:focus-visible,
+.load-more button:focus-visible,
+.preview-footer button:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 1px;
+}
+
 .app-btn-primary {
   background: var(--accent-primary);
   border-color: var(--accent-primary);

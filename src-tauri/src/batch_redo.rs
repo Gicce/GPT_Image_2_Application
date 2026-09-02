@@ -194,6 +194,7 @@ pub fn build_batch_redo_task(
                 attempt_errors: Vec::new(),
                 error_detail: None,
                 attempt_details: Vec::new(),
+                executed_prompt: None,
             })
             .collect(),
         task_type: if source.task_type.is_empty() {
@@ -218,6 +219,8 @@ pub fn build_batch_redo_task(
         // 动作白膜批：批量重做克隆保留批元数据（来源继承；batchId 查找仍命中原任务）
         pose_batch: source.pose_batch.clone(),
         provenance: source.provenance.clone(),
+        // V4.2.4：重做任务的执行快照来源继承（创建时刻执行意图与源一致；成员在 batch_items）
+        execution_snapshot: source.execution_snapshot.clone(),
     })
 }
 
@@ -250,9 +253,9 @@ mod tests {
             success_count: 1,
             failed_count: 2,
             sub_tasks: vec![
-                SubTask { index: 0, status: "completed".to_string(), image_id: Some("img-1".to_string()), error: None, label: Some("方案一".to_string()), retry_count: 0, attempt_errors: vec![], error_detail: None, attempt_details: vec![] },
-                SubTask { index: 1, status: "failed".to_string(), image_id: None, error: Some("网络错误".to_string()), label: Some("方案二".to_string()), retry_count: 1, attempt_errors: vec!["网络错误".to_string()], error_detail: None, attempt_details: vec![] },
-                SubTask { index: 2, status: "failed".to_string(), image_id: None, error: Some("上游失败".to_string()), label: Some("方案三".to_string()), retry_count: 0, attempt_errors: vec![], error_detail: None, attempt_details: vec![] },
+                SubTask { index: 0, status: "completed".to_string(), image_id: Some("img-1".to_string()), error: None, label: Some("方案一".to_string()), retry_count: 0, attempt_errors: vec![], error_detail: None, attempt_details: vec![], executed_prompt: None },
+                SubTask { index: 1, status: "failed".to_string(), image_id: None, error: Some("网络错误".to_string()), label: Some("方案二".to_string()), retry_count: 1, attempt_errors: vec!["网络错误".to_string()], error_detail: None, attempt_details: vec![], executed_prompt: None },
+                SubTask { index: 2, status: "failed".to_string(), image_id: None, error: Some("上游失败".to_string()), label: Some("方案三".to_string()), retry_count: 0, attempt_errors: vec![], error_detail: None, attempt_details: vec![], executed_prompt: None },
             ],
             task_type: "generate".to_string(),
             source_images: vec![],
@@ -261,9 +264,9 @@ mod tests {
             batch_strategy: "variant_set".to_string(),
             task_plan_summary: "三个产品方案".to_string(),
             batch_items: vec![
-                TaskBatchItem { id: "b1".to_string(), label: "方案一".to_string(), prompt_delta: "红色背景".to_string(), prompt_override: String::new(), negative_override: String::new(), negative_delta: String::new(), source_images: vec![], enabled: true, plan_title: "红".to_string(), plan_summary: String::new(), plan_tags: vec![], plan_description: String::new() },
-                TaskBatchItem { id: "b2".to_string(), label: "方案二".to_string(), prompt_delta: String::new(), prompt_override: "蓝色背景特写".to_string(), negative_override: "文字水印".to_string(), negative_delta: String::new(), source_images: vec![], enabled: true, plan_title: "蓝".to_string(), plan_summary: String::new(), plan_tags: vec![], plan_description: String::new() },
-                TaskBatchItem { id: "b3".to_string(), label: "方案三".to_string(), prompt_delta: "绿色背景".to_string(), prompt_override: String::new(), negative_override: String::new(), negative_delta: "噪点".to_string(), source_images: vec![], enabled: true, plan_title: "绿".to_string(), plan_summary: String::new(), plan_tags: vec![], plan_description: String::new() },
+                TaskBatchItem { id: "b1".to_string(), label: "方案一".to_string(), prompt_delta: "红色背景".to_string(), prompt_override: String::new(), negative_override: String::new(), negative_delta: String::new(), source_images: vec![], enabled: true, plan_title: "红".to_string(), plan_summary: String::new(), plan_tags: vec![], plan_description: String::new(), variables: None },
+                TaskBatchItem { id: "b2".to_string(), label: "方案二".to_string(), prompt_delta: String::new(), prompt_override: "蓝色背景特写".to_string(), negative_override: "文字水印".to_string(), negative_delta: String::new(), source_images: vec![], enabled: true, plan_title: "蓝".to_string(), plan_summary: String::new(), plan_tags: vec![], plan_description: String::new(), variables: None },
+                TaskBatchItem { id: "b3".to_string(), label: "方案三".to_string(), prompt_delta: "绿色背景".to_string(), prompt_override: String::new(), negative_override: String::new(), negative_delta: "噪点".to_string(), source_images: vec![], enabled: true, plan_title: "绿".to_string(), plan_summary: String::new(), plan_tags: vec![], plan_description: String::new(), variables: None },
             ],
             composite_layout: None,
             subject_entities: vec![],
@@ -275,6 +278,7 @@ mod tests {
             source_context: None,
             pose_batch: None,
             provenance: None,
+            execution_snapshot: None,
         };
         base
     }

@@ -17,6 +17,7 @@ export type AiModelRole =
   | 'agent_planner'
   | 'image_prompt_optimizer'
   | 'batch_planner'
+  | 'comic_planner'
   | 'vision_analysis'
   | 'vision_prompt_optimizer'
   | 'skill_authoring'
@@ -106,6 +107,15 @@ export const AI_MODEL_ROLES: readonly AiRoleDefinition[] = [
     role: 'batch_planner',
     label: '批量方案规划',
     description: '批量生成时把总需求规划为 N 个不同方案。',
+    group: 'creation',
+    capability: 'text',
+    configurable: 'routing',
+    defaultFollow: 'image_prompt_optimizer',
+  },
+  {
+    role: 'comic_planner',
+    label: '漫画方案规划',
+    description: 'AI 漫画：理解需求推荐漫画形式、起草漫画 Skill / 角色 / 本期故事，并按指令产出结构化补丁。',
     group: 'creation',
     capability: 'text',
     configurable: 'routing',

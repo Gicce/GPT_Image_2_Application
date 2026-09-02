@@ -231,6 +231,7 @@ mod tests {
             source_context: None,
             pose_batch: None,
             provenance: None,
+            execution_snapshot: None,
             sub_tasks: sub
                 .iter()
                 .enumerate()
@@ -244,6 +245,7 @@ mod tests {
                     attempt_errors: Vec::new(),
                     error_detail: None,
                     attempt_details: Vec::new(),
+                    executed_prompt: None,
                 })
                 .collect(),
         }

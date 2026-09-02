@@ -29,6 +29,8 @@ import {
   describeProvenanceModificationPlan,
   PROVENANCE_ROLE_LABELS,
 } from '../features/vision/generationProvenance';
+import { promptSourceLabel } from '../features/promptExecution/executionSnapshot';
+import BatchSeriesDialog from '../components/BatchSeriesDialog';
 import './History.css';
 import './ImageEdit.css';
 import '../components/BatchPlans.css';
@@ -56,9 +58,20 @@ const SUB_STATUS_META: Record<SubTask['status'], { label: string; cls: string }>
 
 const IMAGE_EXECUTION_MODEL = 'GPT Image 2';
 
+/** 漫画任务种类（execution_snapshot.comic.kind → 展示词；copy.md 2a 术语表）。 */
+const COMIC_KIND_LABELS: Record<string, string> = {
+  anchor: '首格锚点',
+  panels: '系列分镜',
+  panel_regen: '单格重绘',
+  character_ref: '角色参考图',
+  bake_text: '烘焙文字',
+};
+
 function getSourceLabel(task: Task): string {
   if (task.task_source === 'cy-video-studio') return 'CY Video Studio · 视频复刻';
   if (task.task_source === 'vision_recreation') return '视觉复刻';
+  if (task.task_source === 'comic') return 'AI 漫画';
+  if (task.task_source === 'batch_series') return '系列批量';
   return task.task_source === 'agent' ? 'AI Agent' : '手动';
 }
 
@@ -184,6 +197,8 @@ export default function History() {
   const [expandedPrompts, setExpandedPrompts] = useState<Set<string>>(new Set());
   const [planDrawerIndex, setPlanDrawerIndex] = useState<number | null>(null);
   const [activeCategory, setActiveCategory] = useState<TaskCategoryFilter>('all');
+  // V4.2.4 批量同效果生成入口（详情头按钮 → 系列批量向导，预选当前任务）
+  const [seriesDialogTaskId, setSeriesDialogTaskId] = useState<string | null>(null);
   // 右侧详情独立滚动容器：切任务时回到顶部
   const detailScrollRef = useRef<HTMLDivElement | null>(null);
 
@@ -373,6 +388,7 @@ export default function History() {
               planItems={planItems}
               isPlanBatch={isPlanBatch}
               onOpenPlanDrawer={setPlanDrawerIndex}
+              onStartSeries={setSeriesDialogTaskId}
             />
           </div>
         ) : (
@@ -413,6 +429,13 @@ export default function History() {
           }
         />
       )}
+
+      {seriesDialogTaskId && (
+        <BatchSeriesDialog
+          preselectedTaskId={seriesDialogTaskId}
+          onClose={() => setSeriesDialogTaskId(null)}
+        />
+      )}
     </div>
   );
 }
@@ -434,8 +457,13 @@ function HistoryPlanDrawerExtras(props: {
           <label>实际执行提示词 <span style={{ fontWeight: 400, color: 'var(--text-faint)' }}>（发送给模型的真实快照，含负面拼接）</span></label>
         </div>
         <p className="bp-readonly-text bp-readonly-prompt bp-readonly-negative">
-          {composeExecutedPrompt(item.positivePrompt, item.negativePrompt)}
+          {/* V4.2.4：优先读执行时回写的真实快照；旧任务缺失才按同一拼接规则展示 */}
+          {task.sub_tasks[item.index]?.executed_prompt?.trim()
+            || composeExecutedPrompt(item.positivePrompt, item.negativePrompt)}
         </p>
+        {!task.sub_tasks[item.index]?.executed_prompt?.trim() && (
+          <p className="history-empty-hint">旧版本任务：未记录完整执行快照（上方为按当前拼接规则推算）。</p>
+        )}
       </div>
       {item.error && (() => {
         const failure = classifyGenerationFailure({ detail: item.errorDetail ?? null, message: item.error });
@@ -513,6 +541,7 @@ function HistoryTaskDetail(props: {
   planItems: HistoryPlanItem[];
   isPlanBatch: boolean;
   onOpenPlanDrawer: (index: number) => void;
+  onStartSeries: (taskId: string) => void;
 }) {
   const { task, taskImages, imageUrls, sourceUrls, planItems, isPlanBatch } = props;
   const optState = promptOptimizationState(task);
@@ -578,6 +607,25 @@ function HistoryTaskDetail(props: {
 
   const singlePositive = (task.final_prompt || task.prompt).trim();
   const singleNegative = (task.final_negative_prompt || task.negative_prompt).trim();
+
+  // V4.2.4 执行快照：Prompt 三元组（正向/负向/实际执行）优先读创建时冻结的快照，
+  // 其次读执行时回写的 sub_tasks[].executed_prompt；旧任务缺失 → legacy 字段 + 如实标注。
+  const executionSnapshot = task.execution_snapshot ?? null;
+  const snapshotPositive = executionSnapshot?.positivePrompt?.trim() || '';
+  const snapshotNegative = executionSnapshot?.negativePrompt?.trim() || '';
+  const displayPositive = snapshotPositive || singlePositive;
+  const displayNegative = snapshotNegative || singleNegative;
+  const executedPromptReal = executionSnapshot?.effectivePrompt?.trim()
+    || task.sub_tasks.map(sub => sub.executed_prompt?.trim() ?? '').find(text => text.length > 0)
+    || '';
+  const promptSourceText = executionSnapshot?.promptSource
+    ? promptSourceLabel(executionSnapshot.promptSource)
+    : '旧版本任务（未记录 Prompt 来源）';
+
+  // 批量同效果入口：成功产图的生成/编辑任务（终态）才可发起系列批量
+  const canStartSeries = (task.task_type === 'generate' || task.task_type === 'edit')
+    && task.success_count > 0
+    && (['completed', 'failed', 'cancelled'].includes(task.status) || !!task.completed_at);
 
   // 参考图片（点击进全局 ImageViewer）：新任务带角色（画面模板 / 人物参考…），旧任务只编号
   const referenceCards: Array<{ path: string; roleLabel: string; label: string }> = provenance?.imageRoles
@@ -676,6 +724,15 @@ function HistoryTaskDetail(props: {
         <span className={`bp-status-badge ${STATUS_BADGE_CLS[task.status] || 'pending'}`}>
           {taskStatusMeta(task).label}
         </span>
+        {canStartSeries && (
+          <button
+            type="button"
+            className="settings-btn settings-btn-outline settings-btn-sm history-series-btn"
+            onClick={() => props.onStartSeries(task.id)}
+          >
+            批量同效果生成
+          </button>
+        )}
       </div>
 
       {/* ① 任务概览 */}
@@ -692,6 +749,18 @@ function HistoryTaskDetail(props: {
               <div className="detail-row">
                 <span>来源链路</span>
                 <span>视觉理解任务{task.source_task_id ? ` #${task.source_task_id.slice(0, 8)}` : ''} → 图片生成任务</span>
+              </div>
+            )}
+            {task.execution_snapshot?.comic && (
+              <div className="detail-row">
+                <span>漫画溯源</span>
+                <span>
+                  {COMIC_KIND_LABELS[task.execution_snapshot.comic.kind] ?? '漫画生成'}
+                  {task.execution_snapshot.comic.projectName ? ` · ${task.execution_snapshot.comic.projectName}` : ''}
+                  {task.execution_snapshot.comic.skillName ? ` · 技能「${task.execution_snapshot.comic.skillName}」` : ''}
+                  {task.execution_snapshot.comic.storyTitle ? ` · 故事「${task.execution_snapshot.comic.storyTitle}」` : ''}
+                  {task.execution_snapshot.comic.characterName ? ` · 角色「${task.execution_snapshot.comic.characterName}」` : ''}
+                </span>
               </div>
             )}
             {task.source_app === 'cy-video-studio' && (
@@ -942,26 +1011,36 @@ function HistoryTaskDetail(props: {
             </ul>
           )}
           <div className="history-prompts">
+            <p className="history-empty-hint">Prompt 来源：{promptSourceText}</p>
             <PromptTextBlock
               title="最终执行 Prompt（正向）"
-              content={singlePositive}
+              content={displayPositive}
               copyToastLabel="最终执行 Prompt 已复制"
               emptyHint="（无正向提示词）"
             />
-            {singleNegative && (
+            {displayNegative && (
               <PromptTextBlock
                 title="负面提示词"
-                content={singleNegative}
+                content={displayNegative}
                 copyToastLabel="负面提示词已复制"
               />
             )}
-            {singleNegative && (
+            {executedPromptReal ? (
               <PromptTextBlock
-                title="实际执行提示词"
-                content={composeExecutedPrompt(singlePositive, singleNegative)}
+                title="实际执行提示词（真实快照）"
+                content={executedPromptReal}
                 copyToastLabel="实际执行提示词已复制"
               />
-            )}
+            ) : displayNegative ? (
+              <>
+                <PromptTextBlock
+                  title="实际执行提示词（按拼接规则推算）"
+                  content={composeExecutedPrompt(displayPositive, displayNegative)}
+                  copyToastLabel="实际执行提示词已复制"
+                />
+                <p className="history-empty-hint">旧版本任务：未记录完整执行快照。</p>
+              </>
+            ) : null}
             {/* 视觉复刻链路：AI 优化前的复刻原始 Prompt（默认折叠，不与最终版抢视觉） */}
             {visionLinked && optState.snapshot?.original_prompt?.trim() && (
               <details className="history-advanced">

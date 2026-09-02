@@ -302,6 +302,7 @@ fn handle_create(
                 attempt_errors: Vec::new(),
                 error_detail: None,
                 attempt_details: Vec::new(),
+                executed_prompt: None,
             })
             .collect(),
         task_type,
@@ -325,6 +326,7 @@ fn handle_create(
         source_context: Some(source_ctx),
         pose_batch: None,
         provenance: None,
+        execution_snapshot: None,
     };
     let task_id = task.id.clone();
     storage::with_tasks(app, |tasks| {

@@ -63,7 +63,10 @@ describe('ImageStudio：提交 payload 按序携带全部参考图 + 确定性�
   });
 
   it('i2i 负面词回落携带草稿（指令追加项随任务冻结，可在 History 审计）', () => {
-    expect(studioPage).toContain("visionCarryMeta?.negativePrompt?.trim() || ''");
+    // V4.2.4：携带负面词在 carry 时预填 i2i 表单槽（imageEditNegative），
+    // 提交时统一从表单槽读取 —— 负面词与正向词同一条 PromptDraft 链路
+    expect(studioPage).toContain('if (patch.i2iNegative) setI2iNegative(patch.i2iNegative);');
+    expect(studioPage).toContain('const manualNegative = isEdit ? i2iNegative : t2iNegative;');
     expect(studioPage).toContain('negative_prompt: finalNegative');
   });
 });

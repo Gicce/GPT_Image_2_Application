@@ -73,7 +73,20 @@ export function resolveImageDetailMetadata(
   const isLocal = source.isLocal;
   const timeLabel = isLocal ? '导入时间' : '生成时间';
   const timeValue = formatTime(image.created_at);
-  const assetType = source.kind === 'video_pose' ? '动作白膜' : undefined;
+  // 用途 = 真实业务 metadata（copy.md §9：来源与用途两个概念）。漫画分镜按
+  // execution_snapshot.comic.kind 细分（首格锚点 / 系列分镜 / 单格重绘），缺快照不补用途。
+  const comicKind = task?.execution_snapshot?.comic?.kind;
+  const assetType = source.kind === 'video_pose'
+    ? '动作白膜'
+    : source.kind === 'ai_comic' && comicKind
+      ? (comicKind === 'anchor'
+        ? '首格锚点'
+        : comicKind === 'panel_regen'
+          ? '单格重绘'
+          : comicKind === 'bake_text'
+            ? '烘焙文字'
+            : '系列分镜')
+      : undefined;
   const format = formatLabelOf(image.file_name);
 
   const basicRows: ImageDetailRow[] = [

@@ -301,8 +301,9 @@ function resolveRecommendedChain(role: AiModelRole, ctx: AiRoleResolveContext): 
     case 'skill_authoring':
     case 'vision_prompt_optimizer':
     case 'batch_planner':
+    case 'comic_planner':
     case 'image_generation':
-      // vision_prompt_optimizer / batch_planner 一定有 defaultFollow（modelRoles 定义），
+      // vision_prompt_optimizer / batch_planner / comic_planner 一定有 defaultFollow（modelRoles 定义），
       // 走不到这里；防御性返回配置缺失错误。
       return { ok: false, resolved: null, error: NO_MODEL_FOR_USE_ERRORS.prompt_optimizer };
   }

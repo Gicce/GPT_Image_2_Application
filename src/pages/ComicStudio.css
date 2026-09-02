@@ -1,0 +1,3642 @@
+/* =====================================================================
+ * AI 漫画工作台（CyImagePro 第六工作流，§23 Adaptive Workbench Layout）
+ * 结构：项目库（卡片流） / 工作台（步骤栏 + 主区 + Context Rail）。
+ * 颜色一律 var(--*) 设计令牌；唯一例外：对白气泡预览是「导出 PNG 成品外观」
+ * 的忠实预览，与 comicExport.ts 渲染常量严格一致（作品层，非应用 UI 层）。
+ * ===================================================================== */
+
+/* ===== 页面壳 ===== */
+.comic-page {
+  max-width: none;
+}
+
+.comic-muted {
+  color: var(--text-muted);
+}
+
+.comic-helper {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.comic-error-bar {
+  width: min(100%, 1520px);
+  margin: 0 auto 12px;
+  padding: 8px 14px;
+  border-radius: 8px;
+  background: var(--bg-error);
+  color: var(--text-error);
+  font-size: 13px;
+}
+
+.comic-exporting-note {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 8px 18px;
+  border-radius: 999px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  box-shadow: var(--card-shadow);
+  color: var(--text-secondary);
+  font-size: 13px;
+  z-index: 60;
+}
+
+/* ===== 项目库（无打开项目时）===== */
+.comic-home {
+  width: min(100%, 1180px);
+  margin-inline: auto;
+}
+
+.comic-home-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.comic-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  text-align: center;
+  padding: 56px 20px;
+  background: var(--bg-card);
+  border: 1px dashed var(--border-default);
+  border-radius: 12px;
+  margin-bottom: 16px;
+}
+
+.comic-empty-state p {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+.comic-empty-state .app-btn-primary {
+  margin-top: 10px;
+}
+
+.comic-project-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 14px;
+}
+
+.comic-project-card {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  box-shadow: var(--card-shadow);
+  overflow: hidden;
+}
+
+.comic-project-open {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 16px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: var(--text-primary);
+  transition: background 0.15s ease;
+}
+
+.comic-project-open:hover {
+  background: var(--bg-hover);
+}
+
+.comic-project-open strong {
+  font-size: 15px;
+  color: var(--text-heading);
+}
+
+.comic-stage-badge {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  background: var(--badge-info-bg);
+  color: var(--badge-info-text);
+}
+
+.comic-project-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 12px 12px;
+}
+
+/* ===== 打开项目后的头部 ===== */
+.comic-project-header {
+  width: min(100%, 1520px);
+  margin: 0 auto 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+}
+
+.comic-project-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.comic-project-title strong {
+  font-size: 15px;
+  color: var(--text-heading);
+}
+
+.comic-save-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+.comic-save-state.comic-save-error {
+  color: var(--text-error);
+}
+
+.comic-save-state.comic-save-saved {
+  color: var(--accent-success);
+}
+
+.comic-project-ops {
+  display: flex;
+  gap: 8px;
+}
+
+/* ===== 工作台：步骤栏 + 主区 + Rail ===== */
+.comic-workbench {
+  width: min(100%, 1520px);
+  margin-inline: auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(340px, 390px);
+  grid-template-areas:
+    "steps steps"
+    "main rail";
+  gap: 18px 24px;
+  align-items: start;
+}
+
+.comic-steps {
+  grid-area: steps;
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+}
+
+.comic-step {
+  flex: 1 1 0;
+  min-width: 128px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: var(--text-muted);
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.comic-step:hover {
+  background: var(--bg-hover);
+}
+
+.comic-step.is-current {
+  background: var(--accent-primary-light);
+  border-color: var(--border-prompt);
+  color: var(--text-primary);
+}
+
+.comic-step.is-done {
+  color: var(--text-secondary);
+}
+
+.comic-step-dot {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--border-subtle);
+}
+
+.comic-step.is-done .comic-step-dot {
+  background: var(--accent-success);
+}
+
+.comic-step.is-current .comic-step-dot {
+  background: var(--accent-primary);
+  box-shadow: 0 0 0 3px var(--accent-primary-light);
+}
+
+.comic-step-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.comic-step-text strong {
+  font-size: 13px;
+  line-height: 1.3;
+  color: inherit;
+}
+
+.comic-step-text em {
+  font-style: normal;
+  font-size: 11px;
+  line-height: 1.3;
+  color: var(--text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.comic-main {
+  grid-area: main;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.comic-rail {
+  grid-area: rail;
+  position: sticky;
+  top: 20px;
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+
+@media (max-width: 1599px) and (min-width: 1440px) {
+  .comic-workbench {
+    width: calc(100% - 40px);
+    grid-template-columns: minmax(0, 1fr) 320px;
+    gap: 16px 20px;
+  }
+}
+
+@media (max-width: 1439px) {
+  .comic-workbench {
+    width: min(100%, 1180px);
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "steps"
+      "main"
+      "rail";
+    gap: 14px;
+  }
+
+  .comic-rail {
+    position: static;
+    max-height: none;
+    overflow-y: visible;
+  }
+}
+
+/* ===== Rail 卡片 ===== */
+.comic-rail-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  padding: 14px;
+}
+
+.comic-rail-card h4 {
+  margin: 0 0 10px;
+  font-size: 13px;
+  color: var(--text-heading);
+}
+
+.comic-rail-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.comic-rail-rows > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+}
+
+.comic-rail-rows span {
+  flex: none;
+  color: var(--text-muted);
+}
+
+.comic-rail-rows strong {
+  font-weight: 500;
+  color: var(--text-secondary);
+  text-align: right;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.comic-rail-card .comic-muted {
+  font-size: 12px;
+  margin: 8px 0 0;
+}
+
+.comic-rail-task {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 0;
+  border-top: 1px solid var(--border-light);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.comic-rail-task > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ===== 状态徽标统一族（Phase 1.2-I 收口，审计 2.8/2.9）
+   三族合一：.comic-status-*（生成状态）/ .comic-badge-*（步骤徽标）/
+   .comic-slot-badge.is-*（角色槽位）共用一套 badge-* 令牌；
+   同一语义恒用同一对颜色（锁定/已生成=success，失败=danger，
+   进行中/已确认=info，待处理=warn，空态/草稿=muted）。
+   颜色只允许出现 var(--badge-*)，禁止新增 hex。 */
+.comic-status,
+.comic-badge,
+.comic-slot-badge {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.6;
+  white-space: nowrap;
+  background: var(--badge-muted-bg);
+  color: var(--badge-muted-text);
+}
+
+/* 已定稿 / 已锁定 / 已生成 */
+.comic-status-completed,
+.comic-badge-locked,
+.comic-slot-badge.is-locked {
+  background: var(--badge-success-bg);
+  color: var(--badge-success-text);
+}
+
+/* 失败 / 有问题 */
+.comic-status-failed,
+.comic-slot-badge.is-problem {
+  background: var(--badge-danger-bg);
+  color: var(--badge-danger-text);
+}
+
+/* 进行中 / 已确认 / 就绪 */
+.comic-status-running,
+.comic-badge-confirmed,
+.comic-slot-badge.is-ready,
+.comic-slot-badge.is-confirmed {
+  background: var(--badge-info-bg);
+  color: var(--badge-info-text);
+}
+
+/* 起草中 / 待处理 */
+.comic-slot-badge.is-active {
+  background: var(--badge-warn-bg);
+  color: var(--badge-warn-text);
+}
+
+/* 草稿 / 空槽位（= 基础默认 muted，显式列出便于对照语义表） */
+.comic-badge-draft,
+.comic-slot-badge.is-empty {
+  background: var(--badge-muted-bg);
+  color: var(--badge-muted-text);
+}
+
+/* ===== 阶段通用：卡片 / 操作行 / 阻塞项 ===== */
+.comic-stage {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.comic-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  padding: 16px;
+}
+
+.comic-card-title {
+  margin: 0 0 12px;
+  font-size: 14px;
+  color: var(--text-heading);
+}
+
+.comic-actions-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.comic-actions-row + .comic-actions-row {
+  margin-top: 8px;
+}
+
+.comic-blockers {
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--badge-warn-bg);
+}
+
+.comic-blockers p {
+  margin: 2px 0;
+  font-size: 12px;
+  color: var(--badge-warn-text);
+}
+
+.comic-empty-hint {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.comic-patch-report {
+  margin-top: 10px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--bg-subtle);
+  font-size: 12px;
+}
+
+.comic-patch-report p {
+  margin: 2px 0;
+}
+
+/* ===== 技能事实卡（dl 网格，技能 / 故事审定 / 新建预览共用）===== */
+.comic-skill-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 10px 18px;
+  margin: 0;
+}
+
+.comic-skill-facts > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.comic-skill-facts dt {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.comic-skill-facts dd {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+/* ===== 本期故事 Hero Card（Phase 1.2 Step 1：故事是第一主信息）===== */
+.comic-story-hero-card {
+  padding: 20px;
+}
+
+.comic-story-hero-kicker {
+  margin: 0 0 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.comic-story-hero-title {
+  margin: 0 0 8px;
+  font-size: 20px;
+  line-height: 1.3;
+  color: var(--text-heading);
+}
+
+.comic-story-one-liner {
+  margin: 0 0 14px;
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--text-secondary);
+}
+
+.comic-story-hero-card .comic-skill-facts {
+  margin-bottom: 12px;
+}
+
+.comic-story-hero-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 14px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* Replan 红线（V4.2.9 §55）：规划中旧故事保留淡化，失败后仍可返回使用 */
+.comic-story-hero-card.is-faded {
+  opacity: 0.55;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* ===== 故事审定 Story Hero（V4.2.9，docs/ai-comic/17 §六）=====
+   标题 → 形式/格数/主题 chips → 概要（可读宽度）→ 节拍网格 → Punchline callout
+   → 涉及角色 → 按钮区；确认 = 唯一 Primary。不再是 dl 字段详情页。 */
+.comic-story-review-kicker {
+  margin: 0 0 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.comic-story-review-title {
+  margin: 0 0 10px;
+  font-size: 20px;
+  line-height: 1.3;
+  color: var(--text-heading);
+}
+
+.comic-story-review-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.comic-story-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border-light);
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.comic-story-review-summary {
+  margin: 0 0 14px;
+  max-width: 62ch;
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--text-secondary);
+}
+
+.comic-story-beats-section {
+  margin-bottom: 14px;
+}
+
+.comic-story-section-title {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+/* 节拍可视化：列数由 TS 从展示形式几何派生（四宫格 2×2、九宫格 3×3、其余 1 列） */
+.comic-story-beats {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.comic-story-beat {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: var(--bg-inset);
+}
+
+.comic-story-beat-index {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--accent-primary) 18%, transparent);
+  color: var(--accent-primary);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.comic-story-beat p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  word-break: break-word;
+}
+
+/* Punchline callout：结尾类型徽标 + 最后一拍（沿用 concept-punchline 的左边线语言） */
+.comic-story-punchline {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border-left: 2px solid var(--accent-primary);
+  border-radius: 0 8px 8px 0;
+  background: var(--bg-inset);
+}
+
+.comic-story-punchline-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent-primary);
+}
+
+.comic-story-punchline p {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.6;
+  color: var(--text-primary);
+}
+
+.comic-story-context {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.comic-story-context-label {
+  flex: none;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.comic-story-context-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.comic-story-review-actions {
+  padding-top: 12px;
+  border-top: 1px solid var(--border-light);
+}
+
+.comic-card-head {
+  margin-bottom: 8px;
+}
+
+.comic-card-head .comic-helper {
+  margin: 0 0 4px;
+}
+
+/* ===== 角色确认 ===== */
+.comic-character-card.is-locked {
+  border-color: var(--accent-success);
+}
+
+.comic-character-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.comic-character-head > div:first-child {
+  min-width: 0;
+}
+
+.comic-character-head .comic-card-title {
+  margin-bottom: 2px;
+}
+
+.comic-character-body {
+  display: grid;
+  grid-template-columns: 132px minmax(0, 1fr);
+  gap: 14px;
+}
+
+@media (max-width: 900px) {
+  .comic-character-body {
+    grid-template-columns: 1fr;
+  }
+}
+
+.comic-character-ref {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.comic-character-ref img {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid var(--border-default);
+}
+
+.comic-ref-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 8px;
+  border: 1px dashed var(--border-subtle);
+  background: var(--bg-inset);
+  color: var(--text-faint);
+  font-size: 12px;
+}
+
+.comic-character-facts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.comic-character-facts > p {
+  margin: 0;
+  font-size: 12px;
+}
+
+.comic-character-patch textarea {
+  font-size: 12px;
+}
+
+/* ===== 故事 / 分镜 ===== */
+.comic-repair-note {
+  margin-bottom: 10px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--badge-info-bg);
+  color: var(--badge-info-text);
+  font-size: 12px;
+}
+
+.comic-storyboard-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.comic-storyboard-row {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: var(--bg-subtle);
+}
+
+.comic-panel-order {
+  flex: none;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent-primary-text);
+}
+
+.comic-storyboard-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.comic-storyboard-main > p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.comic-storyboard-main > p.comic-muted,
+.comic-dialogue-line {
+  font-size: 12px;
+}
+
+.comic-dialogue-line {
+  margin: 0;
+  padding-left: 12px;
+  color: var(--text-tertiary);
+  border-left: 2px solid var(--border-default);
+}
+
+/* ===== 生成阶段：锚点 + 分镜网格 ===== */
+.comic-anchor-row {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .comic-anchor-row {
+    grid-template-columns: 1fr;
+  }
+
+  .comic-panel-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.comic-anchor-figure {
+  position: relative;
+}
+
+.comic-anchor-figure img {
+  width: 100%;
+  border-radius: 8px;
+  border: 1px solid var(--border-default);
+}
+
+.comic-anchor-figure .comic-badge {
+  position: absolute;
+  left: 8px;
+  top: 8px;
+}
+
+.comic-anchor-info {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.comic-anchor-info > p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.comic-panel-grid {
+  display: grid;
+  /* 紧凑预览卡网格（V4.2.13 残留修复）：桌面 2 列 / 窄屏 1 列（见上方 900px
+     断点）。列数与最终页排版几何解耦——竖版形式（上下双格等 columns=1）此前经
+     内联样式把预览卡撑成全宽巨型方块，页面被撑爆。 */
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.comic-panel-cell {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--bg-subtle);
+}
+
+.comic-panel-cell.comic-panel-failed {
+  border-color: var(--accent-danger);
+}
+
+.comic-panel-cell.comic-panel-completed {
+  border-color: var(--accent-success);
+}
+
+.comic-panel-figure {
+  position: relative;
+  aspect-ratio: 1;
+  /* 主图高度收口（V4.2.13 残留修复）：宽卡不再按 1:1 撑成巨型方块；
+     220px 与锚点参考图列宽（220px）同一视觉档。 */
+  max-height: 220px;
+  background: var(--bg-inset);
+}
+
+.comic-panel-figure img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.comic-panel-figure .comic-ref-placeholder {
+  aspect-ratio: 1;
+  height: 100%;
+}
+
+.comic-panel-order-badge,
+.comic-panel-figure .comic-badge {
+  position: absolute;
+  left: 6px;
+  font-size: 10px;
+  padding: 1px 6px;
+}
+
+.comic-panel-order-badge {
+  top: 6px;
+  background: var(--bg-overlay);
+  color: var(--text-on-accent);
+  border-radius: 999px;
+}
+
+.comic-panel-figure .comic-badge {
+  bottom: 6px;
+}
+
+.comic-panel-scene {
+  margin: 0;
+  padding: 8px 10px 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.45;
+  /* 描述限高：最多 3 行，长分镜文案不再把卡片往下顶 */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+
+.comic-panel-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px 10px;
+}
+
+/* ===== 文字精修（三栏：缩略图 / 大图预览 / 对白编辑器）===== */
+.comic-text-stage {
+  display: grid;
+  grid-template-columns: 118px minmax(0, 1fr) 340px;
+  gap: 14px;
+  align-items: start;
+}
+
+@media (max-width: 1439px) {
+  .comic-text-stage {
+    grid-template-columns: 96px minmax(0, 1fr);
+  }
+
+  .comic-dialogue-editor {
+    grid-column: 1 / -1;
+  }
+}
+
+.comic-text-panels {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.comic-text-thumb {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: center;
+  transition: border-color 0.15s ease;
+}
+
+.comic-text-thumb.is-selected {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary-text);
+}
+
+.comic-text-thumb img {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  border-radius: 6px;
+}
+
+.comic-text-thumb .comic-ref-placeholder {
+  aspect-ratio: 1;
+  height: auto;
+  font-size: 11px;
+}
+
+.comic-editor-canvas {
+  min-width: 0;
+}
+
+.comic-editor-figure {
+  position: relative;
+  background: var(--bg-inset);
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  overflow: hidden;
+  /* aspect-ratio / background 由组件内联注入 = 导出槽位宽高比与页背景
+   * （V4.2.13 双问题修复：fit-safe——object-fit:contain 与导出 computePanelImageRect
+   * 同策略，比例错配时完整保留画面、槽内留白 = 页背景，文字所见即所得） */
+}
+
+.comic-editor-figure > img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.comic-editor-figure .comic-ref-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: none;
+}
+
+.comic-text-thumb-note {
+  margin: 2px 0 0;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* ===== V4.2.12 文字层：画布直接编辑 + 共享气泡渲染（bubbleShape 几何）=====
+ * 形状由 ComicBubbleBox 内的 SVG path 绘制（与导出 Path2D 同一条 path 字符串）；
+ * 这里只负责定位 / 交互 / 状态。作品层固定配色不随主题切换（docs/ai-comic/08 豁免先例）；
+ * 选中描边走令牌色（编辑器 UI 层，不属于作品层）。 */
+.comic-text-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+
+.comic-placement-hint {
+  flex: 1;
+  min-width: 160px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.comic-placement-hint.is-active {
+  color: var(--accent-primary-text);
+}
+
+/* 工具栏「添加对白/旁白/文字」已进入放置模式的状态（不覆写 app-btn 皮肤：
+ * 独立状态类，颜色走令牌） */
+.comic-placement-active {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary-text);
+}
+
+.comic-editor-figure.is-placing {
+  cursor: crosshair;
+}
+
+.comic-editor-figure.is-dragging {
+  user-select: none;
+}
+
+.comic-text-footnote {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.comic-bubble-box {
+  position: absolute;
+  z-index: 2;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+/* V4.2.13 根因修复（inline 帧自带定位上下文）：内部 .comic-bubble-svg 是
+ * absolute + inset:0 + 100%×100%，若本盒是 static 且祖先链全部 static，
+ * SVG 包含块会一路上浮到 viewport → 气泡铺满整个应用窗口（鸭梨山大 P0）。
+ * relative 让 SVG 永远锚定自己的盒；预览容器规则（下方）另有一道护栏。 */
+.comic-bubble-box.is-inline {
+  position: relative;
+  max-width: 100%;
+}
+
+.comic-bubble-box.is-editable:hover {
+  z-index: 3;
+}
+
+.comic-bubble-box.is-selected {
+  z-index: 4;
+}
+
+.comic-bubble-box.is-dragging {
+  cursor: grabbing;
+}
+
+.comic-bubble-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+/* 描边宽 / 虚线段（B2/B3 同源修复）由 ComicBubbleBox 内联注入（panel 宽比例，
+ * bubbleShape 共享常量，导出 canvas 同源）；CSS 只保留颜色语义。 */
+.comic-bubble-svg path,
+.comic-bubble-svg circle {
+  fill: rgba(255, 255, 255, 0.96);
+  stroke: rgba(17, 17, 17, 0.42);
+}
+
+.comic-bubble-box.is-narration .comic-bubble-svg path,
+.comic-bubble-box.is-narration .comic-bubble-svg circle {
+  fill: rgba(20, 20, 26, 0.82);
+  stroke: rgba(255, 255, 255, 0.28);
+}
+
+.comic-bubble-box.is-selected .comic-bubble-svg path,
+.comic-bubble-box.is-selected .comic-bubble-svg circle {
+  stroke: var(--accent-primary);
+}
+
+/* V4.2.14：文字层由共享布局引擎逐行定位（docs/ai-comic/28）——位置 / 字号 /
+ * 行高 / 描边 / 阴影全部来自 dialogueLayout + dialogueTextPaint 的内联样式，
+ * CSS 不再参与排版（禁止浏览器自动换行，white-space 由内联 pre 锁定）。 */
+.comic-bubble-text {
+  z-index: 1;
+  pointer-events: none;
+  display: block;
+}
+
+.comic-bubble-line {
+  display: block;
+}
+
+.comic-bubble-placeholder {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 13px;
+  color: var(--text-muted);
+  opacity: 0.7;
+  white-space: pre;
+}
+
+/* 放置模式 Ghost 预览（半透明真实气泡，跟随鼠标；不参与交互） */
+.comic-bubble-ghost {
+  opacity: 0.55;
+  pointer-events: none;
+  z-index: 6;
+}
+
+/* 行数溢出（引擎 overflow 标记；编辑态给轻提示，不影响导出） */
+.comic-bubble-box.is-overflow.is-editable {
+  outline: 1px dashed rgba(224, 82, 82, 0.55);
+  outline-offset: 2px;
+}
+
+.comic-bubble-handle {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--bg-card);
+  border: 2px solid var(--accent-primary);
+  z-index: 5;
+}
+
+.comic-bubble-handle-nw {
+  top: -6px;
+  left: -6px;
+  cursor: nwse-resize;
+}
+
+.comic-bubble-handle-ne {
+  top: -6px;
+  right: -6px;
+  cursor: nesw-resize;
+}
+
+.comic-bubble-handle-sw {
+  bottom: -6px;
+  left: -6px;
+  cursor: nesw-resize;
+}
+
+.comic-bubble-handle-se {
+  bottom: -6px;
+  right: -6px;
+  cursor: nwse-resize;
+}
+
+/* 气泡样式视觉选择器（Inspector 顶部）*/
+/* Bubble Library V2：四分组（对白 / 情绪 / 旁白 / 无框文字）× 各 4 卡 = 十六类真实迷你气泡 */
+.comic-bubble-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.comic-bubble-picker-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.comic-bubble-picker-group-label {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.comic-bubble-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(88px, 1fr));
+  gap: 8px;
+}
+
+.comic-bubble-picker-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 6px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  cursor: pointer;
+  font: inherit;
+  color: var(--text-muted);
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+
+.comic-bubble-picker-card:hover {
+  border-color: var(--accent-primary);
+  color: var(--text-heading);
+}
+
+.comic-bubble-picker-card.is-selected {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary-text);
+}
+
+.comic-bubble-picker-preview {
+  width: 100%;
+  min-height: 46px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* V4.2.13 第二道护栏：预览容器自身成为定位上下文（即使未来漏挂 is-inline，
+   * 内部 absolute SVG 也只会锚定到预览卡，不会再上浮到 viewport） */
+  position: relative;
+}
+
+/* V4.2.13：预览盒不再覆写回 static——is-inline 的 position:relative 是
+ * 内部 absolute SVG 的定位上下文（覆盖掉会把 SVG 包含块顶回 viewport）。 */
+.comic-bubble-picker-preview .comic-bubble-box {
+  max-width: 100%;
+}
+
+.comic-bubble-picker-label {
+  font-size: 11px;
+}
+
+.comic-bubble-picker-card:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+}
+
+/* 本格对白列表 chips（对白 1 / 旁白 1 …） */
+.comic-dialogue-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.comic-dialogue-chip {
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-default);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+
+.comic-dialogue-chip.is-selected {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary-text);
+}
+
+.comic-dialogue-chip:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+}
+
+/* 分镜缩略 + 上移/下移（顺序调整入口；只改排版不重新生成） */
+.comic-text-thumb-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.comic-text-thumb-actions {
+  display: flex;
+  gap: 4px;
+  opacity: 0.6;
+  transition: opacity 0.15s ease;
+}
+
+.comic-text-thumb-wrap.is-selected .comic-text-thumb-actions {
+  opacity: 1;
+}
+
+.comic-text-thumb-actions .app-btn {
+  flex: 1;
+}
+
+/* Inspector 高级组（精确位置；画布拖动为主，slider 退居精确微调） */
+.comic-advanced-group {
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+.comic-advanced-group summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.comic-advanced-group[open] summary {
+  margin-bottom: 8px;
+}
+
+.comic-field-hint {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.comic-dialogue-editor {
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: calc(100vh - 120px);
+  overflow-y: auto;
+  min-width: 0;
+}
+
+.comic-dialogue-editor-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.comic-dialogue-editor-head h4 {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-heading);
+}
+
+.comic-dialogue-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: var(--bg-subtle);
+}
+
+.comic-dialogue-controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px 12px;
+}
+
+.comic-slider-group {
+  min-width: 0;
+}
+
+.comic-slider-group input[type='range'] {
+  width: 100%;
+}
+
+.comic-dialogue-item .form-group {
+  margin-bottom: 0;
+}
+
+/* ===== 弹窗（新建项目 / 选演员 / 起草角色 / 删除项目共用）=====
+   Phase 1.2-I 抽离：modal 皮肤统一移至 features/comic/components/ComicDialog.css，
+   本文件禁止再新增 .comic-dialog-* / .comic-tab 规则。 */
+
+/* ===== 新建项目：概念卡 / 预览 / 技能库 ===== */
+.comic-requirement-input {
+  resize: vertical;
+  min-height: 84px;
+}
+
+.comic-skill-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.comic-skill-library {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.comic-library-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: var(--bg-subtle);
+}
+
+.comic-library-info {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.comic-library-info strong {
+  font-size: 13px;
+  color: var(--text-heading);
+}
+
+.comic-library-info span {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* =========================================================================
+   Phase 1.1（V4.2.5）—— AI 可观测性 / 角色参考图闭环 / 步骤门禁形态
+   只增漫画特有 layout；按钮/表单/徽标继续用 .app-btn-* / .form-group / badge 令牌
+   ========================================================================= */
+
+/* ----- 规划舞台外层：进入 Planning Surface 后顶部保留的需求摘要（V4.2.9） ----- */
+.comic-planning-stage-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.comic-planning-recap {
+  width: min(560px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 14px;
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  background: var(--bg-inset);
+}
+
+.comic-planning-recap-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.comic-planning-recap-label {
+  flex: none;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.comic-planning-recap-text {
+  min-width: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  word-break: break-word;
+}
+
+/* ----- AI 规划统一状态面（AIPlanningSurface，V4.2.9 由 ComicPlannerProgressCard 演进）-----
+   居中舞台档：内容舞台中央 max-width 560 的状态卡；无百分比（规划 = 单次 LLM 调用，
+   阶段清单 + 真实计时表达等待，docs/ai-comic/17 §二裁定）。 */
+.comic-planning-surface {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  width: min(560px, 100%);
+  margin: 40px auto 16px;
+  padding: 28px 24px;
+  border: 1px solid var(--accent-primary);
+  border-radius: 12px;
+  background: var(--bg-section);
+  text-align: center;
+}
+
+/* inline 档（character / storyboard 卡内容流内嵌）：不居中、撑满卡宽 */
+.comic-planning-surface.is-inline {
+  width: 100%;
+  margin: 0;
+  padding: 12px 14px;
+  gap: 8px;
+  text-align: left;
+  align-items: stretch;
+}
+
+.comic-planning-surface.is-completed { border-color: var(--accent-success); }
+.comic-planning-surface.is-failed { border-color: var(--accent-danger); }
+
+.comic-planning-surface-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 10px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.comic-planning-surface.is-inline .comic-planning-surface-head {
+  justify-content: space-between;
+}
+
+.comic-planning-surface-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.comic-planning-surface.is-inline .comic-planning-surface-title {
+  font-size: 13px;
+}
+
+.comic-planning-surface.is-completed .comic-planning-surface-title { color: var(--accent-success); }
+.comic-planning-surface.is-failed .comic-planning-surface-title { color: var(--accent-danger); }
+
+.comic-planning-surface-model {
+  flex: none;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--bg-inset);
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.comic-planning-surface-spinner {
+  width: 28px;
+  height: 28px;
+  flex: none;
+  border-radius: 50%;
+  border: 3px solid color-mix(in srgb, var(--accent-primary) 24%, transparent);
+  border-top-color: var(--accent-primary);
+  animation: comic-planning-spin 0.9s linear infinite;
+}
+
+@keyframes comic-planning-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .comic-planning-surface-spinner { animation: none; }
+}
+
+.comic-planning-surface-hint {
+  margin: 0;
+  max-width: 46ch;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.comic-planning-stages {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+  min-width: 220px;
+}
+
+.comic-planning-stage {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-faint);
+}
+
+.comic-planning-stage.is-done { color: var(--text-secondary); }
+.comic-planning-stage.is-current { color: var(--text-primary); font-weight: 600; }
+
+.comic-planning-stage-dot {
+  flex: none;
+  width: 16px;
+  text-align: center;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.comic-planning-stage.is-current .comic-planning-stage-dot { color: var(--accent-primary); }
+.comic-planning-stage.is-done .comic-planning-stage-dot { color: var(--accent-success); }
+
+.comic-planning-surface-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 12px;
+  font-size: 12px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.comic-planning-surface.is-inline .comic-planning-surface-meta {
+  justify-content: flex-start;
+}
+
+.comic-planning-surface-stage {
+  min-width: 0;
+  color: var(--text-secondary);
+}
+
+.comic-planning-surface-elapsed {
+  flex: none;
+  color: var(--text-muted);
+}
+
+.comic-planning-surface-error {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: center;
+}
+
+.comic-planning-surface.is-inline .comic-planning-surface-error {
+  align-items: flex-start;
+}
+
+.comic-planning-surface-error p {
+  margin: 0;
+  max-width: 52ch;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  word-break: break-word;
+}
+
+.comic-planning-surface-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+/* ----- 步骤 Footer CTA（← 上一步 / 阻塞原因 / 继续 →） ----- */
+.comic-step-footer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-light);
+  margin-top: 16px;
+  flex-wrap: wrap;
+}
+
+.comic-step-footer-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+}
+
+.comic-step-footer-blockers {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 200px;
+}
+
+.comic-step-footer-blockers-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.comic-step-footer-blockers ul {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.comic-step-footer-blockers li {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+/* ----- 角色槽位状态徽标：视觉层已并入文件头部「状态徽标统一族」
+   （comicCharactersSummaryState label 的 is-* 语义映射保持不变） ----- */
+
+/* ----- 角色参考图卡（生成闭环：缩略图 + 操作 + 溯源） -----
+   V4.2.10 审计 §3：旧 `.comic-character-body .comic-ref-*` 覆盖块（列布局 +
+   width:100%）已删 —— 它把 Reference 区的 Primary 拉成整列/整卡宽的紫色横条。 */
+
+.comic-ref-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: var(--bg-subtle);
+}
+
+.comic-ref-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.comic-ref-thumb {
+  width: 128px;
+  height: 128px;
+  border-radius: 8px;
+  border: 1px solid var(--border-light);
+  object-fit: cover;
+  background: var(--bg-inset);
+}
+
+.comic-ref-thumb-placeholder {
+  width: 128px;
+  height: 128px;
+  border-radius: 8px;
+  border: 1px dashed var(--border-light);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: var(--text-muted);
+  background: var(--bg-inset);
+}
+
+.comic-ref-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.comic-ref-stale-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--accent-orange);
+  background: var(--badge-warn-bg);
+  font-size: 12px;
+  color: var(--badge-warn-text);
+  line-height: 1.5;
+}
+
+.comic-ref-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* ----- 原位 inline error（规则 13：友好摘要 + 技术详情） ----- */
+.comic-inline-error {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--accent-danger);
+}
+
+.comic-inline-error summary {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent-danger);
+  cursor: pointer;
+}
+
+.comic-inline-error p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  word-break: break-word;
+}
+
+/* ----- 概念方案卡（V4.2.7 Story-first：完整故事 + 布局可视化 + 节拍预览） ----- */
+.comic-concept-switcher {
+  flex-wrap: wrap;
+}
+
+.comic-concept-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  background: var(--bg-card);
+  text-align: left;
+}
+
+.comic-concept-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.comic-concept-story-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-heading);
+}
+
+.comic-concept-card-tag {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.comic-concept-oneliner {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.6;
+  color: var(--text-primary);
+}
+
+.comic-concept-story {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.comic-concept-story-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.comic-concept-story p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-secondary);
+  word-break: break-word;
+}
+
+.comic-concept-punchline {
+  margin: 0;
+  padding: 6px 10px;
+  border-left: 2px solid var(--accent-primary);
+  border-radius: 0 6px 6px 0;
+  background: var(--bg-inset);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.comic-concept-beats li {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.comic-concept-beat-order {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--bg-inset);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.comic-concept-beat-text {
+  min-width: 0;
+  word-break: break-word;
+}
+
+.comic-concept-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.comic-concept-meta-line {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.comic-concept-advanced-toggle {
+  align-self: flex-start;
+}
+
+.comic-concept-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 10px;
+  border-radius: 8px;
+  background: var(--bg-inset);
+}
+
+.comic-concept-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.comic-concept-field-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.comic-concept-field-value {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  word-break: break-word;
+}
+
+.comic-concept-use {
+  align-self: flex-end;
+}
+
+.comic-concept-recap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+}
+
+/* =========================================================================
+ * V4.2.8 —— 新建漫画推荐入口重构：形式约束小卡（Selector）/ 当前选择反馈 /
+ * 方案 Mini Concept Card / ComicStoryPreview（格子即 Beat 的故事视觉预演）。
+ * 颜色只来自 var(--*)；选中态与 .comic-presentation-card 同族（border-prompt +
+ * accent-primary-light），不自建第二套选中语言。
+ * ========================================================================= */
+
+/* ----- 漫画形式选择小卡（新建弹窗输入页；§4~§6 可视化小卡，非 Select/Chip） ----- */
+.comic-form-selector {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(124px, 1fr));
+  gap: 8px;
+}
+
+.comic-form-selector-card {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 3px;
+  padding: 8px;
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  background: var(--bg-card);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: var(--text-primary);
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.comic-form-selector-card:hover {
+  border-color: var(--border-subtle);
+  background: var(--bg-hover);
+}
+
+.comic-form-selector-card.is-selected {
+  border-color: var(--border-prompt);
+  background: var(--accent-primary-light);
+}
+
+.comic-form-selector-card:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 1px;
+}
+
+/* V4.2.9 统一 Mini Preview 画布（docs/ai-comic/17 §1.3）：所有形式卡共用 72×96
+   固定 viewport（与「AI 自动」示意位同几何），只有内部 geometry 随 presentation
+   变化；画布 overflow 兜底 = 任何形式都不越出卡片可视区。
+   （旧 `.comic-layout-page{max-width:72/40px}` 按场景打补丁的做法已删除——
+   那是 multi-page 卡文字重叠 / 换行撑高的根因 A。） */
+.comic-form-preview-mini {
+  position: relative;
+  flex: none;
+  width: 72px;
+  height: 96px;
+  margin-bottom: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.comic-form-preview-page {
+  display: grid;
+  gap: 2px;
+  width: 60px;
+  padding: 4px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: var(--bg-card);
+  aspect-ratio: 3 / 4;
+}
+
+.comic-form-preview-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-default);
+  border-radius: 2px;
+  background: var(--bg-subtle);
+  color: var(--text-faint);
+  font-size: 9px;
+  font-weight: 600;
+}
+
+/* 多页连载 = 重叠页：前页 z1 + 后页右下偏移 8px（半透明），全落在画布内 */
+.comic-form-preview-mini.is-multi .comic-form-preview-page.is-front {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  z-index: 1;
+}
+
+.comic-form-preview-mini.is-multi .comic-form-preview-page.is-back {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 0;
+  opacity: 0.55;
+}
+
+/* 页数角标（替代「第 N 页」文字标签——审计 17 根因 B 的修复） */
+.comic-form-preview-pages {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  z-index: 2;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--bg-inset);
+  color: var(--text-secondary);
+  font-size: 9px;
+  line-height: 14px;
+  white-space: nowrap;
+}
+
+/* 「AI 自动」卡的示意位（与 mini preview 同尺寸的虚线框 + 星形 SVG） */
+.comic-form-selector-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 72px;
+  height: 96px;
+  margin-bottom: 3px;
+  border: 1px dashed var(--border-subtle);
+  border-radius: 6px;
+  color: var(--accent-primary);
+}
+
+.comic-form-selector-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-heading);
+}
+
+.comic-form-selector-meta {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+/* ----- 当前选择即时反馈（§9~§11） ----- */
+.comic-form-current {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border-left: 2px solid var(--accent-primary);
+  border-radius: 0 6px 6px 0;
+  background: var(--bg-inset);
+}
+
+.comic-form-current-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.comic-form-current-hint {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+/* ----- 方案 Mini Concept Card（§25~§27 顶部三卡切换器，替代纯文字 tab） ----- */
+.comic-concept-mini-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.comic-concept-mini {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 3px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  background: var(--bg-card);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: var(--text-primary);
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.comic-concept-mini:hover {
+  border-color: var(--border-subtle);
+  background: var(--bg-hover);
+}
+
+.comic-concept-mini.is-selected {
+  border-color: var(--border-prompt);
+  background: var(--accent-primary-light);
+}
+
+.comic-concept-mini:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 1px;
+}
+
+.comic-concept-mini-top {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.comic-concept-mini-geo {
+  flex: none;
+  display: inline-flex;
+  color: var(--text-secondary);
+}
+
+.comic-concept-mini-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-heading);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.comic-concept-mini-form,
+.comic-concept-mini-tone {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.comic-concept-mini-tone {
+  color: var(--text-muted);
+}
+
+/* ----- 推荐卡角色行（§41 徽标族形态，不用 Emoji） ----- */
+.comic-concept-characters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.comic-concept-characters-label {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* 完整故事折叠区（§39：默认收起，展开后与旧版故事块同皮肤） */
+.comic-concept-storyfold {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.comic-concept-character {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--badge-muted-bg);
+  color: var(--badge-muted-text);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+
+.comic-concept-character i {
+  font-style: normal;
+  font-weight: 400;
+  font-size: 10px;
+  opacity: 0.75;
+}
+
+/* ----- ComicStoryPreview：格子即 Beat 的故事视觉预演（§30~§36） ----- */
+.comic-story-preview {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.comic-story-preview:not(.is-multi):not(.is-single) .comic-story-page {
+  width: 100%;
+}
+
+.comic-story-page {
+  position: relative;
+  display: grid;
+  gap: 4px;
+  padding: 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-card);
+}
+
+.comic-story-preview.is-multi .comic-story-page {
+  flex: 0 0 auto;
+  width: 190px;
+}
+
+.comic-story-page-tag {
+  position: absolute;
+  top: -8px;
+  left: 8px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--bg-inset);
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 15px;
+  white-space: nowrap;
+}
+
+.comic-story-page-summary {
+  align-self: center;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.comic-story-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding: 6px 8px;
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  background: var(--bg-subtle);
+  text-align: left;
+  min-height: 68px;
+}
+
+.comic-story-cell.is-empty {
+  align-items: center;
+  justify-content: center;
+  color: var(--text-faint);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* 九宫格紧凑档：格内只有 序号 + 极短标题，概要悬浮（§33） */
+.comic-story-cell.is-dense {
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  min-height: 0;
+  padding: 4px 5px;
+  overflow: hidden;
+}
+
+.comic-story-cell-order {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--bg-inset);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.comic-story-cell-title {
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--text-primary);
+}
+
+.comic-story-cell-summary {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  word-break: break-word;
+}
+
+.comic-story-cell.is-dense .comic-story-cell-title {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+  overflow: hidden;
+  max-width: 100%;
+  font-size: 10px;
+}
+
+.comic-story-more {
+  align-self: center;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+/* 单格场景卡（§36：读起来像漫画草图，不是空白矩形） */
+.comic-story-preview.is-single {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  max-width: 440px;
+  min-height: 190px;
+  padding: 18px 20px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-card);
+}
+
+.comic-story-scene-tag {
+  align-self: flex-start;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: var(--bg-inset);
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 16px;
+}
+
+.comic-story-scene-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-heading);
+}
+
+.comic-story-scene-summary {
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-secondary);
+}
+
+.comic-story-scene-divider {
+  height: 1px;
+  background: var(--border-light);
+}
+
+.comic-story-scene-punchline {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+/* 紧凑档（创建回顾卡内嵌） */
+.comic-story-preview.is-compact .comic-story-page {
+  width: 200px;
+}
+
+.comic-story-preview.is-compact .comic-story-cell {
+  min-height: 44px;
+  padding: 4px 6px;
+}
+
+.comic-story-preview.is-compact .comic-story-cell-summary {
+  -webkit-line-clamp: 2;
+}
+
+.comic-story-preview.is-compact.is-single {
+  min-height: 0;
+  padding: 12px 14px;
+}
+
+/* ----- DEV Debug 面板（import.meta.env.DEV 才渲染；Production 隐藏） ----- */
+.comic-debug-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px dashed var(--border-light);
+  border-radius: 8px;
+  background: var(--bg-inset);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.comic-debug-card summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.comic-debug-card dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 10px;
+  margin: 0;
+}
+
+.comic-debug-card dt {
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.comic-debug-card dd {
+  margin: 0;
+  color: var(--text-secondary);
+  word-break: break-all;
+}
+
+/* =========================================================================
+ * Phase 1.2 —— 画面与形式（展示形式可视化选择卡 / 对白方式 / 视觉风格 / 高级折叠）
+ * 全部令牌驱动：颜色只来自 var(--*)，选中态复用 .comic-step.is-current 同族视觉。
+ * ========================================================================= */
+
+/* ----- 展示形式选择卡 ----- */
+.comic-presentation-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px;
+}
+
+.comic-presentation-card {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  background: var(--bg-card);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: var(--text-primary);
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.comic-presentation-card:hover {
+  border-color: var(--border-subtle);
+  background: var(--bg-hover);
+}
+
+.comic-presentation-card.is-selected {
+  border-color: var(--border-prompt);
+  background: var(--accent-primary-light);
+}
+
+/* V4.2.12 §64-68：形式卡统一 Mini Canvas（ComicFormPreviewMini 72×96 固定画布）
+ * —— 所有卡同一预览基线与选中描边，多页卡不再并排 4 页（旧根因：
+ * 54px 页框 × 绝对定位「第N页」标签 → 重叠/挤压）。 */
+.comic-presentation-card .comic-form-preview-mini {
+  margin: 2px auto 6px;
+}
+
+.comic-presentation-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-heading);
+}
+
+.comic-presentation-meta {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.comic-presentation-desc {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.comic-presentation-dialogue {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+/* ----- 对白方式 / 视觉风格选择卡（共用 .comic-mode-card） ----- */
+.comic-dialogue-mode-grid,
+.comic-style-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  gap: 10px;
+}
+
+.comic-mode-card {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  background: var(--bg-card);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: var(--text-primary);
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.comic-mode-card:hover {
+  border-color: var(--border-subtle);
+  background: var(--bg-hover);
+}
+
+.comic-mode-card.is-selected {
+  border-color: var(--border-prompt);
+  background: var(--accent-primary-light);
+}
+
+.comic-mode-card strong {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-heading);
+}
+
+.comic-mode-card span {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.comic-style-card .comic-style-sketch {
+  align-self: center;
+  color: var(--text-secondary);
+  margin-bottom: 2px;
+}
+
+.comic-style-sketch svg {
+  width: 44px;
+  height: 30px;
+  display: block;
+}
+
+/* ----- 高级折叠（漫画规则 / 对话式微调 / 保存为技能） ----- */
+.comic-advanced-card {
+  border: 1px dashed var(--border-default);
+  border-radius: 10px;
+  background: var(--bg-subtle);
+  padding: 8px 12px 12px;
+}
+
+/* ----- §F 高级节奏开关（生成第一格后暂停确认，默认关） ----- */
+.comic-pause-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.comic-pause-toggle-row input[type='checkbox'] {
+  accent-color: var(--accent-primary);
+}
+
+.comic-advanced-card > summary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  padding: 4px 0;
+}
+
+.comic-advanced-card[open] > summary {
+  margin-bottom: 8px;
+}
+
+.comic-advanced-card .comic-card {
+  margin-bottom: 10px;
+}
+
+.comic-stage-confirm {
+  justify-content: flex-end;
+}
+
+/* =========================================================================
+   Phase 1.2-E（V4.2.6）—— 演员库闭环：库弹窗 / 分类过滤 / 缩略图 / 新建草稿
+   只增漫画特有 layout；按钮/表单/徽标继续用 .app-btn-* / .form-group / badge 令牌
+   ========================================================================= */
+
+.comic-actor-dialog {
+  width: min(720px, 100%);
+}
+
+.comic-actor-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.comic-actor-search {
+  flex: 1 1 200px;
+  min-width: 0;
+  margin: 0;
+}
+
+.comic-actor-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+}
+
+.comic-actor-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: var(--bg-subtle);
+}
+
+.comic-actor-thumb {
+  width: 52px;
+  height: 52px;
+  border-radius: 8px;
+  object-fit: cover;
+  flex: none;
+  border: 1px solid var(--border-light);
+}
+
+.comic-actor-thumb-placeholder {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-section);
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.comic-actor-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.comic-actor-info strong {
+  font-size: 13px;
+  color: var(--text-heading);
+}
+
+.comic-actor-info span {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.comic-actor-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 18px 0 6px;
+  align-items: flex-start;
+}
+
+.comic-actor-empty .comic-actions-row {
+  flex-wrap: wrap;
+}
+
+.comic-actor-draft-preview {
+  width: 160px;
+  height: 160px;
+  border-radius: 10px;
+  object-fit: contain;
+  border: 1px solid var(--border-light);
+  background: var(--bg-section);
+}
+
+
+/* =========================================================================
+   Phase 1.2-F（V4.2.6）—— Character Hero Card（§14~§16）+ Rail 视觉信息（§13.2）
+   ========================================================================= */
+
+/* ----- §16：角色参考图 = 视觉中心（占角色卡 ~25-30% 宽）-----
+   V4.2.10 审计 §2：删除固定 172px 宽（曾溢出 132px 网格轨道）——
+   figure 填满 hero 网格参考图列，缩略图方形自适应列宽。 */
+.comic-hero-figure {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.comic-hero-thumb {
+  width: 100%;
+  aspect-ratio: 1;
+  height: auto;
+  border-radius: 12px;
+  object-fit: cover;
+  border: 1px solid var(--border-light);
+  background: var(--bg-section);
+}
+
+.comic-hero-thumb.comic-ref-thumb-placeholder {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: center;
+  padding: 0 10px;
+}
+
+.comic-character-hero {
+  align-items: flex-start;
+  /* V4.2.10：2 列角色卡网格下单卡 ~470px，148px 参考图列 ≈ 卡宽 30%（视觉中心） */
+  grid-template-columns: 148px minmax(0, 1fr);
+}
+
+/* ----- §15：默认只有 名字 / 定位 / 一句话设定；特征清单折叠在高级卡 ----- */
+.comic-hero-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.comic-hero-name {
+  font-size: 16px;
+  color: var(--text-heading);
+}
+
+.comic-hero-role {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.comic-hero-summary {
+  margin: 0 0 6px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.comic-character-advanced {
+  margin-top: 8px;
+}
+
+.comic-character-advanced p {
+  margin: 4px 0 0;
+  font-size: 12px;
+}
+
+/* ----- §13.2：Rail 视觉信息条（形式缩略 / 主角 / 第一张） ----- */
+.comic-rail-visuals {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  margin-bottom: 10px;
+}
+
+.comic-rail-visual-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 84px;
+}
+
+.comic-rail-visual-item > span {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.comic-rail-thumb {
+  width: 84px;
+  height: 84px;
+  border-radius: 8px;
+  object-fit: cover;
+  border: 1px solid var(--border-light);
+}
+
+
+/* =========================================================================
+   Phase 1.2-G（V4.2.6）—— 分镜阶段：整体布局示意 / 分页分组 / 分镜卡分层 / 单格微调
+   只增漫画特有 layout；按钮/表单/徽标继续用 .app-btn-* / .form-group / badge 令牌
+   ========================================================================= */
+
+/* ----- V4.2.11 §E 排版直出：分镜卡直接落在最终版式格位（四宫格 = 2×2） ----- */
+.comic-storyboard-board {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.comic-storyboard-grid {
+  display: grid;
+  gap: 10px;
+  align-items: start;
+}
+
+.comic-storyboard-page {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.comic-storyboard-page-title {
+  margin: 4px 0 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent-primary-text);
+}
+
+/* ----- §38 分镜卡：字段分层（画面/角色/动作/表情/场景/对白概要） ----- */
+.comic-panel-card {
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  background: var(--bg-subtle);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.comic-panel-card.is-stale {
+  border-color: var(--badge-warn-border, var(--border-default));
+}
+
+/* ----- §E 等待规划占位格：保持版式骨架完整 ----- */
+.comic-panel-card.is-pending {
+  border-style: dashed;
+  background: transparent;
+  justify-content: center;
+  min-height: 160px;
+}
+
+.comic-panel-pending {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  text-align: center;
+  padding: 8px 4px;
+}
+
+.comic-panel-pending > p {
+  margin: 0;
+}
+
+.comic-panel-pending-tag {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  padding: 2px 10px;
+  border-radius: 999px;
+  border: 1px dashed var(--border-light);
+}
+
+.comic-panel-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* V4.2.12 §41：分镜顺序调整（上移/下移；只改排版，不重新生成图片） */
+.comic-panel-order-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 4px;
+}
+
+.comic-panel-stale-tag {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--badge-warn-bg);
+  color: var(--badge-warn-text);
+}
+
+.comic-panel-facts {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.comic-panel-facts > div {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr);
+  gap: 8px;
+  font-size: 12px;
+}
+
+.comic-panel-facts dt {
+  color: var(--text-muted);
+  flex: none;
+}
+
+.comic-panel-facts dd {
+  margin: 0;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.comic-panel-dialogues {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* ----- §38.2 大白话改单格 ----- */
+.comic-panel-patch {
+  margin: 0;
+}
+
+.comic-panel-patch-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: start;
+}
+
+.comic-panel-patch-row textarea {
+  font-size: 12px;
+  resize: vertical;
+  min-height: 30px;
+}
+
+/* ----- §38.1 已应用格的「高级 · 生成详情」折叠 ----- */
+.comic-panel-advanced .comic-panel-prompt {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+/* =========================================================================
+   Phase 1.2-H（V4.2.6）—— 生成阶段：第一张效果 / 生成剩余图片 / 最终页面预览
+   只增漫画特有 layout；按钮/表单/徽标继续用 .app-btn-* / .form-group / badge 令牌
+   ========================================================================= */
+
+/* ----- §42 第一张效果：事实行 + 参考图 chips ----- */
+.comic-anchor-facts {
+  margin: 0 0 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.comic-anchor-facts > div {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 8px;
+  font-size: 12px;
+}
+
+.comic-anchor-facts dt {
+  color: var(--text-muted);
+  flex: none;
+}
+
+.comic-anchor-facts dd {
+  margin: 0;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.comic-anchor-refs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.comic-ref-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border-light);
+  background: var(--bg-subtle);
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+/* ----- §45 系列卡片：进度行 + 失败原因 ----- */
+.comic-series-progress {
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.comic-panel-error {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: var(--badge-danger-text);
+  overflow-wrap: anywhere;
+}
+
+/* ----- §47 最终页面预览：整页图 + 多页 carousel ----- */
+.comic-final-preview-stage {
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  background: var(--bg-subtle);
+  padding: 8px;
+  display: flex;
+  justify-content: center;
+}
+
+.comic-final-preview-stage img {
+  max-width: 100%;
+  max-height: 520px;
+  border-radius: 6px;
+  object-fit: contain;
+}
+
+.comic-final-preview-nav {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+/* ----- 键盘焦点（V4.2.7 UI 收口）-----
+ * 漫画白名单自定义交互控件（步骤栏 / 项目卡 / 选择卡 / 缩略图）与
+ * App.css 的 .app-btn:focus-visible / .app-segmented-btn:focus-visible 同规范；
+ * 主题色走 --accent-primary 令牌，不引第二套焦点样式。
+ */
+.comic-step:focus-visible,
+.comic-project-open:focus-visible,
+.comic-presentation-card:focus-visible,
+.comic-mode-card:focus-visible,
+.comic-concept-card:focus-visible,
+.comic-text-thumb:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 1px;
+}
+
+
+/* =========================================================================
+   V4.2.10 —— Character Cast Workspace（角色演员页收口，docs/ai-comic/18）
+   结构：阵容总览（roster + 计数 + 下一步）→ 必选/可选分区 → 2 列角色卡网格
+   → 锁定 Compact 卡。全部布局类；颜色一律 var(--*) 令牌。
+   ========================================================================= */
+
+/* ----- §三：本期演员阵容总览 ----- */
+.comic-cast-overview {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.comic-cast-overview-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.comic-cast-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-heading);
+}
+
+.comic-cast-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.comic-cast-counts span {
+  font-variant-numeric: tabular-nums;
+}
+
+/* V4.2.11 §C Roster Strip：横排 mini 卡（头像/名字/槽位·必选/状态徽标），不再多行文字表 */
+.comic-cast-roster {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.comic-cast-roster-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  background: var(--bg-subtle);
+  max-width: 260px;
+}
+
+.comic-cast-roster-row:hover {
+  border-color: var(--border-strong);
+}
+
+/* V4.2.11 §B：一键补齐缺失参考图行 */
+.comic-cast-batch-refs {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  margin-top: 8px;
+}
+
+.comic-cast-roster-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.comic-cast-roster-info strong {
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.comic-cast-roster-info .comic-muted {
+  font-size: 11px;
+}
+
+.comic-cast-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  object-fit: cover;
+  border: 1px solid var(--border-light);
+  background: var(--bg-inset);
+  flex: none;
+}
+
+.comic-cast-avatar-empty {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: var(--text-faint);
+  border: 1px dashed var(--border-subtle);
+}
+
+.comic-cast-ready {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--accent-success);
+  background: var(--badge-success-bg);
+  font-size: 12px;
+}
+
+.comic-cast-ready strong {
+  color: var(--text-primary);
+}
+
+.comic-cast-next {
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px dashed var(--border-default);
+  font-size: 12px;
+}
+
+.comic-cast-next-title {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.comic-cast-next ul {
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+  color: var(--text-muted);
+}
+
+/* ----- §十五：必选 / 可选分区 + 2 列网格 ----- */
+.comic-cast-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.comic-cast-section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.comic-cast-section-head .comic-muted {
+  font-size: 12px;
+}
+
+.comic-cast-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  align-items: start;
+}
+
+@media (max-width: 1100px) {
+  .comic-cast-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.comic-cast-slotline {
+  margin: -2px 0 6px;
+  font-size: 11px;
+}
+
+/* ----- §二十五：锁定后的 Compact 卡 ----- */
+.comic-character-compact {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.comic-compact-thumb {
+  width: 44px;
+  height: 44px;
+  border-radius: 8px;
+  object-fit: cover;
+  border: 1px solid var(--border-light);
+  background: var(--bg-inset);
+  flex: none;
+}
+
+.comic-compact-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+  gap: 2px;
+}
+
+.comic-compact-info strong {
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.comic-compact-info .comic-muted {
+  font-size: 11px;
+}
+
+.comic-compact-summary {
+  font-size: 12px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ----- §十六：可选未绑定 Compact Add Card ----- */
+.comic-cast-add-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border: 1px dashed var(--border-default);
+  background: transparent;
+}
+
+.comic-cast-add-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.comic-cast-add-info strong {
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.comic-cast-add-info .comic-muted {
+  font-size: 11px;
+}
+
+/* ----- §五/§六：Reference Surface 四态 ----- */
+.comic-ref-view {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: zoom-in;
+  border-radius: 12px;
+}
+
+.comic-ref-view:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+}
+
+.comic-ref-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 10px;
+  border-radius: 12px;
+  border: 1px dashed var(--border-subtle);
+  background: var(--bg-inset);
+}
+
+.comic-ref-empty-title {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.comic-ref-empty .comic-ref-actions {
+  justify-content: center;
+}
+
+.comic-ref-busy {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 18px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-inset);
+}
+
+.comic-ref-busy-thumb {
+  width: 64%;
+  aspect-ratio: 1;
+  border-radius: 10px;
+  background: linear-gradient(
+    100deg,
+    var(--bg-section) 30%,
+    var(--bg-subtle) 50%,
+    var(--bg-section) 70%
+  );
+  background-size: 220% 100%;
+  animation: comic-ref-busy-sheen 1.4s ease-in-out infinite;
+}
+
+@keyframes comic-ref-busy-sheen {
+  from { background-position: 120% 0; }
+  to { background-position: -120% 0; }
+}
+
+.comic-ref-busy-title {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.comic-ref-busy-meta {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.comic-ref-failed {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--accent-orange);
+  background: var(--badge-warn-bg);
+}
+
+.comic-ref-failed p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* ----- §九/§十：锁定区（复选项 + 单一 Primary） ----- */
+.comic-character-lockrow {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border-light);
+  background: var(--bg-subtle);
+}
+
+.comic-lock-pref {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.comic-lock-pref input[type='checkbox'] {
+  accent-color: var(--accent-primary);
+  width: 14px;
+  height: 14px;
+}
+
+.comic-lock-pref-hint {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.comic-lock-reason {
+  font-size: 11px;
+  color: var(--accent-orange);
+}
+
+.comic-locked-note {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+/* ----- Rail：阵容小头像 + 锁定计数 ----- */
+.comic-rail-cast {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 2px 0 6px;
+}
+
+.comic-rail-cast-count {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.comic-rail-cast-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.comic-rail-cast-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--border-default);
+  background: var(--bg-inset);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.comic-rail-cast-chip img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.comic-rail-cast-chip.is-locked {
+  border-color: var(--accent-primary);
+}

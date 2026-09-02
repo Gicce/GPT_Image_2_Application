@@ -1,0 +1,117 @@
+/**
+ * 漫画弹窗家族共用皮肤（Phase 1.2-I，审计 2.8/2.9/R11 抽离）。
+ *
+ * 消费方：ComicNewProjectDialog / ComicActorLibraryDialog / ComicActorDraftDialog /
+ * ComicDeleteProjectDialog。禁止继续往 ComicStudio.css 添加 modal 皮肤——
+ * 新弹窗一律复用本文件（overlay / dialog / header / body / footer）。
+ * 全部颜色走 var(--*) 设计令牌，零 hex；tab 一律 app-segmented（App.css 共享组件）。
+ */
+
+.comic-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--bg-overlay);
+}
+
+.comic-dialog {
+  width: min(760px, 100%);
+  max-height: min(86vh, 820px);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-dialog);
+  border-radius: 12px;
+  border: 1px solid var(--border-default);
+  box-shadow: var(--card-shadow);
+  overflow: hidden;
+}
+
+.comic-dialog-sm {
+  width: min(460px, 100%);
+}
+
+/* V4.2.7 Story-first 推荐：单方案大 Preview（完整故事 + 布局示意 + 节拍）需要更宽的
+   阅读列。整弹窗恒定此宽（Wizard Geometry：步骤差异只在 Body 内滚消化，
+   禁止步骤切换改变弹窗几何类）。 */
+.comic-dialog-wide {
+  width: min(920px, 100%);
+}
+
+.comic-dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.comic-dialog-header h3 {
+  margin: 0;
+  font-size: 15px;
+  color: var(--text-dialog-title);
+}
+
+.comic-dialog-header p {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--text-dialog-desc);
+}
+
+.comic-dialog-close {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-muted);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.comic-dialog-close:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.comic-dialog-close:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 1px;
+}
+
+.comic-dialog-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.comic-dialog-body p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.comic-dialog-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--border-light);
+}
+
+.comic-dialog-actions {
+  display: flex;
+  gap: 10px;
+}

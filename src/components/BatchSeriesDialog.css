@@ -1,0 +1,247 @@
+/* ============================================================
+   系列批量（批量同效果生成）四步向导 —— V6.1 Wizard Geometry：
+   固定 Header / Body(唯一滚动区) / Footer，四步共用同一几何；
+   颜色 / 圆角 / 阴影全部走 tokens，组件不自造色值。
+   ============================================================ */
+
+.bsr-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--bg-overlay);
+}
+
+.bsr-dialog {
+  width: min(880px, calc(100vw - 48px));
+  height: min(680px, calc(100vh - 48px));
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  border-radius: 16px;
+  box-shadow: var(--card-shadow);
+}
+
+/* ---------- 固定头部：标题 + 步骤条 + 关闭 ---------- */
+.bsr-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--border-default);
+}
+
+.bsr-header h2 { margin: 0 0 4px; font-size: 17px; }
+.bsr-header p { margin: 0; color: var(--text-muted); font-size: 12px; }
+
+.bsr-stepper {
+  display: flex;
+  gap: 6px;
+  margin: 0 0 0 auto;
+  padding: 0;
+  list-style: none;
+}
+
+.bsr-stepper li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--text-muted);
+  background: var(--bg-section);
+}
+
+.bsr-stepper li b {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--border-default);
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.bsr-stepper li.is-active { color: var(--accent-primary-text); background: var(--accent-primary-light); }
+.bsr-stepper li.is-active b { background: var(--accent-primary); color: #fff; }
+.bsr-stepper li.is-done b { background: var(--accent-primary-soft, var(--accent-primary)); color: #fff; }
+
+.bsr-close {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 18px;
+  cursor: pointer;
+}
+
+.bsr-close:hover { background: var(--bg-section); color: var(--text-primary); }
+
+/* ---------- Body：唯一滚动区 ---------- */
+.bsr-body {
+  overflow-y: auto;
+  min-height: 0;
+  padding: 20px 24px;
+}
+
+.bsr-step { display: flex; flex-direction: column; gap: 16px; }
+
+.bsr-block {
+  padding: 14px 16px;
+  border: 1px solid var(--border-default);
+  border-radius: 12px;
+  background: var(--bg-section);
+}
+
+.bsr-block h3 { margin: 0 0 10px; font-size: 13px; }
+
+.bsr-hint { margin: 0; color: var(--text-muted); font-size: 12px; line-height: 1.6; }
+
+.bsr-notice {
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--accent-primary-light);
+  color: var(--accent-primary-text);
+  font-size: 12px;
+}
+
+.bsr-notice.warn { background: var(--warning-soft, rgba(245, 158, 11, 0.14)); color: var(--warning-strong, #b45309); }
+
+.bsr-empty { margin: 24px 0; color: var(--text-muted); font-size: 13px; text-align: center; }
+
+/* ---------- Step1 任务列表 ---------- */
+.bsr-task-list { display: flex; flex-direction: column; gap: 8px; }
+
+.bsr-task-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  background: var(--bg-card);
+  cursor: pointer;
+}
+
+.bsr-task-item.is-selected { border-color: var(--accent-primary); background: var(--accent-primary-light); }
+.bsr-task-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.bsr-task-title { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bsr-task-meta { color: var(--text-muted); font-size: 12px; }
+
+/* ---------- Step2 勾选 / 预设 ---------- */
+.bsr-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 0;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.bsr-check.is-na { color: var(--text-muted); cursor: default; }
+
+.bsr-preset-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+
+.bsr-preset {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid var(--border-default);
+  border-radius: 999px;
+  background: var(--bg-card);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.bsr-preset.is-selected { border-color: var(--accent-primary); color: var(--accent-primary-text); background: var(--accent-primary-light); }
+
+.bsr-custom-values,
+.bsr-theme-input,
+.bsr-template-textarea {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  background: var(--bg-card);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 13px;
+  resize: vertical;
+}
+
+.bsr-theme-input { max-width: 360px; }
+
+.bsr-custom-values:focus-visible,
+.bsr-theme-input:focus-visible,
+.bsr-template-textarea:focus-visible { outline: 2px solid var(--accent-primary-light); }
+
+/* ---------- Step4 成员表 ---------- */
+.bsr-items-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.bsr-items-table th {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border-default);
+  color: var(--text-muted);
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.bsr-items-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border-default);
+  vertical-align: top;
+}
+
+.bsr-items-table tr.is-disabled td { color: var(--text-muted); }
+
+.bsr-item-prompt { max-width: 420px; color: var(--text-secondary, var(--text-muted)); word-break: break-all; }
+
+.bsr-item-actions { white-space: nowrap; }
+.bsr-item-actions .settings-btn + .settings-btn { margin-left: 8px; }
+
+.bsr-item-edit { display: flex; flex-direction: column; gap: 6px; }
+.bsr-item-edit textarea {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  background: var(--bg-card);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+  resize: vertical;
+}
+
+/* ---------- 固定底部 ---------- */
+.bsr-footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 24px;
+  border-top: 1px solid var(--border-default);
+}
+
+.bsr-footer-right { display: flex; gap: 10px; margin-left: auto; }
+
+/* 窄宽度退化（V6.1 Wizard Geometry 断点） */
+@media (max-width: 860px) {
+  .bsr-stepper span { display: none; }
+  .bsr-item-prompt { max-width: 220px; }
+}

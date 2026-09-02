@@ -5,6 +5,7 @@ import { aggregateTaskEvaluations, taskEvaluationSummary } from '../features/eva
 import type { Task } from '../types';
 import EditTaskModal from '../components/EditTaskModal';
 import BatchRedoModal from '../components/BatchRedoModal';
+import BatchSeriesDialog from '../components/BatchSeriesDialog';
 import DeleteTaskDialog from '../components/DeleteTaskDialog';
 import TaskFilterBar from '../components/TaskFilterBar';
 import { toastError, toastSuccess } from '../components/Toast';
@@ -61,6 +62,8 @@ function isVisionTask(task: Task): boolean {
 function getSourceLabel(task: Task): string {
   // cy-video-studio 细分：动作白膜批（pose_batch）与视频复刻单任务
   if (task.task_source === 'cy-video-studio') return poseBatchTaskSourceLabel(task);
+  if (task.task_source === 'comic') return 'AI 漫画';
+  if (task.task_source === 'batch_series') return '系列批量';
   return task.task_source === 'agent' ? 'Agent' : '手动';
 }
 
@@ -88,6 +91,8 @@ export default function TaskQueue() {
   const evaluations = useEvaluationStore(s => s.evaluations);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [redoingTask, setRedoingTask] = useState<Task | null>(null);
+  // V4.2.4 批量同效果生成入口（成功卡 → 系列批量向导，预选该任务）
+  const [seriesTaskId, setSeriesTaskId] = useState<string | null>(null);
   const [deletingTask, setDeletingTask] = useState<Task | null>(null);
   const [expandedPrompts, setExpandedPrompts] = useState<Set<string>>(new Set());
   const [focusTaskId, setFocusTaskId] = useState<string | null>(null);
@@ -511,6 +516,13 @@ export default function TaskQueue() {
                       编辑重发
                     </button>
                   )}
+                  {terminal && !isVisionTask(task)
+                    && (task.task_type === 'generate' || task.task_type === 'edit')
+                    && task.success_count > 0 && (
+                    <button className="edit-resend-btn" onClick={() => setSeriesTaskId(task.id)}>
+                      批量同效果生成
+                    </button>
+                  )}
                   {terminal && (
                     <button className="delete-task-btn" onClick={() => setDeletingTask(task)}>
                       删除
@@ -529,6 +541,13 @@ export default function TaskQueue() {
 
       {redoingTask && (
         <BatchRedoModal task={redoingTask} onClose={() => setRedoingTask(null)} />
+      )}
+
+      {seriesTaskId && (
+        <BatchSeriesDialog
+          preselectedTaskId={seriesTaskId}
+          onClose={() => setSeriesTaskId(null)}
+        />
       )}
 
       {deletingTask && (

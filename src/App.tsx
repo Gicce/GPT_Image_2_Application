@@ -25,6 +25,7 @@ const AgentChat = lazy(() => import('./pages/AgentChat'));
 const ImageStudio = lazy(() => import('./pages/ImageStudio'));
 const SkillWorkshop = lazy(() => import('./pages/SkillWorkshop'));
 const VisionUnderstanding = lazy(() => import('./pages/VisionUnderstanding'));
+const ComicStudio = lazy(() => import('./pages/ComicStudio'));
 const TaskQueue = lazy(() => import('./pages/TaskQueue'));
 const Gallery = lazy(() => import('./pages/Gallery'));
 const History = lazy(() => import('./pages/History'));
@@ -37,6 +38,7 @@ const PAGE_COMPONENTS: Record<PageType, JSX.Element> = {
   imagestudio: <ImageStudio />,
   skillworkshop: <SkillWorkshop />,
   vision: <VisionUnderstanding />,
+  comicstudio: <ComicStudio />,
   queue: <TaskQueue />,
   gallery: <Gallery />,
   history: <History />,
@@ -160,7 +162,7 @@ export default function App() {
   }, [isLoggedIn, requestedPage, clearRequestedPage]);
 
   function handleNavigate(page: PageType) {
-    const authRequiredPages: PageType[] = ['agent', 'imagestudio', 'skillworkshop', 'vision', 'queue', 'account'];
+    const authRequiredPages: PageType[] = ['agent', 'imagestudio', 'skillworkshop', 'vision', 'comicstudio', 'queue', 'account'];
     if (authRequiredPages.includes(page) && !isLoggedIn) {
       setShowAuth(true);
       useAuthStore.getState().setRequestedPage(page);

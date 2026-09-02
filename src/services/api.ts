@@ -191,6 +191,35 @@ export const api = {
       sourceRevision: input.sourceRevision, authoringState: input.authoringState, dataJson: input.dataJson,
     }),
   deleteUserSkill: (id: string): Promise<void> => invoke('delete_user_skill', { id }),
+  /** AI 漫画 Phase 1：本地三表（projects/skills/characters），schema 前端所有，Rust JSON 透传。 */
+  listComicProjects: (): Promise<Array<{ id: string; name: string; stage: string; skillId?: string | null; updatedAt: string; lastOpenedAt?: string | null }>> =>
+    invoke('list_comic_projects'),
+  loadComicProject: (id: string): Promise<string | null> => invoke('load_comic_project', { id }),
+  saveComicProject: (input: { id: string; name: string; stage: string; skillId?: string | null; dataJson: string; lastOpenedAt?: string | null }): Promise<void> =>
+    invoke('save_comic_project', {
+      id: input.id, name: input.name, stage: input.stage, skillId: input.skillId ?? null,
+      dataJson: input.dataJson, lastOpenedAt: input.lastOpenedAt ?? null,
+    }),
+  renameComicProject: (id: string, name: string): Promise<void> => invoke('rename_comic_project', { id, name }),
+  deleteComicProject: (id: string): Promise<void> => invoke('delete_comic_project', { id }),
+  listComicSkills: (): Promise<Array<{ id: string; name: string; comicForm: string; version: number; source: string; updatedAt: string }>> =>
+    invoke('list_comic_skills'),
+  loadComicSkill: (id: string): Promise<string | null> => invoke('load_comic_skill', { id }),
+  saveComicSkill: (input: { id: string; name: string; comicForm: string; version: number; source: string; dataJson: string }): Promise<void> =>
+    invoke('save_comic_skill', {
+      id: input.id, name: input.name, comicForm: input.comicForm,
+      version: input.version, source: input.source, dataJson: input.dataJson,
+    }),
+  deleteComicSkill: (id: string): Promise<void> => invoke('delete_comic_skill', { id }),
+  listComicCharacters: (): Promise<Array<{ id: string; name: string; role: string; status: string; source: string; updatedAt: string; usageCount: number; lastUsedAt: string; thumbnailPath: string }>> =>
+    invoke('list_comic_characters'),
+  loadComicCharacter: (id: string): Promise<string | null> => invoke('load_comic_character', { id }),
+  saveComicCharacter: (input: { id: string; name: string; role: string; status: string; source: string; dataJson: string }): Promise<void> =>
+    invoke('save_comic_character', {
+      id: input.id, name: input.name, role: input.role,
+      status: input.status, source: input.source, dataJson: input.dataJson,
+    }),
+  deleteComicCharacter: (id: string): Promise<void> => invoke('delete_comic_character', { id }),
   /** 用户主动触发的 Logo 规范分析；原图仅以内联数据传给已配置视觉模型。 */
   analyzeBrandLogo: (request: { imagePath: string; baseUrl: string; token: string; model: string }): Promise<{ analysis: Record<string, unknown>; model: string }> =>
     invoke('analyze_brand_logo', { request }),
@@ -356,6 +385,8 @@ export const api = {
   saveConversation: (conversation: ChatConversation): Promise<void> => invoke('save_conversation', { conversation }),
   saveChatImage: (b64Data: string, conversationId: string): Promise<ImageRecord> => invoke('save_chat_image', { b64Data, conversationId }),
   saveImageAs: (b64Data: string, defaultName: string): Promise<boolean> => invoke('save_image_as', { b64Data, defaultName }),
+  saveComicPageToLibrary: (b64Data: string, fileName: string): Promise<string> =>
+    invoke('save_comic_page_to_library', { b64Data, fileName }),
   removeBackground: (imagePath: string): Promise<ImageRecord> => invoke('remove_background', { imagePath }),
   chatGenerateImage: (prompt: string, model: string): Promise<string> => invoke('chat_generate_image', { prompt, model }),
   chatEditImage: (prompt: string, model: string, imagePath: string): Promise<string> => invoke('chat_edit_image', { prompt, model, imagePath }),

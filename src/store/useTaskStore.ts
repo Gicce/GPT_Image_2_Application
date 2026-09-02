@@ -93,6 +93,11 @@ interface TaskState {
    * 绝不使用 retry 的计费路径，也绝不触碰源任务结果。
    */
   redoBatchTask: (taskId: string, request: CreateBatchRedoRequest) => Promise<Task>;
+  /**
+   * V4.2.4 系列批量（批量同效果生成）：模板渲染出的批量任务按成员数正常预占
+   * （authorize → 新任务登记 → 终态自动结算），与 redoBatchTask 同一条计费纪律。
+   */
+  createSeriesTask: (params: CreateTaskParams, itemCount: number) => Promise<Task>;
   refreshTask: (taskId: string) => Promise<void>;
   cancelTask: (taskId: string) => Promise<void>;
   deleteTask: (taskId: string, deleteImages: boolean) => Promise<void>;
@@ -256,6 +261,28 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     await get().loadTasks();
     console.log('[TaskExecution] batch redo task created', redone.id);
     return redone;
+  },
+
+  createSeriesTask: async (params, itemCount) => {
+    console.log('[AgentTask] series batch create', { items: itemCount, source: params.source_task_id });
+    const { isLoggedIn } = useAuthStore.getState();
+    let requestId: string | undefined;
+    if (isLoggedIn) {
+      requestId = createRequestId('series');
+      await authorizeImageTask(requestId, itemCount);
+    }
+    let created: Task;
+    try {
+      created = await api.createTask(params);
+    } catch (err) {
+      if (requestId) void settleImageTask(requestId, false, 0, 'series create failed');
+      throw err;
+    }
+    knownTaskIds.add(created.id);
+    if (requestId) registerTaskAuthorization(created.id, requestId);
+    await get().loadTasks();
+    console.log('[TaskExecution] series batch task created', created.id);
+    return created;
   },
 
   refreshTask: async (taskId) => {

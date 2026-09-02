@@ -315,7 +315,7 @@ export default function TemplateSkillUseDialog(props: {
             <h2>使用模板复用 Skill</h2>
             <p>「{props.draft.name}」——绑定素材后按保存时的完整生成方案（合同 / 媒介 / 角色一致性 / 表情锁定）出图：快速生成直达报价确认，高级调整进视觉工作台。</p>
           </div>
-          <button type="button" className="app-btn app-btn-ghost app-btn-sm" onClick={props.onClose} disabled={repairRunning}>关闭</button>
+          <button type="button" className="app-btn app-btn-secondary app-btn-sm" onClick={props.onClose} disabled={repairRunning}>关闭</button>
         </header>
 
         <div className="skill-use-body">

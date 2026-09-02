@@ -22,10 +22,11 @@ export type ImageSourceKind =
   | 'image_edit'
   | 'batch_generation'
   | 'visual_recreation'
+  | 'ai_comic'
   | 'video_pose'
   | 'generated';
 
-export type GallerySourceFilter = 'all' | 't2i' | 'i2i' | 'edit_result' | 'batch' | 'vision' | 'video';
+export type GallerySourceFilter = 'all' | 't2i' | 'i2i' | 'edit_result' | 'batch' | 'vision' | 'comic' | 'video';
 
 export interface ImageSourceInfo {
   kind: ImageSourceKind;
@@ -46,6 +47,7 @@ export const IMAGE_SOURCE_LABELS: Record<ImageSourceKind, string> = {
   image_edit: '编辑结果',
   batch_generation: '批量结果',
   visual_recreation: '视觉复刻',
+  ai_comic: 'AI 漫画',
   video_pose: '动作白膜',
   generated: '生成结果',
 };
@@ -57,6 +59,7 @@ const KIND_FILTER: Record<ImageSourceKind, GallerySourceFilter> = {
   image_edit: 'edit_result',
   batch_generation: 'batch',
   visual_recreation: 'vision',
+  ai_comic: 'comic',
   video_pose: 'video',
   generated: 'all',
 };
@@ -68,11 +71,33 @@ export const IMAGE_SOURCE_FILTER_TABS: { key: GallerySourceFilter; label: string
   { key: 'edit_result', label: '编辑结果' },
   { key: 'batch', label: '批量结果' },
   { key: 'vision', label: '视觉复刻' },
+  { key: 'comic', label: 'AI 漫画' },
   { key: 'video', label: 'CY Video' },
 ];
 
 function infoOf(kind: ImageSourceKind): ImageSourceInfo {
   return { kind, label: IMAGE_SOURCE_LABELS[kind], filterKey: KIND_FILTER[kind], isLocal: kind === 'local_import' };
+}
+
+/** AI 漫画（ComicStudio 任务）：标签带故事 / 项目名后缀（同动作白膜先例）。 */
+function aiComicInfo(task: Task): ImageSourceInfo {
+  const comic = task.execution_snapshot?.comic;
+  // 角色参考图（Phase 1.1）：用途即角色定妆，标签直接点名角色
+  if (comic?.kind === 'character_ref' && comic.characterName?.trim()) {
+    return {
+      kind: 'ai_comic',
+      label: `角色参考图 · ${comic.characterName.trim()}`,
+      filterKey: 'comic',
+      isLocal: false,
+    };
+  }
+  const title = comic?.storyTitle?.trim() || comic?.projectName?.trim();
+  return {
+    kind: 'ai_comic',
+    label: title ? `AI 漫画 · ${title}` : IMAGE_SOURCE_LABELS.ai_comic,
+    filterKey: 'comic',
+    isLocal: false,
+  };
 }
 
 /** 动作白膜（CY Video Studio Pose Batch）：标签带动作名，卡片角标为来源应用。 */
@@ -109,6 +134,8 @@ export function resolveImageSource(
     if (linked) {
       // 动作白膜（CY Video Studio Pose Batch）：调用方来源最具体，优先于批量 / 任务类型细分
       if (linked.pose_batch) return videoPoseInfo(linked);
+      // AI 漫画：task_source='comic' 的批量任务，先于「批量结果」细分（故事名溯源）
+      if (linked.task_source === 'comic') return aiComicInfo(linked);
       // 视觉复刻：生成任务的 source_task_id 指向 vision_understanding 任务（最具体来源，优先）
       const upstream = linked.source_task_id ? taskById?.get(linked.source_task_id) : undefined;
       if (upstream?.task_type === 'vision_understanding') return infoOf('visual_recreation');

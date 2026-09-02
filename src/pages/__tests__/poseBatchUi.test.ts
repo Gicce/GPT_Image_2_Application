@@ -32,7 +32,7 @@ describe('Gallery 动作白膜来源接入', () => {
     expect(detailResolverSrc).toContain("{ label: 'Preset Version', value: poseBatch.preset_version }");
     // 来源 = CY Video Studio、用途 = 动作白膜 是基础信息区的独立两行
     expect(detailResolverSrc).toContain("{ label: '来源', value: sourceLabel }");
-    expect(detailResolverSrc).toContain("'动作白膜' : undefined");
+    expect(detailResolverSrc).toContain("? '动作白膜'");
   });
 });
 

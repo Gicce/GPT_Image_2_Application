@@ -484,6 +484,7 @@ pub fn build_pose_batch_task(plan: &PoseBatchPlan, output_dir: String) -> Task {
                 attempt_errors: Vec::new(),
                 error_detail: None,
                 attempt_details: Vec::new(),
+                executed_prompt: None,
             })
             .collect(),
         task_type: "generate".to_string(),
@@ -508,6 +509,7 @@ pub fn build_pose_batch_task(plan: &PoseBatchPlan, output_dir: String) -> Task {
                 plan_summary: plan.normalized_pose.clone(),
                 plan_tags: Vec::new(),
                 plan_description: s.pose_description.clone(),
+                variables: None,
             })
             .collect(),
         composite_layout: None,
@@ -547,6 +549,7 @@ pub fn build_pose_batch_task(plan: &PoseBatchPlan, output_dir: String) -> Task {
                 .collect(),
         }),
         provenance: None,
+        execution_snapshot: None,
     }
 }
 

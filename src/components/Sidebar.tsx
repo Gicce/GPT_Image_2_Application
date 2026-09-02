@@ -15,6 +15,7 @@ const menuItems: { id: PageType; label: string; icon: string }[] = [
   { id: 'imagestudio', label: '图片生成', icon: '✦' },
   { id: 'skillworkshop', label: '技能工坊', icon: '◇' },
   { id: 'vision', label: '视觉理解', icon: '◍' },
+  { id: 'comicstudio', label: 'AI 漫画', icon: '◆' },
   { id: 'queue', label: '任务队列', icon: '▣' },
   { id: 'gallery', label: '图片库', icon: '▦' },
   { id: 'history', label: '历史记录', icon: '◷' },

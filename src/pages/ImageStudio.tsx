@@ -15,7 +15,12 @@ import { optimizeVisualEditPrompt, resolveVisualPromptOptimizerModelLabel, type 
 import { appendAiPlan, optimizeSinglePlan, planBatchFromRequirement } from '../services/batchPlanner';
 import type { ParsedAiPlan } from '../services/batchPlanner';
 import { SIZES, QUALITIES, QUALITY_LABELS, FORMATS } from '../types';
-import type { GenerationImageRole, ImageRecord, Task } from '../types';
+import type { GenerationImageRole, ImageRecord, PromptSource, PromptSnapshotReferenceImage, Task } from '../types';
+import {
+  buildSingleExecutionSnapshot,
+  logPromptExecution,
+  resolveAdoptedPromptSource,
+} from '../features/promptExecution/executionSnapshot';
 import {
   buildBatchPlanTaskParams,
   clampPlanCount,
@@ -44,6 +49,7 @@ import { useImageDrop } from '../hooks/useImageDrop';
 import { copyText } from '../utils/clipboard';
 import BatchPlanCard from '../components/BatchPlanCard';
 import BatchPlanDetailDrawer, { BpConfirmDialog } from '../components/BatchPlanDetailDrawer';
+import BatchSeriesDialog from '../components/BatchSeriesDialog';
 import { selectRecentImageTasks, recentTaskDisplayTitle, RECENT_TASKS_LIMIT } from '../utils/recentTasks';
 import { formatTaskTime } from '../utils/taskDisplay';
 import { useAIProviderStore } from '../features/aiProviders/store';
@@ -82,6 +88,11 @@ type GenerationMode = 'single' | 'batch';
 interface BatchWorkspace {
   /** 总需求（用户唯一的顶层输入，AI 规划的输入） */
   requirement: string;
+  /**
+   * V4.2.4 批量级负面提示词（视觉理解优化采用后写入 / 可手改）：
+   * 仅填充没有自己负面词的方案（方案自身 negativePrompt 优先），绝不追加拼接。
+   */
+  requirementNegative: string;
   /** 目标数量：仅第一次 AI 规划前生效（控制方案数 = 最终图片数） */
   targetCount: number;
   plans: GenerationPlan[];
@@ -94,6 +105,7 @@ interface BatchWorkspace {
 function emptyBatchWorkspace(): BatchWorkspace {
   return {
     requirement: '',
+    requirementNegative: '',
     targetCount: DEFAULT_TARGET_COUNT,
     plans: [],
     planningStatus: 'idle',
@@ -494,6 +506,8 @@ function SingleOptResult(props: {
   stale: boolean;
   onPatch: (patch: Partial<SingleOptimization>) => void;
   onReoptimize: () => void;
+  /** V4.2.4：text 优化器标题（图生图 = AI 智能规划；文生图 = 提示词优化） */
+  textPlannerLabel?: string;
 }) {
   const { opt } = props;
 
@@ -505,7 +519,7 @@ function SingleOptResult(props: {
     <div className="studio-req-result">
       <div className="studio-req-result-head">
         <span className="studio-req-result-title">
-          {opt.kind === 'visual' ? '结合参考图的提示词优化结果' : '提示词优化结果'}
+          {opt.kind === 'visual' ? '结合参考图的提示词优化结果' : `${props.textPlannerLabel || '提示词优化'}结果`}
           {opt.modelName ? ` · ${opt.providerName ? `${opt.providerName} / ` : ''}${opt.modelName}` : ''}
         </span>
         {props.stale ? (
@@ -711,6 +725,8 @@ export default function ImageStudio() {
     setTextToImageNegative: setT2iNegative,
     imageEditPrompt: i2iPrompt,
     setImageEditPrompt: setI2iPrompt,
+    imageEditNegative: i2iNegative,
+    setImageEditNegative: setI2iNegative,
   } = useDraftStore();
   /** 单张图生图参考图（原 imageEditSourceImages 草稿字段持久化路径） */
   const [i2iSources, setI2iSources] = useState<SourceImage[]>(() =>
@@ -740,6 +756,10 @@ export default function ImageStudio() {
   const [confirmKind, setConfirmKind] = useState<null | 'replan_all' | 'reoptimize_plan'>(null);
   const [reoptimizeTargetId, setReoptimizeTargetId] = useState<string | null>(null);
   const [reoptAllBusy, setReoptAllBusy] = useState(false);
+  /** V4.2.4 批量图生图「视觉理解优化」结果（采用 → 写入总需求 + 批量级负面词） */
+  const [batchVisualOpt, setBatchVisualOpt] = useState<SingleOptimization>(emptyOptimization);
+  /** V4.2.4 系列批量（从已有任务导入 / 批量同效果生成）弹窗 */
+  const [seriesDialogOpen, setSeriesDialogOpen] = useState(false);
   /** 并发防护：规划 / 单方案优化同时只允许一个请求（按钮 disabled 之外的兜底） */
   const planningRef = useRef(false);
   const optimizingIdsRef = useRef<Set<string>>(new Set());
@@ -791,6 +811,8 @@ export default function ImageStudio() {
   /** 保存为视觉项目后的收据（banner 切换到「已保存」态）。 */
   const [skillSessionSaved, setSkillSessionSaved] = useState<string | null>(null);
   const [autoStartPending, setAutoStartPending] = useState(false);
+  /** V4.2.4 过期优化确认层：优化结果过期绝不静默回落原文，用户显式确认后才继续 */
+  const [staleConfirmOpen, setStaleConfirmOpen] = useState(false);
   useEffect(() => {
     const carry = useDraftStore.getState().consumeVisionCarry();
     if (!carry?.prompt?.trim()) return;
@@ -799,6 +821,8 @@ export default function ImageStudio() {
     setGenerationMode(patch.generationMode);
     if (patch.generationType === 'i2i') {
       setI2iPrompt(patch.i2iPrompt);
+      // V4.2.4：携带负面词预填表单槽（含模板图人物身份排斥追加项），用户可见可改
+      if (patch.i2iNegative) setI2iNegative(patch.i2iNegative);
       // V6.2：计划参考图以 generationRole/origin/label 进入工作台（role 字段属于
       // mention 层，计划图片的角色由方案冻结，不参与 mention 推断）
       if (patch.i2iSources.length > 0) {
@@ -924,7 +948,10 @@ export default function ImageStudio() {
     const merged = mergeSourceImages(current, readable);
     if (merged.added.length === 0 && broken.length === 0) return;
     if (isSingleRef.current) updateI2iSources(merged.images);
-    else setBatchSources(merged.images);
+    else {
+      setBatchSources(merged.images);
+      setBatchVisualOpt(staleOptimization);
+    }
     if (broken.length > 0) toastError(`无法读取图片文件：${broken.join('、')}`);
   }
 
@@ -937,13 +964,18 @@ export default function ImageStudio() {
   // 单张模式：AI 优化 + 提交
   // ============================================================
 
-  /** 单张 AI 优化：结果进入候选区（正向/负面独立字段），不自动采用、不覆盖原文 */
-  async function optimizeSingle() {
+  /**
+   * 单张 AI 优化（V4.2.4 双入口统一）：结果进入候选区（正向/负面独立字段），
+   * 不自动采用、不覆盖原文。
+   *  - 'text'  = AI 智能规划（纯文本 planner；有无参考图都可用，参考图仍会进入生成请求）
+   *  - 'visual'= 视觉理解优化（结合真实参考图看图；要求 ≥1 张参考图）
+   */
+  async function optimizeSingle(kind: 'text' | 'visual') {
     if (singleOptimizingRef.current) return;
     const promptText = singlePrompt.trim();
     if (!promptText) return;
-    if (isEdit && i2iSources.length === 0) {
-      setError('图生图提示词优化请先添加主编辑图。');
+    if (kind === 'visual' && i2iSources.length === 0) {
+      setError('视觉理解优化需要至少 1 张参考图片。');
       return;
     }
     if (isEdit && visionCarryMeta?.optimization) {
@@ -964,7 +996,7 @@ export default function ImageStudio() {
         }
       };
 
-      if (isEdit) {
+      if (kind === 'visual') {
         const outcome = await optimizeVisualEditPrompt({
           prompt: promptText,
           images: i2iSources.map((image, index) => ({ ...image, roleLabel: IMAGE_MENTION_ROLE_LABELS[index === 0 ? 'source_reference' : image.role || 'generic_reference'] })),
@@ -990,7 +1022,7 @@ export default function ImageStudio() {
         return;
       }
 
-      const outcome = await optimizePrompt({ prompt: promptText, taskType: 'generate' });
+      const outcome = await optimizePrompt({ prompt: promptText, taskType: isEdit ? 'edit' : 'generate' });
       if (!outcome.ok) {
         keepFailure(outcome.error);
         return;
@@ -1018,11 +1050,11 @@ export default function ImageStudio() {
   }
 
   /** 单张提交：一条提示词（或已采用的正/负面优化结果）→ Rust TaskQueue */
-  async function submitSingle() {
+  async function submitSingle(options?: { bypassStaleGuard?: boolean }) {
     setError('');
     const promptText = singlePrompt.trim();
-    // 图生图：负面词来自视觉理解携带草稿（复刻链路冻结值）；文生图：表单负面词
-    const manualNegative = isEdit ? (visionCarryMeta?.negativePrompt?.trim() || '') : t2iNegative;
+    // 负面词统一来自表单草稿槽（i2i 槽为 V4.2.4 新增；视觉理解携带值已在 carry 时预填进表单）
+    const manualNegative = isEdit ? i2iNegative : t2iNegative;
     const opt = singleOpt;
     // 单张生成数量默认 1；视觉理解复刻链路带入「生成参数」中选择的数量（1/2/4）
     const count = visionCarryMeta?.count && visionCarryMeta.count > 0 ? visionCarryMeta.count : 1;
@@ -1043,6 +1075,16 @@ export default function ImageStudio() {
       setError('提示词优化进行中，请等待完成或先使用原提示词生成。');
       return;
     }
+    // V4.2.4 过期铁律：优化结果过期（需求/参考图变化）绝不静默回落原文——
+    // 必须弹确认层，用户显式选择「仍要用原文生成」后才继续
+    const signatureForKind = (kind: 'text' | 'visual') => optimizationSignature(promptText, isEdit && kind === 'visual' ? i2iSources : []);
+    const signatureMatches = !opt.sourceSignature || opt.sourceSignature === signatureForKind(opt.kind);
+    const optimizationStale = opt.status === 'stale' || !signatureMatches;
+    const adopted = opt.status === 'success' && opt.useOptimized && opt.positivePrompt.trim().length > 0 && signatureMatches;
+    if (!options?.bypassStaleGuard && !adopted && optimizationStale && opt.positivePrompt.trim().length > 0) {
+      setStaleConfirmOpen(true);
+      return;
+    }
     // V4.0.8 capability 门禁：图片模型不支持当前生成方式时客户端阻断，不等上游报错
     const capabilityGate = gateImageModelForKind(isEdit ? 'i2i' : 't2i');
     if (!capabilityGate.allowed) {
@@ -1050,9 +1092,15 @@ export default function ImageStudio() {
       return;
     }
 
-    const adopted = opt.status === 'success' && opt.useOptimized && opt.positivePrompt.trim().length > 0;
     const finalPrompt = isEdit ? compileMentionContract(adopted ? opt.positivePrompt.trim() : promptText, i2iMentions, promptText) : (adopted ? opt.positivePrompt.trim() : promptText);
     const finalNegative = (adopted ? opt.negativePrompt : manualNegative).trim();
+    // Prompt 来源判定（唯一入口；History 直接展示，绝不重算）：
+    // 视觉理解复刻链路冻结值 > 采用的优化结果（视觉理解 / AI 智能规划 / 手工修改）> 原始输入
+    const promptSource: PromptSource = visionCarryMeta?.optimization
+      ? 'vision-recreation'
+      : adopted
+        ? resolveAdoptedPromptSource(opt.kind, opt.manuallyEdited)
+        : 'raw';
     // 优化快照决策（纯函数，底层硬保证）：视觉理解链路带入的 Prompt 已在视觉理解页
     // 优化完成 → 冻结快照（source=vision_recreation）+ prompt_optimized=true，
     // 提交生成绝不再次触发 AI 优化（重复优化防护）
@@ -1067,6 +1115,24 @@ export default function ImageStudio() {
       promptText,
       visionCarry: visionCarryMeta,
     });
+
+    // V4.2.4 执行快照：生成前冻结唯一执行真相（任务创建 / History / 系列批量同源）
+    const referenceImages: PromptSnapshotReferenceImage[] = isEdit
+      ? i2iSources.map((image, index) => ({
+        path: image.path,
+        label: image.label || image.name,
+        ...(image.role ? { role: image.role } : index === 0 ? { role: 'source_reference' } : {}),
+      }))
+      : [];
+    const executionSnapshot = buildSingleExecutionSnapshot({
+      userRequirement: promptText,
+      positivePrompt: finalPrompt,
+      negativePrompt: finalNegative,
+      promptSource,
+      referenceImages,
+      generationParams: { size, quality, format },
+    });
+    logPromptExecution(executionSnapshot, referenceImages.length);
 
     // 生成前预占额度：余额不足在此阻断，不会调用上游（与 BYOK 对话计费完全分离）
     const { isLoggedIn } = useAuthStore.getState();
@@ -1091,6 +1157,7 @@ export default function ImageStudio() {
         final_negative_prompt: finalNegative,
         prompt_optimized: adopted || visionOptimized,
         prompt_optimization: snapshot,
+        execution_snapshot: executionSnapshot,
         size,
         quality,
         output_format: format,
@@ -1117,6 +1184,7 @@ export default function ImageStudio() {
       setCarryMaskImagePath(null);
       if (isEdit) {
         setI2iPrompt('');
+        setI2iNegative('');
         setI2iMentions([]);
         updateI2iSources([]);
         setI2iOpt(emptyOptimization());
@@ -1144,6 +1212,57 @@ export default function ImageStudio() {
 
   function updatePlan(id: string, patch: Partial<GenerationPlan>) {
     setBatch(prev => ({ ...prev, plans: prev.plans.map(plan => (plan.id === id ? { ...plan, ...patch } : plan)) }));
+  }
+
+  /**
+   * V4.2.4 批量图生图「视觉理解优化」：结合共用参考图优化总需求（双规划器之二；
+   * 采用后写入总需求 + 批量级负面词，AI 智能规划仍以总需求为输入，链路不耦合）。
+   */
+  async function optimizeBatchVisual() {
+    if (singleOptimizingRef.current) return;
+    const requirement = batch.requirement.trim();
+    if (!requirement) {
+      setError('请先填写需求内容。');
+      return;
+    }
+    if (batchSources.length === 0) {
+      setError('视觉理解优化需要至少 1 张参考图片。');
+      return;
+    }
+    singleOptimizingRef.current = true;
+    const current = batchVisualOpt;
+    setBatchVisualOpt(opt => ({ ...opt, status: 'loading', error: '' }));
+    try {
+      const outcome = await optimizeVisualEditPrompt({
+        prompt: requirement,
+        images: batchSources.map((image, index) => ({ ...image, roleLabel: IMAGE_MENTION_ROLE_LABELS[index === 0 ? 'source_reference' : image.role || 'generic_reference'] })),
+      });
+      if (!outcome.ok) {
+        if (current.positivePrompt.trim()) {
+          setBatchVisualOpt({ ...current, error: outcome.error });
+          toastError(`重新优化失败：${outcome.error}（已保留上次优化结果）`);
+        } else {
+          setBatchVisualOpt(opt => ({ ...opt, status: 'error', error: outcome.error }));
+        }
+        return;
+      }
+      setBatchVisualOpt({
+        status: 'success',
+        error: '',
+        positivePrompt: outcome.result.optimizedPrompt,
+        negativePrompt: outcome.result.negativePrompt,
+        useOptimized: false,
+        manuallyEdited: false,
+        providerName: outcome.result.providerName,
+        modelName: outcome.result.modelName,
+        originalPrompt: requirement,
+        kind: 'visual',
+        sourceSignature: optimizationSignature(requirement, batchSources),
+        understanding: outcome.result.understanding,
+      });
+    } finally {
+      singleOptimizingRef.current = false;
+    }
   }
 
   /**
@@ -1425,6 +1544,7 @@ export default function ImageStudio() {
         quality,
         outputFormat: format,
         outputDir,
+        negativeHint: batch.requirementNegative.trim(),
       });
     } catch (err: any) {
       setError(err?.message || '构建任务失败');
@@ -1468,7 +1588,7 @@ export default function ImageStudio() {
     const opt = singleOpt;
     const optimizing = opt.status === 'loading';
     const hasResult = Boolean(opt.positivePrompt.trim());
-    const currentSignature = optimizationSignature(promptText, isEdit ? i2iSources : []);
+    const currentSignature = optimizationSignature(promptText, isEdit && opt.kind === 'visual' ? i2iSources : []);
     const optimizationStale = opt.status === 'stale' || Boolean(opt.sourceSignature && opt.sourceSignature !== currentSignature);
     const visualCarryLocked = isEdit && Boolean(visionCarryMeta?.optimization);
 
@@ -1531,22 +1651,54 @@ export default function ImageStudio() {
         <div className="form-group">
           <div className="studio-field-head studio-prompt-head">
             <label>{isEdit ? '图片编辑需求' : '提示词'} <span className="required">*</span></label>
-            <span className="studio-optimizer-meta studio-prompt-hint" title={isEdit ? '结合真实参考图片理解画面并优化编辑提示词（可选）' : '把提示词优化为专业的正向 / 负面提示词（可选）'}>
-              {isEdit ? '结合真实参考图片理解画面并优化编辑提示词（可选）' : '把提示词优化为专业的正向 / 负面提示词（可选）'}
+            <span className="studio-optimizer-meta studio-prompt-hint" title={isEdit ? 'AI 智能规划按文字规划编辑提示词；视觉理解优化结合参考图看图（可选）' : '把提示词优化为专业的正向 / 负面提示词（可选）'}>
+              {isEdit ? 'AI 智能规划按文字规划；视觉理解优化结合参考图看图（可选）' : '把提示词优化为专业的正向 / 负面提示词（可选）'}
             </span>
-            <button
-              type="button"
-              className={`app-btn app-btn-sm${hasResult ? ' studio-btn-ai' : ' app-btn-secondary'}`}
-              disabled={optimizing || !promptText.trim() || !activeOptimizerModelLabel || (isEdit && i2iSources.length === 0) || visualCarryLocked}
-              title={visualCarryLocked
-                ? '当前方案已由视觉理解完成 Prompt 编译，请返回视觉理解修改方案'
-                : activeOptimizerModelLabel
-                  ? `${isEdit ? '视觉理解' : '图片 Prompt 优化'} · ${activeOptimizerModelLabel}`
-                  : isEdit ? '尚未选择视觉模型' : '尚未配置图片 Prompt 优化模型'}
-              onClick={() => void optimizeSingle()}
-            >
-              {optimizing ? (isEdit ? '正在理解并优化…' : '正在优化…') : hasResult ? '重新优化' : isEdit ? '结合参考图优化' : '优化提示词'}
-            </button>
+            {/* V4.2.4 双入口：AI 智能规划（纯文本，有无参考图都可用）+ 视觉理解优化（需 ≥1 张参考图） */}
+            <div className="settings-actions-row studio-prompt-actions">
+              {isEdit ? (
+                <>
+                  <button
+                    type="button"
+                    className={`app-btn app-btn-sm${opt.kind === 'text' && hasResult ? ' studio-btn-ai' : ' app-btn-secondary'}`}
+                    disabled={optimizing || !promptText.trim() || !optimizerModelLabel || visualCarryLocked}
+                    title={visualCarryLocked
+                      ? '当前方案已由视觉理解完成 Prompt 编译，请返回视觉理解修改方案'
+                      : optimizerModelLabel
+                        ? `AI 智能规划 · ${optimizerModelLabel}`
+                        : '尚未配置图片 Prompt 优化模型'}
+                    onClick={() => void optimizeSingle('text')}
+                  >
+                    {optimizing && opt.kind === 'text' ? '正在规划…' : opt.kind === 'text' && hasResult ? '重新规划' : '✨ AI 智能规划'}
+                  </button>
+                  <button
+                    type="button"
+                    className={`app-btn app-btn-sm${opt.kind === 'visual' && hasResult ? ' studio-btn-ai' : ' app-btn-secondary'}`}
+                    disabled={optimizing || !promptText.trim() || i2iSources.length === 0 || !visualOptimizerModelLabel || visualCarryLocked}
+                    title={visualCarryLocked
+                      ? '当前方案已由视觉理解完成 Prompt 编译，请返回视觉理解修改方案'
+                      : i2iSources.length === 0
+                        ? '需要至少 1 张参考图片'
+                        : visualOptimizerModelLabel
+                          ? `视觉理解优化 · ${visualOptimizerModelLabel}`
+                          : '尚未选择视觉模型'}
+                    onClick={() => void optimizeSingle('visual')}
+                  >
+                    {optimizing && opt.kind === 'visual' ? '正在理解并优化…' : opt.kind === 'visual' && hasResult ? '重新优化' : '视觉理解优化'}
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  className={`app-btn app-btn-sm${hasResult ? ' studio-btn-ai' : ' app-btn-secondary'}`}
+                  disabled={optimizing || !promptText.trim() || !optimizerModelLabel}
+                  title={optimizerModelLabel ? `图片 Prompt 优化 · ${optimizerModelLabel}` : '尚未配置图片 Prompt 优化模型'}
+                  onClick={() => void optimizeSingle('text')}
+                >
+                  {optimizing ? '正在优化…' : hasResult ? '重新优化' : '优化提示词'}
+                </button>
+              )}
+            </div>
           </div>
           {visionCarryMeta?.optimization && (
             <p className="form-hint studio-vision-carry">
@@ -1592,7 +1744,7 @@ export default function ImageStudio() {
         {opt.status === 'error' && (
           <p className="form-hint form-hint-error studio-req-error">
             提示词优化失败：{opt.error || '请重试'}
-            <button className="settings-btn settings-btn-link settings-btn-sm" disabled={optimizing || !activeOptimizerModelLabel} onClick={() => void optimizeSingle()}>重新优化</button>
+            <button className="settings-btn settings-btn-link settings-btn-sm" disabled={optimizing} onClick={() => void optimizeSingle(opt.kind)}>重新优化</button>
           </p>
         )}
 
@@ -1601,23 +1753,24 @@ export default function ImageStudio() {
             opt={opt}
             optimizing={optimizing}
             stale={optimizationStale}
+            textPlannerLabel={isEdit ? 'AI 智能规划' : '提示词优化'}
             onPatch={patch => setSingleOpt(prev => ({ ...prev, ...patch }))}
-            onReoptimize={() => void optimizeSingle()}
+            onReoptimize={() => void optimizeSingle(opt.kind)}
           />
         )}
 
-        {!isEdit && (
-          <div className="form-group studio-field-secondary">
-            <label>负面提示词</label>
-            <textarea
-              className="studio-textarea studio-textarea-sm"
-              rows={2}
-              value={t2iNegative}
-              onChange={e => setT2iNegative(e.target.value)}
-              placeholder="描述你不希望出现在图片中的内容（采用 AI 优化结果时，以优化得到的负面提示词为准）"
-            />
-          </div>
-        )}
+        <div className="form-group studio-field-secondary">
+          <label>负面提示词</label>
+          <textarea
+            className="studio-textarea studio-textarea-sm"
+            rows={2}
+            value={isEdit ? i2iNegative : t2iNegative}
+            onChange={e => (isEdit ? setI2iNegative : setT2iNegative)(e.target.value)}
+            placeholder={isEdit
+              ? '描述不希望出现在编辑结果中的内容（采用 AI 规划 / 视觉理解优化结果时，以结果中的负面提示词为准）'
+              : '描述你不希望出现在图片中的内容（采用 AI 优化结果时，以优化得到的负面提示词为准）'}
+          />
+        </div>
 
         <SectionHead divided title="生成设置" />
         <GenerationSettings
@@ -1645,7 +1798,11 @@ export default function ImageStudio() {
               {batchSources.length > 0 && <span className="studio-media-count">已选 {batchSources.length} 张</span>}
             </div>
             <span className="form-hint studio-source-hint">所有方案共用当前参考图，可添加多张。</span>
-            <ReferenceImageInput images={batchSources} onChange={setBatchSources} dragActive={sourceDragActive} />
+            <ReferenceImageInput
+              images={batchSources}
+              onChange={next => { setBatchSources(next); setBatchVisualOpt(staleOptimization); }}
+              dragActive={sourceDragActive}
+            />
           </div>
         )}
 
@@ -1657,7 +1814,7 @@ export default function ImageStudio() {
             className="studio-textarea studio-textarea-lg"
             rows={5}
             value={batch.requirement}
-            onChange={e => patchBatch({ requirement: e.target.value })}
+            onChange={e => { patchBatch({ requirement: e.target.value }); setBatchVisualOpt(staleOptimization); }}
             placeholder={isEdit
               ? '例如：基于这个人物生成3种不同的战国女将造型，甲胄、武器、姿态要明显不同……'
               : '例如：我需要生成3张不同的战国时期女战将，人物的服装、武器、姿势、背景需要明显不同，整体保持真实战国历史电影质感。'}
@@ -1665,7 +1822,83 @@ export default function ImageStudio() {
           {batch.requirement.length > 0 && (
             <span className="studio-char-hint">{batch.requirement.length} 字</span>
           )}
+          {/* V4.2.4 视觉理解优化（双规划器之二）：结合共用参考图优化总需求；采用后写入总需求 + 批量负面词 */}
+          {isEdit && (
+            <div className="settings-actions-row studio-batch-visual-actions">
+              <button
+                type="button"
+                className={`app-btn app-btn-sm${batchVisualOpt.kind === 'visual' && batchVisualOpt.positivePrompt.trim() ? ' studio-btn-ai' : ' app-btn-secondary'}`}
+                disabled={batchVisualOpt.status === 'loading' || !batch.requirement.trim() || batchSources.length === 0 || !visualOptimizerModelLabel}
+                title={batchSources.length === 0
+                  ? '需要至少 1 张参考图片'
+                  : !visualOptimizerModelLabel
+                    ? '尚未选择视觉模型'
+                    : `视觉理解优化 · ${visualOptimizerModelLabel}`}
+                onClick={() => void optimizeBatchVisual()}
+              >
+                {batchVisualOpt.status === 'loading' && batchVisualOpt.kind === 'visual' ? '正在理解并优化…' : '视觉理解优化'}
+              </button>
+              <span className="form-hint">结合参考图优化总需求；采用后写入总需求与批量负面词</span>
+            </div>
+          )}
+          {batchVisualOpt.status === 'error' && batchVisualOpt.kind === 'visual' && (
+            <p className="form-hint form-hint-error studio-req-error">
+              视觉理解优化失败：{batchVisualOpt.error || '请重试'}
+              <button className="settings-btn settings-btn-link settings-btn-sm" onClick={() => void optimizeBatchVisual()}>重新优化</button>
+            </p>
+          )}
+          {batchVisualOpt.kind === 'visual' && batchVisualOpt.positivePrompt.trim() && (
+            <SingleOptResult
+              opt={batchVisualOpt}
+              optimizing={batchVisualOpt.status === 'loading'}
+              stale={batchVisualOpt.status === 'stale' || (Boolean(batchVisualOpt.sourceSignature) && batchVisualOpt.sourceSignature !== optimizationSignature(batch.requirement, batchSources))}
+              onPatch={patch => {
+                if (patch.useOptimized === true) {
+                  // 采用：正向 → 总需求；负面 → 批量级负面词（快照同步为采用后状态，避免误报过期）
+                  patchBatch({
+                    requirement: batchVisualOpt.positivePrompt.trim(),
+                    requirementNegative: batchVisualOpt.negativePrompt.trim(),
+                  });
+                  setBatchVisualOpt(prev => ({
+                    ...prev,
+                    useOptimized: true,
+                    manuallyEdited: false,
+                    sourceSignature: optimizationSignature(batchVisualOpt.positivePrompt.trim(), batchSources),
+                  }));
+                  toastSuccess('已采用视觉理解优化：总需求与批量负面词已更新');
+                  return;
+                }
+                if (patch.useOptimized === false) {
+                  patchBatch({ requirement: batchVisualOpt.originalPrompt, requirementNegative: '' });
+                  setBatchVisualOpt(prev => ({
+                    ...prev,
+                    useOptimized: false,
+                    sourceSignature: optimizationSignature(batchVisualOpt.originalPrompt, batchSources),
+                  }));
+                  return;
+                }
+                setBatchVisualOpt(prev => ({ ...prev, ...patch }));
+              }}
+              onReoptimize={() => void optimizeBatchVisual()}
+            />
+          )}
         </div>
+
+        {isEdit && (
+          <div className="form-group studio-field-secondary">
+            <div className="studio-field-head">
+              <label>批量负面提示词</label>
+              <span className="studio-optimizer-meta studio-prompt-hint">仅填充没有自己负面词的方案（方案自身负面词优先，绝不追加拼接）</span>
+            </div>
+            <textarea
+              className="studio-textarea studio-textarea-sm"
+              rows={2}
+              value={batch.requirementNegative}
+              onChange={e => patchBatch({ requirementNegative: e.target.value })}
+              placeholder="描述不希望出现在任何方案中的内容；未单独填写负面词的方案将使用这里的值"
+            />
+          </div>
+        )}
 
         {/* 规划前：目标数量 + AI 主按钮；规划后：stepper 退出，数量只随增删方案变化 */}
         {plans.length === 0 && !planning && (
@@ -1688,6 +1921,8 @@ export default function ImageStudio() {
               {moreWaysOpen && (
                 <div className="bp-more-menu">
                   <button type="button" onClick={() => { setMoreWaysOpen(false); setBulkImportOpen(true); }}>批量导入方案</button>
+                  {/* V4.2.4 系列批量入口：从已有任务派生模板 + 变量槽（批量同效果生成） */}
+                  <button type="button" onClick={() => { setMoreWaysOpen(false); setSeriesDialogOpen(true); }}>从已有任务导入（系列批量）</button>
                 </div>
               )}
             </div>
@@ -1855,7 +2090,15 @@ export default function ImageStudio() {
           </div>
         </div>
         <div className="studio-mode-meta">
-          <OptimizerModelNote label={activeOptimizerModelLabel} visual={usesVisualOptimizer} />
+          {/* V4.2.4：图生图单张 = 双规划器（AI 智能规划 + 视觉理解优化），各显各的模型 */}
+          {isSingle && isEdit ? (
+            <>
+              <OptimizerModelNote label={optimizerModelLabel} />
+              <OptimizerModelNote label={visualOptimizerModelLabel} visual />
+            </>
+          ) : (
+            <OptimizerModelNote label={activeOptimizerModelLabel} visual={usesVisualOptimizer} />
+          )}
         </div>
       </div>
 
@@ -1951,6 +2194,26 @@ export default function ImageStudio() {
           onReoptimize={() => requestReoptimize(drawerPlan.id)}
           onDelete={() => deletePlan(drawerPlan.id)}
           onNavigate={navigateDrawer}
+        />
+      )}
+
+      {/* ===== V4.2.4 系列批量（批量同效果生成）向导：批量页「从已有任务导入」入口 ===== */}
+      {seriesDialogOpen && (
+        <BatchSeriesDialog onClose={() => setSeriesDialogOpen(false)} />
+      )}
+
+      {/* ===== V4.2.4 过期优化确认层：绝不静默回落原文 ===== */}
+      {isSingle && staleConfirmOpen && (
+        <BpConfirmDialog
+          title="此前的优化结果已过期"
+          text={'当前需求或参考图已变化，此前的优化结果已过期，不会自动用于本次生成。\n\n继续将使用当前表单原文生成（不含过期优化）；建议先重新规划或采用最新优化结果。'}
+          confirmLabel="仍要用原文生成"
+          danger
+          onCancel={() => setStaleConfirmOpen(false)}
+          onConfirm={() => {
+            setStaleConfirmOpen(false);
+            void submitSingle({ bypassStaleGuard: true });
+          }}
         />
       )}
 

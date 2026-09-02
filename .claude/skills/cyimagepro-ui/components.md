@@ -7,8 +7,9 @@
 
 | 类 | 语义 |
 |---|---|
+| `.app-btn` | **基类（必写）**：padding/圆角/边框/字重/hover/disabled/`:focus-visible` 全在基类；写 variant 必须带基类（`className="app-btn app-btn-primary"`），只写 variant = UA 默认按钮 + 一层背景色 |
 | `.app-btn-primary` | 主操作（每区域最多 1 个） |
-| `.app-btn-secondary` | 次操作 |
+| `.app-btn-secondary` | 次操作（弱操作/取消/上一步也用它；**不存在 `.app-btn-ghost`**） |
 | `.app-btn-danger` | 危险操作（确认充值/提交退款守卫测试锁定其配色） |
 | `.app-btn-sm` | 小尺寸修饰 |
 | `.settings-btn-link` / `.settings-btn-sm` | 行内链接按钮 / 小按钮 |

@@ -345,7 +345,7 @@ export default function SkillCreatorDialog(props: {
       <section className={`skill-creator-dialog${galleryOpen ? ' is-picker-open' : ''}`} role="dialog" aria-modal="true" aria-label="保存为我的技能">
         <header className="skill-creator-header">
           <div><h2>Skill 创作器</h2><p>把一次视觉项目整理成能给不同素材重复使用的专业流程。</p></div>
-          <button type="button" className="app-btn app-btn-ghost app-btn-sm" onClick={props.onClose}>关闭</button>
+          <button type="button" className="app-btn app-btn-secondary app-btn-sm" onClick={props.onClose}>关闭</button>
         </header>
         <div className="skill-creator-layout">
           <nav className="skill-creator-steps" aria-label="创作步骤">

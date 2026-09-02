@@ -1,6 +1,6 @@
 [package]
 name = "gpt-image-batch-generator"
-version = "4.2.3"
+version = "4.3.0"
 edition = "2021"
 
 [lib]
@@ -34,3 +34,9 @@ sha2 = "0.10"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"
+
+# V4.2.11 E2E：最终页组合器（jsdom 无 canvas 2D，组合由 Rust 等价实现承担，
+# 几何常量与 src/features/comic/comicExport.ts computePageLayouts 同源）
+[dev-dependencies]
+imageproc = "0.25"
+ab_glyph = "0.2"

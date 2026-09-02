@@ -64,6 +64,12 @@ export interface SubTask {
   error_detail?: SubTaskErrorDetail | null;
   /** 历史 attempt 的结构化快照（与 attempt_errors 尾部对齐；旧任务缺失） */
   attempt_details?: SubTaskErrorDetail[];
+  /**
+   * V4.2.4 执行时真实发送给 Provider 的完整指令（正 + 负按适配层规则组合）。
+   * Rust task_runner 置 running 时回写；历史「实际执行 Prompt」唯一真相。
+   * 旧任务 / remove_background 任务缺失（不伪造）。
+   */
+  executed_prompt?: string;
 }
 
 export type TaskExecutionMode = 'single' | 'batch';
@@ -381,6 +387,96 @@ export interface PromptOptimizationSnapshot {
   source?: string;
 }
 
+// ===== V4.2.4 Prompt Execution Snapshot（生成前冻结的唯一执行真相） =====
+
+/**
+ * Prompt 来源语义（V4.2.4 统一口径）：
+ * - raw：用户原始输入，未经任何规划
+ * - ai-planning：AI 智能规划（文本 Planner，不读参考图内容）
+ * - visual-understanding：视觉理解优化（读参考图内容）
+ * - manual-edited：在优化结果基础上手工修改
+ * - vision-recreation：视觉理解复刻链路带入（视觉页已优化）
+ * - task-derived：从历史任务派生
+ * - batch-derived：批量系列模板渲染
+ */
+export type PromptSource =
+  | 'raw'
+  | 'ai-planning'
+  | 'visual-understanding'
+  | 'manual-edited'
+  | 'vision-recreation'
+  | 'task-derived'
+  | 'batch-derived'
+  | 'comic-compiled';
+
+/** 执行快照里的参考图（path + 语义角色；与提交顺序一致）。 */
+export interface PromptSnapshotReferenceImage {
+  id?: string;
+  path: string;
+  label?: string;
+  role?: string;
+}
+
+/** 批量任务单个子项的执行快照（系列批量渲染后的独立真相）。 */
+export interface BatchItemExecutionSnapshot {
+  /** 子项标题（如「生肖 · 鼠」）。 */
+  label: string;
+  positivePrompt: string;
+  negativePrompt: string;
+  /** 正 + 负按 Rust compose_model_instruction 同规则组合的执行预览。 */
+  effectivePrompt: string;
+  /** 系列变量（如 { zodiac: '鼠' }；普通批量为空）。 */
+  variables?: Record<string, string>;
+}
+
+/**
+ * Prompt Execution Snapshot —— 点击「开始生成」前由 Prompt Draft 冻结，
+ * 同时作为：任务创建依据 / Provider 请求依据 / 持久化依据 / 历史展示依据 /
+ * 「批量同效果生成」来源依据。Execute what you save, display what you executed.
+ * 实际发送内容以 Rust 执行时回写的 sub_tasks[i].executed_prompt 为最终真相，
+ * 本快照保存创建时刻的意图与参数（schema 由前端 TS 单一维护，Rust JSON 透传）。
+ */
+export interface PromptExecutionSnapshot {
+  schemaVersion: 1;
+  /** 用户原始需求（≠ 最终执行 Prompt）。 */
+  userRequirement: string;
+  positivePrompt: string;
+  negativePrompt: string;
+  /** Provider 不支持独立负面参数时按适配层规则组合的执行预览。 */
+  effectivePrompt: string;
+  promptSource: PromptSource;
+  referenceImages: PromptSnapshotReferenceImage[];
+  generationParams: {
+    size?: string;
+    quality?: string;
+    format?: string;
+  };
+  provider?: string;
+  model?: string;
+  /** 批量任务：每个子项独立快照（与 batch_items 下标对齐）。 */
+  items?: BatchItemExecutionSnapshot[];
+  /** 系列批量溯源（普通任务缺失）。 */
+  series?: {
+    sourceTaskId?: string;
+    presetId?: string;
+    variableSlots?: Array<{ key: string; label: string; originalValue?: string }>;
+    lockedConstraints?: string[];
+  };
+  /** AI 漫画任务溯源（漫画链路创建时冻结；普通任务缺失）。
+   *  与 features/comic/types.ts 的 ComicExecutionMarker 结构同形（避免 types↔features 环依赖）。 */
+  comic?: {
+    projectId: string;
+    projectName?: string;
+    kind: 'anchor' | 'panels' | 'panel_regen' | 'character_ref' | 'bake_text';
+    panelId?: string;
+    characterId?: string;
+    characterName?: string;
+    skillName?: string;
+    storyTitle?: string;
+  };
+  createdAt: string;
+}
+
 export interface TaskBatchItem {
   id: string;
   label: string;
@@ -396,6 +492,8 @@ export interface TaskBatchItem {
   plan_summary?: string;
   plan_tags?: string[];
   plan_description?: string;
+  /** V4.2.4 系列批量变量快照（如 { zodiac: '鼠' }；普通批量 / 旧任务缺失）。 */
+  variables?: Record<string, string>;
 }
 
 export interface Task {
@@ -409,7 +507,7 @@ export interface Task {
   /** 结构化优化快照；旧任务可能缺失（由 UI 兼容映射）。 */
   prompt_optimization?: PromptOptimizationSnapshot | null;
   agent_intent?: string;
-  task_source?: 'manual' | 'agent' | 'cy-video-studio' | 'vision_recreation';
+  task_source?: 'manual' | 'agent' | 'cy-video-studio' | 'vision_recreation' | 'batch_series' | 'comic';
   size: string;
   quality: string;
   output_format: string;
@@ -453,6 +551,8 @@ export interface Task {
   pose_batch?: PoseBatchMeta;
   /** 生成溯源快照（视觉复刻等链路创建时冻结；旧任务缺失）。 */
   provenance?: GenerationProvenanceSnapshot | null;
+  /** V4.2.4 Prompt 执行快照（生成前冻结；Rust JSON 透传，旧任务缺失）。 */
+  execution_snapshot?: PromptExecutionSnapshot | null;
 }
 
 /** 动作白膜批槽位语义（与 sub_tasks / batch_items 按 sub_index 对齐）。 */
@@ -551,7 +651,7 @@ export interface CreateTaskParams {
   prompt_optimized?: boolean;
   prompt_optimization?: PromptOptimizationSnapshot | null;
   agent_intent?: string;
-  task_source?: 'manual' | 'agent' | 'cy-video-studio' | 'vision_recreation';
+  task_source?: 'manual' | 'agent' | 'cy-video-studio' | 'vision_recreation' | 'batch_series' | 'comic';
   size: string;
   quality: string;
   output_format: string;
@@ -574,6 +674,8 @@ export interface CreateTaskParams {
   source_task_kind?: string;
   /** 生成溯源快照（视觉复刻链路冻结；Rust 侧 JSON 透传）。 */
   provenance?: GenerationProvenanceSnapshot | null;
+  /** V4.2.4 Prompt 执行快照（生成前冻结；Rust 侧 JSON 透传）。 */
+  execution_snapshot?: PromptExecutionSnapshot | null;
 }
 
 /** 单张复合构图布局（一张图内部的分格结构）。 */
@@ -582,7 +684,7 @@ export interface TaskCompositeLayout {
   panelCount: number;
 }
 
-export type PageType = 'agent' | 'imagestudio' | 'skillworkshop' | 'vision' | 'queue' | 'gallery' | 'history' | 'settings' | 'about' | 'account';
+export type PageType = 'agent' | 'imagestudio' | 'skillworkshop' | 'vision' | 'comicstudio' | 'queue' | 'gallery' | 'history' | 'settings' | 'about' | 'account';
 
 // ===== V4.0.6 批量任务重做 =====
 

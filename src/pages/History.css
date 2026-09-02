@@ -658,3 +658,8 @@
   font-size: 12px;
   color: var(--text-secondary, #666);
 }
+
+/* V4.2.4 详情头「批量同效果生成」：推到行尾，与状态徽章分离 */
+.history-series-btn {
+  margin-left: auto;
+}

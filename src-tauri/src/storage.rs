@@ -244,7 +244,44 @@ fn open_db(path: &PathBuf) -> Option<Connection> {
             created_at TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_image_folders_created_at
-            ON image_folders(created_at);",
+            ON image_folders(created_at);
+
+        CREATE TABLE IF NOT EXISTS comic_projects (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            stage TEXT NOT NULL DEFAULT 'skill_draft',
+            skill_id TEXT,
+            data_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            last_opened_at TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_comic_projects_last_opened
+            ON comic_projects(last_opened_at);
+        CREATE TABLE IF NOT EXISTS comic_skills (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            comic_form TEXT NOT NULL DEFAULT '四格漫画',
+            version INTEGER NOT NULL DEFAULT 1,
+            source TEXT NOT NULL DEFAULT 'ai_draft',
+            data_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_comic_skills_updated_at
+            ON comic_skills(updated_at);
+        CREATE TABLE IF NOT EXISTS comic_characters (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT '辅助角色',
+            status TEXT NOT NULL DEFAULT 'draft',
+            source TEXT NOT NULL DEFAULT 'temporary',
+            data_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_comic_characters_updated_at
+            ON comic_characters(updated_at);",
     )
     .ok()?;
     // 旧库升级：CREATE TABLE IF NOT EXISTS 不会给已有表补列，按需幂等 ALTER

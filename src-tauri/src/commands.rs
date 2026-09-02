@@ -145,6 +145,12 @@ pub struct AgentRunPayload {
     pub system_prompt: String,
     #[serde(default)]
     pub messages: Vec<AgentRequestMessage>,
+    /// 输出预算覆盖（V4.2.7 comic-concepts 根因修复）：推理型模型（GLM-5.3 等）
+    /// 的 reasoning tokens 与正文共享 max_tokens 预算，4096 会被思考吃掉大半，
+    /// 正文 JSON 中途截断（finish_reason=length）。大 JSON 输出的调用方
+    /// （comic_planner）显式传更大预算；缺省 None = 维持 4096，既有调用方不受影响。
+    #[serde(default)]
+    pub max_tokens: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -390,6 +396,26 @@ pub struct AgentRunResult {
     /// 恢复流程时填入；其他路径为 None。前端据此展示"响应恢复"详情区。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub planner_recovery: Option<ResponsesRecoveryTrace>,
+    /// chat 通道 finish_reason（stop / length / ...）：V4.2.7 comic-concepts 修复。
+    /// `length` = 输出被 max_tokens 截断，前端据此把"JSON 不闭合"归类为截断并
+    /// 生成针对性修复重试指令（压缩输出），而不是原样重发。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finish_reason: Option<String>,
+}
+
+/// max_tokens 覆盖的钳制（防调用方传异常值：下限保住基本输出，上限防误传打爆配额）。
+fn effective_max_tokens(requested: Option<u32>) -> u32 {
+    requested.unwrap_or(4096).clamp(1024, 16384)
+}
+
+/// 从 chat completions body 提取 choices[0].finish_reason（截断诊断用）。
+fn chat_finish_reason(value: &serde_json::Value) -> Option<String> {
+    value
+        .get("choices")?
+        .get(0)?
+        .get("finish_reason")?
+        .as_str()
+        .map(str::to_string)
 }
 
 /// base URL 末段是否已是版本段（v1 / v4 / v1beta 等）。
@@ -2977,6 +3003,7 @@ fn planner_failure_result(
         planner_transport: transport_used.map(|s| s.to_string()),
         planner_diagnostic: diag,
         planner_recovery: recovery,
+        finish_reason: None,
     }
 }
 
@@ -3082,6 +3109,7 @@ pub async fn run_agent_request(payload: AgentRunPayload) -> Result<AgentRunResul
             planner_transport: None,
             planner_diagnostic: None,
             planner_recovery: None,
+            finish_reason: None,
         });
     }
 
@@ -3149,7 +3177,8 @@ pub async fn run_agent_request(payload: AgentRunPayload) -> Result<AgentRunResul
         json!({
             "model": payload.model,
             "messages": messages,
-            "max_tokens": 4096
+            // 调用方可覆盖（comic_planner 等大 JSON 输出传 8192）；缺省 4096 不变
+            "max_tokens": effective_max_tokens(payload.max_tokens)
         })
     };
 
@@ -3198,7 +3227,7 @@ pub async fn run_agent_request(payload: AgentRunPayload) -> Result<AgentRunResul
             json!({
                 "model": payload.model,
                 "input": messages_array,
-                "max_output_tokens": 4096
+                "max_output_tokens": effective_max_tokens(payload.max_tokens)
             })
         } else {
             let system_content = messages_array
@@ -3388,6 +3417,7 @@ pub async fn run_agent_request(payload: AgentRunPayload) -> Result<AgentRunResul
                             planner_transport: Some("responses".to_string()),
                             planner_diagnostic: last_diag.clone(),
                             planner_recovery: None,
+                            finish_reason: None,
                         });
                     }
                     break;
@@ -3569,7 +3599,7 @@ pub async fn run_agent_request(payload: AgentRunPayload) -> Result<AgentRunResul
                         json!({
                             "model": payload.model,
                             "input": messages_array,
-                            "max_output_tokens": 4096
+                            "max_output_tokens": effective_max_tokens(payload.max_tokens)
                         })
                     } else {
                         let system_content = messages_array
@@ -3637,6 +3667,7 @@ pub async fn run_agent_request(payload: AgentRunPayload) -> Result<AgentRunResul
                                 planner_transport: Some("responses".to_string()),
                                 planner_diagnostic: responses_diag.clone(),
                                 planner_recovery: None,
+                                finish_reason: None,
                             });
                         }
                     }
@@ -3665,6 +3696,7 @@ pub async fn run_agent_request(payload: AgentRunPayload) -> Result<AgentRunResul
                         planner_transport: Some("chat_completions".to_string()),
                         planner_diagnostic: responses_diag.clone(),
                         planner_recovery: None,
+                        finish_reason: None,
                     });
                 }
             }
@@ -4031,6 +4063,7 @@ pub async fn run_agent_request(payload: AgentRunPayload) -> Result<AgentRunResul
             } else {
                 None
             },
+            finish_reason: None,
         });
     }
 
@@ -4043,6 +4076,19 @@ pub async fn run_agent_request(payload: AgentRunPayload) -> Result<AgentRunResul
         .unwrap_or("")
         .trim()
         .to_string();
+
+    // 截断可见性（V4.2.7 comic-concepts 根因）：finish_reason=length 意味着正文
+    // 被 max_tokens 砍断（推理型模型的思考 token 与正文共享预算），下游 JSON
+    // 必然不闭合。打印一条真实事件日志，让"结构化失败"在控制台可归因。
+    let finish_reason = chat_finish_reason(&value);
+    if finish_reason.as_deref() == Some("length") {
+        println!(
+            "[ChatTransport] finish_reason=length role={} feature={} content_chars={} （输出被截断）",
+            if payload.role.is_empty() { "unspecified" } else { &payload.role },
+            if payload.feature.is_empty() { "-" } else { &payload.feature },
+            reply.chars().count(),
+        );
+    }
 
     Ok(AgentRunResult {
         ok: true,
@@ -4076,6 +4122,7 @@ pub async fn run_agent_request(payload: AgentRunPayload) -> Result<AgentRunResul
         planner_transport: None,
         planner_diagnostic: None,
         planner_recovery: None,
+        finish_reason,
     })
 }
 
@@ -4759,6 +4806,7 @@ pub fn create_task(app: tauri::AppHandle, params: CreateTaskParams) -> Result<Ta
         source_context: None,
         pose_batch: None,
         provenance: params.provenance.clone(),
+        execution_snapshot: params.execution_snapshot.clone(),
         sub_tasks: (0..count)
             .map(|i| SubTask {
                 index: i,
@@ -4774,6 +4822,7 @@ pub fn create_task(app: tauri::AppHandle, params: CreateTaskParams) -> Result<Ta
                 attempt_errors: Vec::new(),
                 error_detail: None,
                 attempt_details: Vec::new(),
+                executed_prompt: None,
             })
             .collect(),
     };
@@ -4958,6 +5007,8 @@ pub fn retry_task(app: tauri::AppHandle, task_id: String) -> Result<Task, String
             // 动作白膜批：整批重提克隆保留批元数据（来源继承；batchId 查找仍命中原任务）
             pose_batch: original.pose_batch.clone(),
             provenance: original.provenance.clone(),
+            // V4.2.4：整批重提继承执行快照（创建时刻执行意图与源一致）
+            execution_snapshot: original.execution_snapshot.clone(),
             stage_note: String::new(),
             sub_tasks: (0..original.count)
                 .map(|i| SubTask {
@@ -4970,6 +5021,7 @@ pub fn retry_task(app: tauri::AppHandle, task_id: String) -> Result<Task, String
                     attempt_errors: Vec::new(),
                     error_detail: None,
                     attempt_details: Vec::new(),
+                    executed_prompt: None,
                 })
                 .collect(),
         };
@@ -5594,6 +5646,51 @@ pub async fn save_image_as(
     } else {
         Ok(false)
     }
+}
+
+// ========== Comic Final Page（V4.2.11 §F 组合漫画页面落库） ==========
+
+/// 将本地合成的漫画整页 PNG 写入图片库导入目录（无对话框，自动组合链路专用）。
+/// 返回库内路径；索引由调用方随后经 import_images_to_library / rescan 建立。
+#[tauri::command]
+pub fn save_comic_page_to_library(
+    app: tauri::AppHandle,
+    b64_data: String,
+    file_name: String,
+) -> Result<String, String> {
+    let settings: Settings = storage::read_json(&storage::settings_path(&app), Settings::default());
+    let input_dir_raw = settings.library_input_dir.trim();
+    if input_dir_raw.is_empty() {
+        return Err("请先在「设置与更新 → 图片与文件」中配置本地导入目录".to_string());
+    }
+    let input_dir = Path::new(input_dir_raw);
+    fs::create_dir_all(input_dir).map_err(|e| format!("无法访问本地导入目录: {}", e))?;
+
+    // 文件名清洗：剥掉路径成分与 Windows 非法字符，强制 .png 后缀
+    let cleaned: String = file_name
+        .chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+            _ => c,
+        })
+        .collect();
+    let trimmed = cleaned.trim().trim_matches('.').to_string();
+    let base = if trimmed.is_empty() { "comic-page".to_string() } else { trimmed };
+    let png_name = if base.to_lowercase().ends_with(".png") { base } else { format!("{}.png", base) };
+
+    let b64_clean = b64_data.split(',').last().unwrap_or(&b64_data);
+    let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, b64_clean)
+        .map_err(|e| format!("解码失败: {}", e))?;
+    if bytes.is_empty() {
+        return Err("合成页数据为空".to_string());
+    }
+    let dest = next_available_dest(input_dir, &png_name);
+    fs::write(&dest, &bytes).map_err(|e| format!("写入失败: {}", e))?;
+    // 记录时间 = 组合时间（最新优先排序下整页出现在最前）
+    if let Ok(file) = fs::File::options().write(true).open(&dest) {
+        let _ = file.set_modified(std::time::SystemTime::now());
+    }
+    Ok(dest.to_string_lossy().replace('\\', "/"))
 }
 
 // ========== Conversations ==========
@@ -7260,6 +7357,33 @@ mod tests {
     }
 
     #[test]
+    #[test]
+    fn effective_max_tokens_defaults_and_clamps() {
+        // 缺省 None = 4096（既有调用方行为不变）
+        assert_eq!(effective_max_tokens(None), 4096);
+        // comic_planner 大 JSON 输出的显式覆盖
+        assert_eq!(effective_max_tokens(Some(8192)), 8192);
+        // 异常值钳制：下限保基本输出，上限防误传打爆配额
+        assert_eq!(effective_max_tokens(Some(64)), 1024);
+        assert_eq!(effective_max_tokens(Some(1_000_000)), 16384);
+    }
+
+    #[test]
+    fn chat_finish_reason_extracts_from_choices() {
+        let body = serde_json::json!({
+            "choices": [{ "message": { "content": "{}" }, "finish_reason": "length" }]
+        });
+        assert_eq!(
+            chat_finish_reason(&body).as_deref(),
+            Some("length"),
+            "finish_reason=length 是前端截断归类的关键信号"
+        );
+        assert_eq!(chat_finish_reason(&serde_json::json!({})), None);
+        // finish_reason 为 null（部分网关）→ None 而不是崩溃
+        let null_reason = serde_json::json!({ "choices": [{ "finish_reason": null }] });
+        assert_eq!(chat_finish_reason(&null_reason), None);
+    }
+
     fn normalize_agent_base_url_respects_version_segments() {
         // 智谱官方地址已带 /v4，不得再拼 /v1
         assert_eq!(
@@ -8576,6 +8700,7 @@ mod tests {
                 attempt_errors: Vec::new(),
                 error_detail: None,
                 attempt_details: Vec::new(),
+                executed_prompt: None,
             }],
             task_type: "vision_understanding".to_string(),
             source_images: vec!["D:/ref.jpg".to_string()],
@@ -8594,6 +8719,7 @@ mod tests {
             source_context: None,
             pose_batch: None,
             provenance: None,
+            execution_snapshot: None,
         }
     }
 

@@ -1,5 +1,11 @@
 # cyimagepro-ui CHANGELOG
 
+## Skill 23.1.0 / UI System 1.2.0（2026-09-02，V4.2.10 角色演员页收口术语登记）
+
+- copy.md §2a（AI 漫画术语）：新增 V4.2.10 角色演员页 14 行术语——本期演员阵容 / 必选演员 · 可选演员 / 演员已就绪 / 还需要完成： / 统一状态徽标词表（草稿 · 待生成参考图 · 参考图生成中 · 待确认 · 已锁定 · 需要重新生成 · 失败，「待确认」限角色徽标语境）/ 已锁定 · 已保存演员库 · 已锁定 · 仅本项目 / 暂无角色参考图 / 生成中态文案 / 生成参考图 · 重新生成参考图 / 三来源按钮 / 保存到演员库，方便以后复用 / 编辑角色 / 解锁修改 / 换人 / AI 起草（演员）/ 查看角色设定详情 / 微调「角色名」；修正 确认并锁定、仅本项目锁定 两行过时语义（双按钮 → 单 Primary + 复选项）。
+- 配套代码（V4.2.10）：ComicCharacterStage 重构 + ComicStudio Rail 阵容行 + ComicStudio.css comic-cast-* / comic-ref-view（conformance 白名单 + :focus-visible）。
+- 守卫测试：新增 pages/__tests__/comicCastV4210.test.ts（32 用例）；comicPhase11 / comicPhase11Wiring / comicPhase12ActorLibrary / comicUiConformance 锚点随规范更新。
+
 ## Skill 23.0.0 / UI System 1.2.0（2026-08-28，V6.8.1 视觉理解最终收口）
 
 - SKILL.md 新增规则 33「Effective Intent Optimization Input & Save-as-Skill CTA（V6.8.1 三铁律）」：Single Instruction Builder（优化入口指令唯一组装器，禁止组件自拼 / workspace JSON 进模型）/ Effective State Only（存储残留读取边界清洗、全部生效意图变化触发 needsOptimization）/ Secondary Actions Never Compete with Primary（复刻成我的技能复用原链路落位 CTA 区 + 标准档分区间距）。

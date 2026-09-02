@@ -8,7 +8,8 @@
  * GenerationPlan[] 只存在于批量工作区。
  */
 
-import type { CreateTaskParams, PromptOptimizationSnapshot, TaskBatchItem } from '../types';
+import type { CreateTaskParams, PromptOptimizationSnapshot, PromptSource, TaskBatchItem } from '../types';
+import { buildBatchExecutionSnapshot, buildSingleExecutionSnapshot } from '../features/promptExecution/executionSnapshot';
 
 export type PlanOptimizationStatus = 'idle' | 'loading' | 'success' | 'error';
 
@@ -102,6 +103,11 @@ export interface BatchPlanTaskOptions {
   quality: string;
   outputFormat: string;
   outputDir: string;
+  /**
+   * V4.2.4 批量级负面提示词（视觉理解优化采用后写入 / 可手改）：
+   * 仅填充没有自己负面词的方案（方案自身 negativePrompt 优先），绝不追加拼接。
+   */
+  negativeHint?: string;
 }
 
 export interface BatchPlanTaskResult {
@@ -132,12 +138,19 @@ export function buildBatchPlanTaskParams(
 
   const ordered = plans.map(plan => ({
     prompt: plan.positivePrompt.trim(),
-    negative: plan.negativePrompt.trim(),
+    negative: plan.negativePrompt.trim() || (options.negativeHint ?? '').trim(),
   }));
   const firstPrompt = ordered[0].prompt;
   const firstNegative = ordered[0].negative;
   const adopted = plans.find(plan => plan.optimizerModelName || plan.source !== 'manual') ?? null;
   const snapshot = adopted ? planOptimizationSnapshot(adopted, options.originalRequirement) : null;
+  // V4.2.4 Prompt 来源（执行快照唯一判定）：任一方案来自 AI → ai-planning；
+  // 全手动但有人工修改 → manual-edited；否则 raw。绝不把 userRequirement 冒充执行 Prompt
+  const promptSource: PromptSource = plans.some(plan => plan.source !== 'manual')
+    ? 'ai-planning'
+    : plans.some(plan => plan.isManuallyEdited) ? 'manual-edited' : 'raw';
+  const referenceImages = options.sourceImages.map(path => ({ path }));
+  const generationParams = { size: options.size, quality: options.quality, format: options.outputFormat };
 
   if (plans.length === 1) {
     return {
@@ -150,6 +163,14 @@ export function buildBatchPlanTaskParams(
         final_negative_prompt: firstNegative,
         prompt_optimized: !!snapshot?.applied,
         prompt_optimization: snapshot ?? { applied: false },
+        execution_snapshot: buildSingleExecutionSnapshot({
+          userRequirement: options.originalRequirement,
+          positivePrompt: firstPrompt,
+          negativePrompt: firstNegative,
+          promptSource,
+          referenceImages,
+          generationParams,
+        }),
         size: options.size,
         quality: options.quality,
         output_format: options.outputFormat,
@@ -188,6 +209,19 @@ export function buildBatchPlanTaskParams(
       final_negative_prompt: firstNegative,
       prompt_optimized: !!snapshot?.applied,
       prompt_optimization: snapshot ?? { applied: false },
+      execution_snapshot: buildBatchExecutionSnapshot({
+        userRequirement: options.originalRequirement,
+        positivePrompt: firstPrompt,
+        negativePrompt: firstNegative,
+        promptSource,
+        items: plans.map((plan, index) => ({
+          label: plan.title.trim() || `方案 ${index + 1}`,
+          positivePrompt: ordered[index].prompt,
+          negativePrompt: ordered[index].negative,
+        })),
+        referenceImages,
+        generationParams,
+      }),
       size: options.size,
       quality: options.quality,
       output_format: options.outputFormat,

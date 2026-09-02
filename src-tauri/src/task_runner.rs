@@ -610,6 +610,18 @@ pub async fn process_next_task(app: &AppHandle) {
             if let Some(t) = tasks.iter_mut().find(|t| t.id == task.id) {
                 if i < t.sub_tasks.len() {
                     t.sub_tasks[i].status = "running".to_string();
+                    // V4.2.4 回写该槽位真实发送给 Provider 的执行指令：
+                    // 与 generate/edit_single_image 的 compose_model_instruction(
+                    // effective_prompt, effective_negative_prompt) 完全同源（读 live
+                    // 任务），失败也保留 —— 历史详情「实际执行 Prompt」以此为最终真相。
+                    // remove_background 无 Prompt 指令语义，跳过。
+                    if t.task_type != "remove_background" {
+                        let executed = compose_model_instruction(
+                            &effective_prompt(t, i),
+                            &effective_negative_prompt(t, i),
+                        );
+                        t.sub_tasks[i].executed_prompt = Some(executed);
+                    }
                 }
             }
         });
@@ -1066,6 +1078,7 @@ mod tests {
                 attempt_errors: Vec::new(),
                 error_detail: None,
                 attempt_details: Vec::new(),
+                executed_prompt: None,
             }],
             task_type: task_type.to_string(),
             source_images: Vec::new(),
@@ -1084,6 +1097,7 @@ mod tests {
             source_context: None,
             pose_batch: None,
             provenance: None,
+            execution_snapshot: None,
         }
     }
 

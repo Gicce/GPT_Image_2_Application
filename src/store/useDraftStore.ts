@@ -88,12 +88,15 @@ interface DraftState {
   textToImagePrompt: string;
   textToImageNegative: string;
   imageEditPrompt: string;
+  /** V4.2.4 图生图负面 Prompt（独立草稿槽；修复此前 i2i 无负面输入导致的静默丢弃） */
+  imageEditNegative: string;
   imageEditSourceImages: string[];
   /** 视觉理解页「带入图片生成」写入；ImageStudio 挂载时 consume 一次 */
   visionCarry: VisionCarryDraft | null;
   setTextToImagePrompt: (v: string) => void;
   setTextToImageNegative: (v: string) => void;
   setImageEditPrompt: (v: string) => void;
+  setImageEditNegative: (v: string) => void;
   setImageEditSourceImages: (v: string[]) => void;
   setVisionCarry: (draft: VisionCarryDraft | null) => void;
   /** 取出并清空（一次性消费语义） */
@@ -104,11 +107,13 @@ export const useDraftStore = create<DraftState>((set, get) => ({
   textToImagePrompt: '',
   textToImageNegative: '',
   imageEditPrompt: '',
+  imageEditNegative: '',
   imageEditSourceImages: [],
   visionCarry: null,
   setTextToImagePrompt: (v) => set({ textToImagePrompt: v }),
   setTextToImageNegative: (v) => set({ textToImageNegative: v }),
   setImageEditPrompt: (v) => set({ imageEditPrompt: v }),
+  setImageEditNegative: (v) => set({ imageEditNegative: v }),
   setImageEditSourceImages: (v) => set({ imageEditSourceImages: v }),
   setVisionCarry: (draft) => set({ visionCarry: draft }),
   consumeVisionCarry: () => {

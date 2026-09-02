@@ -152,7 +152,7 @@ describe('linked task 绝不变本地（历史 source_kind 被目录误标）', 
 });
 
 describe('来源词与筛选 Tab（copy.md 来源表）', () => {
-  it('八类来源词固定（本地/文生图/图生图/编辑结果/批量结果/视觉复刻/动作白膜/生成结果）', () => {
+  it('九类来源词固定（本地/文生图/图生图/编辑结果/批量结果/视觉复刻/AI 漫画/动作白膜/生成结果）', () => {
     expect(IMAGE_SOURCE_LABELS).toEqual({
       local_import: '本地',
       text_to_image: '文生图',
@@ -160,14 +160,15 @@ describe('来源词与筛选 Tab（copy.md 来源表）', () => {
       image_edit: '编辑结果',
       batch_generation: '批量结果',
       visual_recreation: '视觉复刻',
+      ai_comic: 'AI 漫画',
       video_pose: '动作白膜',
       generated: '生成结果',
     });
   });
 
-  it('筛选 Tab：全部/文生图/图生图/编辑结果/批量结果/视觉复刻/CY Video，与 resolver 筛选桶一致', () => {
+  it('筛选 Tab：全部/文生图/图生图/编辑结果/批量结果/视觉复刻/AI 漫画/CY Video，与 resolver 筛选桶一致', () => {
     expect(IMAGE_SOURCE_FILTER_TABS.map(t => t.key)).toEqual(
-      ['all', 't2i', 'i2i', 'edit_result', 'batch', 'vision', 'video'] as GallerySourceFilter[],
+      ['all', 't2i', 'i2i', 'edit_result', 'batch', 'vision', 'comic', 'video'] as GallerySourceFilter[],
     );
 
     const visionTask = task({ id: 'vt', task_type: 'vision_understanding' });
@@ -262,5 +263,70 @@ describe('动作白膜（CY Video Studio Pose Batch）来源继承', () => {
     const local = resolveImageSource(image({ task_id: 'library', source_kind: 'library_input' }));
     expect(local.kind).toBe('local_import');
     expect(local.isLocal).toBe(true);
+  });
+});
+
+describe('AI 漫画来源继承（Phase 12，task_source=comic）', () => {
+  const comicTask = (partial: Partial<Task> = {}): Task => task({
+    id: 'comic-t1',
+    task_source: 'comic',
+    task_type: 'edit',
+    execution_mode: 'batch',
+    count: 3,
+    execution_snapshot: {
+      promptSource: 'comic-compiled',
+      comic: { projectId: 'p1', projectName: '第一期', kind: 'panels', skillName: '职场吐槽四格', storyTitle: '周一例会' },
+    } as Task['execution_snapshot'],
+    ...partial,
+  });
+
+  it('漫画批量任务先于「批量结果」细分：来源 = AI 漫画 · 故事名，筛 AI 漫画桶', () => {
+    const info = resolveImageSource(image({ task_id: 'comic-t1', source_kind: 'output' }), comicTask());
+    expect(info.kind).toBe('ai_comic');
+    expect(info.label).toBe('AI 漫画 · 周一例会');
+    expect(info.filterKey).toBe('comic');
+    expect(info.isLocal).toBe(false);
+  });
+
+  it('快照缺故事名回落项目名；再缺则裸「AI 漫画」标签', () => {
+    const withProject = comicTask({ execution_snapshot: { promptSource: 'comic-compiled', comic: { projectId: 'p1', projectName: '第一期', kind: 'anchor' } } as Task['execution_snapshot'] });
+    expect(resolveImageSource(image({ task_id: 'comic-t1' }), withProject).label).toBe('AI 漫画 · 第一期');
+
+    const bare = comicTask({ execution_snapshot: null });
+    expect(resolveImageSource(image({ task_id: 'comic-t1' }), bare).label).toBe('AI 漫画');
+  });
+
+  it('source_kind 误标也不变本地（linked task 资产铁律同样适用）', () => {
+    const info = resolveImageSource(image({ task_id: 'comic-t1', source_kind: 'library_input' }), comicTask());
+    expect(info.kind).toBe('ai_comic');
+    expect(info.isLocal).toBe(false);
+  });
+
+  it('非 comic 的批量任务不受影响（仍为批量结果）', () => {
+    const info = resolveImageSource(
+      image({ task_id: 't2' }),
+      task({ id: 't2', execution_mode: 'batch', count: 3 }),
+    );
+    expect(info.kind).toBe('batch_generation');
+  });
+
+  it('角色参考图任务（Phase 1.1 character_ref）：用途直接点名角色，仍筛 AI 漫画桶', () => {
+    const refTask = comicTask({
+      execution_mode: 'single',
+      count: 1,
+      execution_snapshot: {
+        promptSource: 'comic-compiled',
+        comic: { projectId: 'p1', projectName: '第一期', kind: 'character_ref', characterId: 'char-1', characterName: '汤圆' },
+      } as Task['execution_snapshot'],
+    });
+    const info = resolveImageSource(image({ task_id: 'comic-t1', source_kind: 'output' }), refTask);
+    expect(info.kind).toBe('ai_comic');
+    expect(info.label).toBe('角色参考图 · 汤圆');
+    expect(info.filterKey).toBe('comic');
+  });
+
+  it('来源词表与筛选 Tab 同步登记（copy.md §9）', () => {
+    expect(IMAGE_SOURCE_LABELS.ai_comic).toBe('AI 漫画');
+    expect(IMAGE_SOURCE_FILTER_TABS.find(tab => tab.key === 'comic')!.label).toBe('AI 漫画');
   });
 });

@@ -15,7 +15,9 @@ mod visual_projects;
 mod user_skills;
 mod skill_projects;
 mod image_folders;
+mod comic;
 mod brand_analysis;
+mod e2e_compose;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -143,6 +145,19 @@ pub fn run() {
             image_folders::list_image_folders,
             image_folders::create_image_folder,
             image_folders::delete_image_folder,
+            comic::list_comic_projects,
+            comic::load_comic_project,
+            comic::save_comic_project,
+            comic::rename_comic_project,
+            comic::delete_comic_project,
+            comic::list_comic_skills,
+            comic::load_comic_skill,
+            comic::save_comic_skill,
+            comic::delete_comic_skill,
+            comic::list_comic_characters,
+            comic::load_comic_character,
+            comic::save_comic_character,
+            comic::delete_comic_character,
             brand_analysis::analyze_brand_logo,
             brand_analysis::fingerprint_skill_asset,
             vision::vision_analyze_image,
@@ -181,6 +196,7 @@ pub fn run() {
             commands::save_conversation,
             commands::save_chat_image,
             commands::save_image_as,
+            commands::save_comic_page_to_library,
             commands::remove_background,
             commands::chat_generate_image,
             commands::chat_edit_image,
