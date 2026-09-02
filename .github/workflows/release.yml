@@ -273,35 +273,50 @@ jobs:
       # version 必须等于 tag 版本，三个 windows 平台键必须带 url + signature，
       # 且所有 url host 必须是官方镜像（Official Manifest Guard：禁止 github.com）。
       # 任何一项缺失 => 本次发布失败，禁止产出“检测不到更新”或“下载走 GitHub”的假 Release。
+      # 注意：刚被替换的 latest.json 资产可能被 GitHub CDN 边缘缓存短暂返回旧内容
+      # （v4.3.0 实测：替换已生效但本步骤读到删除前的 github.com 旧 manifest），
+      # 因此用有限重试收敛，仅当持续不一致才判定发布失败。
       - name: Verify updater manifest on release
         shell: bash
         run: |
           TAG="${{ steps.meta.outputs.release_tag }}"
           VER="${TAG#v}"
-          sleep 5
-          curl -sL --retry 5 --retry-delay 5 "https://github.com/Gicce/GPT_Image_2_Application/releases/download/${TAG}/latest.json" -o latest-check.json
-          curl -sL --retry 5 --retry-delay 5 "https://www.zjcypc.com/client-updates/latest.json" -o official-check.json
-          node -e '
-            const fs = require("fs");
-            let m, o;
-            try { m = JSON.parse(fs.readFileSync("latest-check.json", "utf8")); }
-            catch { console.error("::error::Release 缺少 latest.json，updater 将无法发现新版本"); process.exit(1); }
-            try { o = JSON.parse(fs.readFileSync("official-check.json", "utf8")); }
-            catch { console.error("::error::官方镜像 latest.json 不可用"); process.exit(1); }
-            const errors = [];
-            if (m.version !== process.argv[1]) errors.push(`version ${m.version} != tag ${process.argv[1]}`);
-            for (const key of ["windows-x86_64", "windows-x86_64-msi", "windows-x86_64-nsis"]) {
-              const e = m.platforms && m.platforms[key];
-              if (!e) { errors.push(`缺少 ${key} 平台条目`); continue; }
-              if (!e.url) errors.push(`${key} 缺少 url`);
-              if (!e.signature) errors.push(`${key} 缺少 signature`);
-            }
-            const hosts = [...new Set(Object.values(m.platforms || {}).map(e => new URL(e.url).host))];
-            if (hosts.some(h => h !== "www.zjcypc.com")) errors.push(`manifest url host 非官方镜像: ${hosts.join(",")}`);
-            if (JSON.stringify(m) !== JSON.stringify(o)) errors.push("GitHub manifest 与官方 manifest 内容不一致");
-            if (errors.length) { errors.forEach(e => console.error("::error::" + e)); process.exit(1); }
-            console.log("updater manifest OK（GitHub + Official 一致）: version=" + m.version + " hosts=" + hosts.join(","));
-          ' "$VER"
+          PASS=0
+          for attempt in 1 2 3 4 5 6; do
+            echo "== manifest 校验第 ${attempt}/6 轮 =="
+            sleep 10
+            curl -sL --retry 3 --retry-delay 5 "https://github.com/Gicce/GPT_Image_2_Application/releases/download/${TAG}/latest.json" -o latest-check.json
+            curl -sL --retry 3 --retry-delay 5 "https://www.zjcypc.com/client-updates/latest.json" -o official-check.json
+            if node -e '
+              const fs = require("fs");
+              let m, o;
+              try { m = JSON.parse(fs.readFileSync("latest-check.json", "utf8")); }
+              catch { console.error("Release 缺少 latest.json，updater 将无法发现新版本"); process.exit(1); }
+              try { o = JSON.parse(fs.readFileSync("official-check.json", "utf8")); }
+              catch { console.error("官方镜像 latest.json 不可用"); process.exit(1); }
+              const errors = [];
+              if (m.version !== process.argv[1]) errors.push(`version ${m.version} != tag ${process.argv[1]}`);
+              for (const key of ["windows-x86_64", "windows-x86_64-msi", "windows-x86_64-nsis"]) {
+                const e = m.platforms && m.platforms[key];
+                if (!e) { errors.push(`缺少 ${key} 平台条目`); continue; }
+                if (!e.url) errors.push(`${key} 缺少 url`);
+                if (!e.signature) errors.push(`${key} 缺少 signature`);
+              }
+              const hosts = [...new Set(Object.values(m.platforms || {}).map(e => new URL(e.url).host))];
+              if (hosts.some(h => h !== "www.zjcypc.com")) errors.push(`manifest url host 非官方镜像: ${hosts.join(",")}`);
+              if (JSON.stringify(m) !== JSON.stringify(o)) errors.push("GitHub manifest 与官方 manifest 内容不一致");
+              if (errors.length) { errors.forEach(e => console.error(e)); process.exit(1); }
+              console.log("updater manifest OK（GitHub + Official 一致）: version=" + m.version + " hosts=" + hosts.join(","));
+            ' "$VER"; then
+              PASS=1
+              break
+            fi
+            echo "第 ${attempt} 轮 manifest 尚未一致（可能为 CDN 陈旧读），稍后重试"
+          done
+          if [ "$PASS" != "1" ]; then
+            echo "::error::6 轮重试后 GitHub 与官方镜像 manifest 仍不一致，判定发布失败"
+            exit 1
+          fi
 
       # 公网下载冒烟 + 签名实测：从官方镜像真实下载全部平台安装包，
       # SHA256 与本地构建产物比对（byte-for-byte），并用客户端内置公钥做 minisign 验签。
