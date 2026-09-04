@@ -5979,15 +5979,7 @@ pub async fn chat_generate_image(
         return Err("请先在设置页面配置图片生成 API Token".to_string());
     }
 
-    let base_url = if !runtime_config.image_base_url.trim().is_empty() {
-        runtime_config
-            .image_base_url
-            .trim()
-            .trim_end_matches('/')
-            .to_string()
-    } else {
-        "https://www.packyapi.com".to_string()
-    };
+    let base_url = crate::image_endpoint::resolve_image_base_url(&runtime_config.image_base_url);
 
     let client = &*HTTP_CLIENT;
 
@@ -6048,15 +6040,7 @@ pub async fn chat_edit_image(
         return Err("请先在设置页面配置图片生成 API Token".to_string());
     }
 
-    let base_url = if !runtime_config.image_base_url.trim().is_empty() {
-        runtime_config
-            .image_base_url
-            .trim()
-            .trim_end_matches('/')
-            .to_string()
-    } else {
-        "https://www.packyapi.com".to_string()
-    };
+    let base_url = crate::image_endpoint::resolve_image_base_url(&runtime_config.image_base_url);
 
     let path = Path::new(&image_path);
     if !path.exists() {
@@ -6448,7 +6432,7 @@ pub async fn check_environment(app: tauri::AppHandle) -> Result<EnvCheckResult, 
             "windows_proxy",
             "Windows 系统代理",
             "未启用".to_string(),
-            "Windows 注册表未配置系统代理。\n如果您的网络不能直连 packyapi.com，请先在代理客户端中开启系统代理。".to_string(),
+            "Windows 注册表未配置系统代理。\n如果您的网络不能直连图片服务，请先在代理客户端中开启系统代理。".to_string(),
         ),
     };
     items.push(proxy_item);
@@ -6551,14 +6535,7 @@ pub async fn check_environment(app: tauri::AppHandle) -> Result<EnvCheckResult, 
     } else {
         settings.token.clone()
     };
-    let image_base_url = if !runtime_config.image_base_url.is_empty() {
-        runtime_config
-            .image_base_url
-            .trim_end_matches('/')
-            .to_string()
-    } else {
-        "https://www.packyapi.com".to_string()
-    };
+    let image_base_url = crate::image_endpoint::resolve_image_base_url(&runtime_config.image_base_url);
     let image_probe_url = format!("{}/v1/models", image_base_url);
     if image_token.trim().is_empty() {
         items.push(error_item(
@@ -6777,14 +6754,7 @@ pub async fn generate_test_image(app: tauri::AppHandle) -> Result<GenerateTestIm
     } else {
         settings.token.clone()
     };
-    let base_url = if !runtime_config.image_base_url.is_empty() {
-        runtime_config
-            .image_base_url
-            .trim_end_matches('/')
-            .to_string()
-    } else {
-        "https://www.packyapi.com".to_string()
-    };
+    let base_url = crate::image_endpoint::resolve_image_base_url(&runtime_config.image_base_url);
     let endpoint = format!("{}/v1/images/generations", base_url);
 
     if token.trim().is_empty() {

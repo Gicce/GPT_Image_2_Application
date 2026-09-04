@@ -7,6 +7,7 @@ mod reconciliation;
 mod storage;
 mod task_failure;
 mod task_runner;
+mod image_endpoint;
 mod video_bridge;
 mod video_task_bridge;
 mod vision;

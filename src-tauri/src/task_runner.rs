@@ -299,12 +299,7 @@ fn resolve_image_token(runtime: &RuntimeAuthConfig, settings_token: &str) -> Str
 
 /// Resolve image base_url: prefer runtime memory, fallback to default.
 fn resolve_image_base_url(runtime: &RuntimeAuthConfig) -> String {
-    let rt = runtime.image_base_url.trim().to_string();
-    if rt.is_empty() {
-        "https://www.packyapi.com".to_string()
-    } else {
-        rt.trim_end_matches('/').to_string()
-    }
+    crate::image_endpoint::resolve_image_base_url(&runtime.image_base_url)
 }
 
 fn effective_prompt(task: &Task, index: usize) -> String {

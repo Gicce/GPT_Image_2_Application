@@ -1,3 +1,4 @@
+import { getHistoryApiEndpoint as getApiEndpoint } from '../utils/taskEndpoint';
 import { useEffect, useRef, useState } from 'react';
 import { useTaskStore } from '../store/useTaskStore';
 import { useImageStore } from '../store/useImageStore';
@@ -80,12 +81,6 @@ function isVisionRecreationTask(task: Task): boolean {
   return task.task_source === 'vision_recreation' || task.source_task_kind === 'vision_understanding';
 }
 
-function getApiEndpoint(task: Task): string {
-  if (task.task_type === 'vision_understanding') return 'BYOK 视觉模型（用户自配，非服务端计费）';
-  if (task.task_type === 'edit') return 'POST https://www.packyapi.com/v1/images/edits';
-  if (task.task_type === 'remove_background') return 'POST https://api.remove.bg/v1.0/removebg';
-  return 'POST https://www.packyapi.com/v1/images/generations';
-}
 
 /** 与 Rust compose_model_instruction 一致：gpt-image-2 无独立负面参数，适配层拼接后发送 */
 function composeExecutedPrompt(positive: string, negative: string): string {
